@@ -1,4 +1,4 @@
-# Python cache / build
+﻿# Python cache / build
 __pycache__/
 *.py[cod]
 *.pyo
