@@ -1,0 +1,45 @@
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual env
+.venv/
+venv/
+
+# IDE / local tool state
+.vscode/
+.idea/
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Model artifacts / outputs
+models/
+point/
+raw_models/runs/
+*.zip
+*.onnx
+*.pth
+*.pt
+*.tfevents.*
+
+# Logs / temp
+*.log
+tmp/
+temp/
+
+# Windows special file accidentally created in some sessions
+/nul

@@ -1,0 +1,26 @@
+# Core runtime
+numpy>=1.26
+opencv-python>=4.10
+torch>=2.2
+torchvision>=0.17
+gymnasium>=0.29
+stable-baselines3>=2.3
+
+# Capture / input / detection
+mss>=9.0
+pydirectinput>=1.0
+ultralytics>=8.2
+inference-sdk>=0.34
+windows-capture>=1.3
+
+# WinRT OCR (Windows only)
+winrt-runtime>=3.2
+winrt-Windows.Media.Ocr>=3.2
+winrt-Windows.Graphics.Imaging>=3.2
+winrt-Windows.Storage.Streams>=3.2
+winrt-Windows.Globalization>=3.2
+winrt-Windows.Foundation>=3.2
+winrt-Windows.Foundation.Collections>=3.2
+
+# Dev / test
+pytest>=8.0
