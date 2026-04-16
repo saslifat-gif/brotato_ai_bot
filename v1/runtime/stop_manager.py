@@ -1,7 +1,6 @@
 import ctypes
 import signal
 import threading
-from typing import Optional
 
 from stable_baselines3.common.callbacks import BaseCallback
 

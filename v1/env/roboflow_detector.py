@@ -1,31 +1,31 @@
 """
-Roboflow 预训练 Brotato 多类别检测器
-模型：https://universe.roboflow.com/svamprex/brotato-9qsbr/model/6
+Roboflow pretrained Brotato multi-class detector
+Model: https://universe.roboflow.com/svamprex/brotato-9qsbr/model/6
 
-依赖：pip install inference-sdk
-获取 API Key：https://app.roboflow.com -> Settings -> API Keys
-或设置环境变量：set ROBOFLOW_API_KEY=your_key_here
+Dependencies: pip install inference-sdk
+Get API Key: https://app.roboflow.com -> Settings -> API Keys
+Or set environment variable: set ROBOFLOW_API_KEY=your_key_here
 
-检测在后台线程异步执行，不阻塞游戏主循环。
+Detection runs asynchronously in a background thread, without blocking the game main loop.
 """
 
 from __future__ import annotations
 
 import os
 import threading
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple
 
 import cv2
 import numpy as np
 
 ROBOFLOW_MODEL_ID = "brotato-9qsbr/6"
 
-# ==================== 类别配置 ====================
-# 观测图通道映射：
-#   红通道 = 怪物（危险）
-#   绿通道 = 掉落物（收益）
-#   白色点 = 子弹/飞射物（危险但小）
-#   蓝通道 = 玩家（固定，由青色环检测）
+# ==================== Class Configuration ====================
+# Observation map channel mapping:
+#   Red channel   = enemies (danger)
+#   Green channel = loot (reward)
+#   White dots    = bullets/projectiles (dangerous but small)
+#   Blue channel  = player (fixed, detected via cyan ring)
 
 ENEMY_CLASSES = {
     "enemy",
@@ -46,7 +46,7 @@ STRUCTURE_CLASSES = {
 }
 # =================================================
 
-_EMPTY_CHANNELS = None  # 延迟初始化
+_EMPTY_CHANNELS = None  # lazy initialization
 
 
 def _make_empty(out_size: int) -> Dict[str, object]:
@@ -68,9 +68,9 @@ class Detection(NamedTuple):
 
 class RoboflowMonsterDetector:
     """
-    封装 Roboflow 预训练 Brotato 检测模型。
-    检测在后台线程异步执行，build_channels() 立即返回上一帧的结果，
-    避免云端 API 延迟阻塞游戏主循环。
+    Wraps the Roboflow pretrained Brotato detection model.
+    Detection runs asynchronously in a background thread; build_channels() returns
+    the previous frame's result immediately, avoiding cloud API latency blocking the game main loop.
     """
 
     def __init__(
@@ -82,9 +82,9 @@ class RoboflowMonsterDetector:
             api_key = os.environ.get("ROBOFLOW_API_KEY", "")
         if not api_key:
             raise ValueError(
-                "需要 Roboflow API Key。\n"
-                "获取地址：https://app.roboflow.com -> Settings -> API Keys\n"
-                "或设置环境变量：set ROBOFLOW_API_KEY=xxx"
+                "Roboflow API Key is required.\n"
+                "Get it at: https://app.roboflow.com -> Settings -> API Keys\n"
+                "Or set environment variable: set ROBOFLOW_API_KEY=xxx"
             )
 
         self.confidence = confidence
@@ -95,18 +95,18 @@ class RoboflowMonsterDetector:
             api_url="https://detect.roboflow.com",
             api_key=api_key,
         )
-        print(f"[RoboflowDetector] 初始化成功，模型: {ROBOFLOW_MODEL_ID}")
+        print(f"[RoboflowDetector] Initialized successfully, model: {ROBOFLOW_MODEL_ID}")
 
-        # 后台异步检测
+        # Background async detection
         self._lock = threading.Lock()
-        self._cached: Optional[Dict] = None   # 最新检测结果
+        self._cached: Optional[Dict] = None   # latest detection result
         self._pending: Optional[Tuple] = None  # (frame_bgr, out_size)
         self._event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
     # ------------------------------------------------------------------
-    # 后台检测线程
+    # Background detection thread
     # ------------------------------------------------------------------
 
     def _loop(self):
@@ -122,10 +122,10 @@ class RoboflowMonsterDetector:
                 with self._lock:
                     self._cached = channels
             except Exception as e:
-                print(f"[RoboflowDetector] 检测失败: {e}")
+                print(f"[RoboflowDetector] Detection failed: {e}")
 
     def _detect_sync(self, frame_bgr: np.ndarray, out_size: int) -> Dict:
-        """实际调用 API 并生成各通道掩码（在后台线程中执行）。"""
+        """Calls the API and generates per-channel masks (runs in the background thread)."""
         h, w = frame_bgr.shape[:2]
 
         _, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -179,15 +179,16 @@ class RoboflowMonsterDetector:
         }
 
     # ------------------------------------------------------------------
-    # 公共接口
+    # Public interface
     # ------------------------------------------------------------------
 
     def build_channels(self, frame_bgr: np.ndarray, out_size: int) -> Dict:
         """
-        提交当前帧到后台检测，立即返回上一帧的检测结果。
-        第一帧会同步等待（阻塞一次），之后全部异步无延迟。
+        Submits the current frame for background detection and immediately returns
+        the previous frame's result. The first frame blocks once; all subsequent
+        calls are async with no delay.
         """
-        # 提交新帧
+        # Submit new frame
         self._pending = (frame_bgr.copy(), out_size)
         self._event.set()
 
@@ -195,7 +196,7 @@ class RoboflowMonsterDetector:
             if self._cached is not None:
                 return self._cached
 
-        # 首帧：同步等待有结果
+        # First frame: wait synchronously for a result
         self._event.wait()
         with self._lock:
             if self._cached is not None:
@@ -203,28 +204,28 @@ class RoboflowMonsterDetector:
         return _make_empty(out_size)
 
     def print_classes(self, frame_bgr: Optional[np.ndarray] = None) -> None:
-        """打印检测到的所有类别名称，用于确认配置是否正确。"""
+        """Prints all detected class names, useful for verifying the configuration is correct."""
         if frame_bgr is not None:
             self._detect_sync(frame_bgr, 160)
 
         if not self._seen_classes:
-            print("[RoboflowDetector] 尚未检测任何图像，请先传入一帧图像")
+            print("[RoboflowDetector] No images detected yet — pass a frame first")
             return
 
-        print("\n[RoboflowDetector] 检测到的类别名称：")
+        print("\n[RoboflowDetector] Detected class names:")
         for name in sorted(self._seen_classes):
             if name in ENEMY_CLASSES:
-                tag = " <- 红通道【怪物】"
+                tag = " <- red channel [enemy]"
             elif name in BULLET_CLASSES:
-                tag = " <- 白色点【子弹】"
+                tag = " <- white dot [bullet]"
             elif name in LOOT_CLASSES:
-                tag = " <- 绿通道【掉落物】"
+                tag = " <- green channel [loot]"
             elif name in PLAYER_CLASSES:
-                tag = " <- 蓝通道【玩家】"
+                tag = " <- blue channel [player]"
             elif name in STRUCTURE_CLASSES:
-                tag = " <- 蓝通道【建筑轮廓】"
+                tag = " <- blue channel [structure outline]"
             else:
-                tag = " <- ⚠ 未分类"
+                tag = " <- ⚠ unclassified"
             print(f"  '{name}'{tag}")
 
     def enemy_channel(self, frame_bgr: np.ndarray, out_size: int) -> np.ndarray:
