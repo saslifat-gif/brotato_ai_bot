@@ -89,18 +89,6 @@ pytest
 └─requirements.txt    # 依赖列表
 ```
 
-## 发布到 GitHub 前检查
-
-1. 轮换并移除所有泄露过的密钥（尤其是 API Key）
-2. 确认大文件产物不入库（`models/`、`point/`、`.venv/`）
-3. 本地运行 `pytest` 确保通过
-4. 仅提交源码、配置、文档
-
-## 注意事项
-
-- 项目高度依赖 Windows API（`ctypes.windll`、WinRT OCR、windows-capture）。
-- 训练产出的模型文件建议通过 GitHub Releases 或外部对象存储发布。
-
 ## License
 
-See `LICENSE`.
+MIT `LICENSE`.
