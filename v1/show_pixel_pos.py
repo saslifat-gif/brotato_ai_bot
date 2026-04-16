@@ -107,7 +107,7 @@ def main():
         "click": None,
     }
 
-    def on_mouse(event, x, y, flags, param):
+    def on_mouse(event, x, y, _flags, _param):
         state["mx"] = x
         state["my"] = y
         if event == cv2.EVENT_LBUTTONDOWN:
