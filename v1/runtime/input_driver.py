@@ -168,8 +168,8 @@ class InputDriver:
         ty, by = sorted((int(y1), int(y2)))
         if lx == rx and ty == by:
             return self.click_client_point((lx, ty))
-        px = int(random.randint(lx, rx))
-        py = int(random.randint(ty, by))
+        px = int(random.randrange(lx, rx))
+        py = int(random.randrange(ty, by))
         return self.click_client_point((px, py))
 
     def press_key(self, key: str):

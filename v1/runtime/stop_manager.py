@@ -2,7 +2,10 @@ import ctypes
 import signal
 import threading
 
-from stable_baselines3.common.callbacks import BaseCallback
+try:
+    from stable_baselines3.common.callbacks import BaseCallback
+except Exception:
+    BaseCallback = object
 
 
 class TrainingStopRequested(RuntimeError):
@@ -39,6 +42,8 @@ class StopTrainingCallback(BaseCallback):
     """Stops SB3 learn loop as soon as StopManager is set."""
 
     def __init__(self, stop_manager: StopManager, verbose: int = 0):
+        if BaseCallback is object:
+            raise RuntimeError("stable-baselines3 is required for StopTrainingCallback")
         super().__init__(verbose=verbose)
         self.stop_manager = stop_manager
 

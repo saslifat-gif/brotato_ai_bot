@@ -2070,24 +2070,30 @@ class BrotatoEnv(gym.Env):
                 self.kill_loot_cooldown_left = 6
             self.prev_loot_ratio = float(loot_ratio)
 
-            # Death is decided only by explicit gameover/menu signal path.
-            dead = False
             self.low_hp_streak = (self.low_hp_streak + 1) if current_hp < 0.02 else 0
+            dead = self.low_hp_streak >= int(self.cfg.death_confirm_frames)
+            apply_dead_penalty = bool(dead and not self.death_penalty_applied)
             rb = self.reward_engine.compute(
                 prev_hp=float(self.prev_hp),
                 curr_hp=float(current_hp),
                 is_battle=True,
                 obs_diff=float(obs_diff),
                 loot_delta=float(loot_delta),
-                dead=dead,
+                dead=apply_dead_penalty,
                 state_name="battle",
                 state_elapsed_sec=0.0,
                 is_moving=bool(is_moving),
                 loot_spawn=float(loot_spawn),
             )
+            if apply_dead_penalty:
+                self.death_penalty_applied = True
             self.prev_hp = float(current_hp)
             self.last_hp = float(current_hp)
             total_reward += float(rb.total)
+            if dead:
+                done = True
+                self.input.release_movement()
+                break
 
         self.episode_reward += float(total_reward)
         self.total_reward += float(total_reward)

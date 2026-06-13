@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "v1"))
 
 from shop.shop_policy import ShopPolicy
-from shop.ocr_winmedia import OcrBatchResult, SlotOcrScore
+from shop.ocr_winmedia import OcrBatchResult, SlotOcrScore, score_primitive_text, score_upgrade_text
 
 
 class FakeInput:
@@ -46,8 +46,22 @@ class FakeOcrWorker:
             error="",
         )
 
-
 class ShopPolicyTests(unittest.TestCase):
+    def test_real_chinese_branch_text_scores_as_branch(self):
+        p_class, p_weapon, non_prim, _, _, _, primary, weapon_name = score_primitive_text(
+            "\u539f\u59cb \u6811\u679d",
+            conf=1.0,
+            min_conf=0.3,
+        )
+        self.assertGreater(p_class, 0.0)
+        self.assertGreater(p_weapon, 0.0)
+        self.assertEqual(non_prim, 0.0)
+        self.assertGreater(primary, 0.0)
+        self.assertEqual(weapon_name, "\u6811\u679d")
+
+    def test_real_chinese_upgrade_text_scores(self):
+        self.assertGreater(score_upgrade_text("+15% \u653b\u51fb\u901f\u5ea6", conf=1.0, min_conf=0.3), 0.0)
+
     def test_safe_buy_point_avoids_lock_rect(self):
         policy = ShopPolicy(
             input_driver=FakeInput(),
