@@ -295,7 +295,15 @@ class BrotatoEnv(gym.Env):
         self.obs_danger_enable = bool(cfg.obs_danger_enable)
         self.obs_mask_mode = bool(cfg.obs_mask_mode)
         self.obs_stack = int(cfg.obs_stack)
-        self.action_space = spaces.Discrete(5)  # none,w,s,a,d
+        self.action_diagonal = bool(getattr(cfg, "action_diagonal", False))
+        if self.action_diagonal:
+            # 0=none 1=up 2=down 3=left 4=right
+            # 5=up-left 6=up-right 7=down-left 8=down-right
+            self.action_space = spaces.Discrete(9)
+            self._move_actions = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
+        else:
+            self.action_space = spaces.Discrete(5)  # none,w,s,a,d
+            self._move_actions = frozenset({1, 2, 3, 4})
         obs_depth = self.obs_channels * self.obs_stack
         self.observation_space = spaces.Box(
             low=0,
@@ -452,6 +460,9 @@ class BrotatoEnv(gym.Env):
         self.low_hp_streak = 0
         self.death_penalty_applied = False
         self.battle_seen_in_episode = False
+        # Episode-level KPIs (game outcome, independent of reward shaping).
+        self._episode_start_ts = time.time()
+        self._episode_waves = 0
         self.last_battle_action = 0
         self.same_action_streak = 0
         self.low_motion_streak = 0
@@ -726,20 +737,25 @@ class BrotatoEnv(gym.Env):
         self.stuck_break_left = 0
         self.zero_action_streak = 0
 
-    @staticmethod
-    def _anti_stuck_pick_alternative(action: int) -> int:
+    def _anti_stuck_pick_alternative(self, action: int) -> int:
         # Prefer turn + reverse + brief stop, which is better than random same-axis spam.
         a = int(action)
-        if a == 1:  # up
-            cands = [3, 4, 2, 0]
-        elif a == 2:  # down
-            cands = [3, 4, 1, 0]
-        elif a == 3:  # left
-            cands = [1, 2, 4, 0]
-        elif a == 4:  # right
-            cands = [1, 2, 3, 0]
-        else:
-            cands = [0, 1, 2, 3, 4]
+        table = {
+            1: [3, 4, 2, 0],        # up    -> left/right/down/stop
+            2: [3, 4, 1, 0],        # down  -> left/right/up/stop
+            3: [1, 2, 4, 0],        # left  -> up/down/right/stop
+            4: [1, 2, 3, 0],        # right -> up/down/left/stop
+            5: [6, 7, 4, 2, 0],     # up-left    -> up-right/down-left/right/down/stop
+            6: [5, 8, 3, 2, 0],     # up-right   -> up-left/down-right/left/down/stop
+            7: [8, 5, 4, 1, 0],     # down-left  -> down-right/up-left/right/up/stop
+            8: [7, 6, 3, 1, 0],     # down-right -> down-left/up-right/left/up/stop
+        }
+        cands = table.get(a, [0, 1, 2, 3, 4])
+        # Keep only actions valid for the active action space (filters diagonals
+        # out when running in 5-action mode); 0 (stop) is always allowed.
+        cands = [c for c in cands if c == 0 or c in self._move_actions]
+        if not cands:
+            cands = [0]
         return int(random.choice(cands))
 
     def _find_latest_state_weight(self) -> str:
@@ -1599,17 +1615,21 @@ class BrotatoEnv(gym.Env):
         s = self._normalize_state_name(state_name)
         return s in ("shop", "upgrade", "item_pick", "gameover")
 
+    _ACTION_KEYS = {
+        0: (),
+        1: ("w",),         # up
+        2: ("s",),         # down
+        3: ("a",),         # left
+        4: ("d",),         # right
+        5: ("w", "a"),     # up-left
+        6: ("w", "d"),     # up-right
+        7: ("s", "a"),     # down-left
+        8: ("s", "d"),     # down-right
+    }
+
     def _apply_action(self, action: int):
-        move_key = None
-        if action == 1:
-            move_key = "w"
-        elif action == 2:
-            move_key = "s"
-        elif action == 3:
-            move_key = "a"
-        elif action == 4:
-            move_key = "d"
-        self.input.set_move_key(move_key)
+        keys = self._ACTION_KEYS.get(int(action), ())
+        self.input.set_move_keys(keys)
 
     def _render_debug(self, frame_rgb: np.ndarray, obs: np.ndarray):
         if not self.debug_mgr.can_render():
@@ -1810,6 +1830,9 @@ class BrotatoEnv(gym.Env):
         if in_shop and (not self._in_shop_prev):
             self.shop_enter_ts = now_ts
             self.shop_lock_until_ts = now_ts + float(self.cfg.shop_entry_lock_sec)
+            # Each wave ends in the shop — count entries as waves cleared.
+            if self.battle_seen_in_episode:
+                self._episode_waves += 1
         elif not in_shop:
             self.shop_lock_until_ts = 0.0
         shop_elapsed_sec = max(0.0, now_ts - float(self.shop_enter_ts)) if in_shop else 0.0
@@ -1993,7 +2016,7 @@ class BrotatoEnv(gym.Env):
         for _ in range(repeat_steps):
             self._check_stop()
             planned_action = int(action)
-            if planned_action == 0 and self.last_battle_action in (1, 2, 3, 4):
+            if planned_action == 0 and self.last_battle_action in self._move_actions:
                 if self.zero_action_streak < int(self.zero_action_grace_frames):
                     # Smooth one-frame "tap" behavior into a short hold.
                     planned_action = int(self.last_battle_action)
@@ -2003,7 +2026,7 @@ class BrotatoEnv(gym.Env):
             else:
                 self.zero_action_streak = 0
             applied_action = planned_action
-            if self.cfg.anti_stuck_enable and planned_action in (1, 2, 3, 4):
+            if self.cfg.anti_stuck_enable and planned_action in self._move_actions:
                 if self.last_battle_action == planned_action:
                     self.same_action_streak += 1
                 else:
@@ -2036,7 +2059,7 @@ class BrotatoEnv(gym.Env):
             current_hp = self._predict_hp(next_frame)
             obs = self._get_obs(next_frame)
             obs_diff = self._obs_diff(obs)
-            if self.cfg.anti_stuck_enable and applied_action in (1, 2, 3, 4):
+            if self.cfg.anti_stuck_enable and applied_action in self._move_actions:
                 if float(obs_diff) < float(self.cfg.anti_stuck_motion_threshold):
                     self.low_motion_streak += 1
                 else:
@@ -2048,7 +2071,7 @@ class BrotatoEnv(gym.Env):
             loot_ratio = self._loot_ratio(next_frame)
             loot_drop = max(0.0, float(self.prev_loot_ratio - loot_ratio))
             loot_spawn_raw = max(0.0, float(loot_ratio - self.prev_loot_ratio))
-            is_moving = applied_action in (1, 2, 3, 4)
+            is_moving = applied_action in self._move_actions
             if self.loot_reward_cooldown_left > 0:
                 self.loot_reward_cooldown_left -= 1
             loot_delta = 0.0
@@ -2118,6 +2141,16 @@ class BrotatoEnv(gym.Env):
             "death_confirm_frames": int(self.cfg.death_confirm_frames),
             "death_penalty_applied": bool(self.death_penalty_applied),
         }
+        if done:
+            # Game-outcome KPIs, surfaced once per episode for logging/tensorboard.
+            self.last_info["episode_kpi"] = {
+                "survival_time_sec": float(max(0.0, time.time() - self._episode_start_ts)),
+                "survival_steps": int(self.step_counter),
+                "episode_reward": float(self.episode_reward),
+                "waves_completed": int(self._episode_waves),
+                "kills": int(self.reward_engine.kill_events),
+                "loot_events": int(self.reward_engine.loot_events),
+            }
 
         self._render_debug(next_frame, obs)
         return obs, float(total_reward), bool(done), False, dict(self.last_info)
@@ -2141,6 +2174,8 @@ class BrotatoEnv(gym.Env):
         self.low_hp_streak = 0
         self.death_penalty_applied = False
         self.battle_seen_in_episode = False
+        self._episode_start_ts = time.time()
+        self._episode_waves = 0
         self._reset_battle_action_trackers()
         self.step_counter = 0
         self.episode_reward = 0.0

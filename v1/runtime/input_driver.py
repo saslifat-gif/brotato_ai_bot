@@ -72,7 +72,7 @@ class InputDriver:
         self.input_mode = str(input_mode or "safe_background").strip().lower()
         self.allow_physical_fallback = bool(allow_physical_fallback)
         self.move_physical = bool(move_physical)
-        self.current_move_key: Optional[str] = None
+        self.current_move_keys: set = set()
 
         pydirectinput.FAILSAFE = False
         try:
@@ -187,42 +187,66 @@ class InputDriver:
         except Exception:
             pass
 
-    def set_move_key(self, move_key: Optional[str]):
-        key = None if move_key is None else str(move_key).strip().lower()
-        if key == self.current_move_key:
+    def _hold_key_down(self, key: str) -> bool:
+        """Press and hold a single movement key. Returns True if it is now held."""
+        if self.move_physical:
+            if not self._is_game_foreground():
+                return False
+            try:
+                pydirectinput.keyDown(key)
+                return True
+            except Exception:
+                return False
+        if self._post_key_down(key):
+            return True
+        if self.allow_physical_fallback:
+            try:
+                pydirectinput.keyDown(key)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def _hold_key_up(self, key: str):
+        """Release a single held movement key."""
+        if self.move_physical:
+            try:
+                pydirectinput.keyUp(key)
+            except Exception:
+                pass
             return
-        if self.current_move_key is not None:
-            if self.move_physical:
+        if not self._post_key_up(key):
+            if self.allow_physical_fallback:
                 try:
-                    pydirectinput.keyUp(self.current_move_key)
+                    pydirectinput.keyUp(key)
                 except Exception:
                     pass
-            else:
-                if not self._post_key_up(self.current_move_key):
-                    if self.allow_physical_fallback:
-                        try:
-                            pydirectinput.keyUp(self.current_move_key)
-                        except Exception:
-                            pass
-            self.current_move_key = None
-        if key in ("w", "a", "s", "d"):
-            if self.move_physical:
-                if not self._is_game_foreground():
-                    return
-                try:
-                    pydirectinput.keyDown(key)
-                    self.current_move_key = key
-                except Exception:
-                    self.current_move_key = None
-            else:
-                if self._post_key_down(key):
-                    self.current_move_key = key
-                elif self.allow_physical_fallback:
-                    try:
-                        pydirectinput.keyDown(key)
-                        self.current_move_key = key
-                    except Exception:
-                        self.current_move_key = None
+
+    def set_move_keys(self, move_keys):
+        """Hold exactly the given set of movement keys (subset of w/a/s/d).
+
+        Diff-based: releases keys no longer wanted and presses newly requested
+        ones, so holding a diagonal (e.g. {"w", "a"}) is supported. Passing None
+        or an empty iterable releases all movement keys.
+        """
+        if move_keys is None:
+            desired = set()
+        else:
+            desired = {str(k).strip().lower() for k in move_keys}
+            desired = {k for k in desired if k in ("w", "a", "s", "d")}
+        if desired == self.current_move_keys:
+            return
+        # Release keys that are no longer desired.
+        for key in list(self.current_move_keys - desired):
+            self._hold_key_up(key)
+            self.current_move_keys.discard(key)
+        # Press newly desired keys.
+        for key in sorted(desired - self.current_move_keys):
+            if self._hold_key_down(key):
+                self.current_move_keys.add(key)
+
+    def set_move_key(self, move_key: Optional[str]):
+        self.set_move_keys(None if move_key is None else [move_key])
 
     def release_movement(self):
-        self.set_move_key(None)
+        self.set_move_keys(None)

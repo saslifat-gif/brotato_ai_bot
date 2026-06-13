@@ -5,6 +5,7 @@ torch>=2.2
 torchvision>=0.17
 gymnasium>=0.29
 stable-baselines3>=2.3
+tensorboard>=2.14  # required by SB3 when tensorboard_log is set (see v1/train.py)
 
 # Capture / input / detection
 mss>=9.0
