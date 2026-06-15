@@ -59,6 +59,7 @@ pytest
 | `BROTATO_OUTPUT_DIR` | Optional | Output directory for models and checkpoints |
 | `BROTATO_WINDOW_TITLE` | Optional | Game window title |
 | `BROTATO_EXE_NAME` | Optional | Game executable name (e.g. `Brotato.exe`) |
+| `BROTATO_ACTION_DIAGONAL` | Optional | `true` enables 8-direction movement (`Discrete(9)`: cardinals + diagonals) for circular kiting. Default `false` (5 actions). Changing this invalidates existing checkpoints. |
 
 Full configuration options: `v1/config/runtime_config.py`
 
@@ -69,6 +70,21 @@ Full configuration options: `v1/config/runtime_config.py`
 | `F7` | Start/pause automation |
 | `F8` | Request training stop and save |
 | `F6` | Show/hide debug window |
+
+## Metrics
+
+Per-episode game-outcome KPIs are logged to TensorBoard (independent of the
+engineered reward, so reward-shaping changes can be judged against ground truth):
+
+- `kpi/waves_completed`, `kpi/survival_time_sec`, `kpi/survival_steps`
+- `kpi/kills`, `kpi/loot_events`, `kpi/episode_reward`
+- `kpi_mean/*` — rolling 20-episode means for smoother curves
+
+A one-line `[kpi] ...` summary is also printed to the console at each episode end.
+
+```bash
+tensorboard --logdir models/version_1/ppo_brotato_logs
+```
 
 ## Project Structure
 

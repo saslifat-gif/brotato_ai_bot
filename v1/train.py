@@ -9,6 +9,7 @@ from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
 
 from config.runtime_config import load_runtime_config
 from env.brotato_env import BrotatoEnv
+from runtime.kpi_callback import EpisodeKpiCallback
 from runtime.stop_manager import (
     StopManager,
     StopTrainingCallback,
@@ -155,7 +156,8 @@ def main():
         name_prefix="brotato_model",
     )
     stop_cb = StopTrainingCallback(stop_manager=stop_manager)
-    callbacks = CallbackList([checkpoint_cb, stop_cb])
+    kpi_cb = EpisodeKpiCallback(window=20, verbose=1)
+    callbacks = CallbackList([checkpoint_cb, stop_cb, kpi_cb])
 
     print(
         "AI training started. "

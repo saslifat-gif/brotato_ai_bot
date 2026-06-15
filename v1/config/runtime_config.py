@@ -230,6 +230,7 @@ class RuntimeConfig:
     obs_stack: int
     frame_skip: int
     action_sleep_sec: float
+    action_diagonal: bool
     anti_stuck_enable: bool
     anti_stuck_same_action_steps: int
     anti_stuck_low_motion_steps: int
@@ -437,6 +438,11 @@ def load_runtime_config() -> RuntimeConfig:
     obs_stack = max(1, int(_get_env("BROTATO_OBS_STACK", 4, int)))
     frame_skip = max(1, int(_get_env("BROTATO_FRAME_SKIP", 1, int)))
     action_sleep_sec = max(0.0, float(_get_env("BROTATO_ACTION_SLEEP_SEC", 0.0, float)))
+    # When enabled, the action space becomes Discrete(9): none + 4 cardinal +
+    # 4 diagonal directions. Diagonals let the agent kite enemies in a circle,
+    # which is the core survival skill. Off by default to preserve compatibility
+    # with existing 5-action checkpoints (switching invalidates old models).
+    action_diagonal = bool(_get_env("BROTATO_ACTION_DIAGONAL", False, _to_bool))
     anti_stuck_enable = bool(_get_env("BROTATO_ANTI_STUCK_ENABLE", True, _to_bool))
     anti_stuck_same_action_steps = max(5, int(_get_env("BROTATO_ANTI_STUCK_SAME_ACTION_STEPS", 28, int)))
     anti_stuck_low_motion_steps = max(5, int(_get_env("BROTATO_ANTI_STUCK_LOW_MOTION_STEPS", 20, int)))
@@ -555,6 +561,7 @@ def load_runtime_config() -> RuntimeConfig:
         obs_stack=obs_stack,
         frame_skip=frame_skip,
         action_sleep_sec=action_sleep_sec,
+        action_diagonal=action_diagonal,
         anti_stuck_enable=anti_stuck_enable,
         anti_stuck_same_action_steps=anti_stuck_same_action_steps,
         anti_stuck_low_motion_steps=anti_stuck_low_motion_steps,
