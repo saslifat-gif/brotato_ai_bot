@@ -123,6 +123,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert 'if typeof(object) == TYPE_DICTIONARY:' in bridge
     assert '["gold", "materials"]' in bridge
     assert "func _collect_ui_actions(node, output: Array, phase: String)" in bridge
+    assert "func _detect_visible_ui_phase(node)" in bridge
+    assert 'button_name == "choosebutton"' in bridge
+    assert "visible_ui_phase" in bridge
     assert 'node.emit_signal("pressed")' in bridge
     assert 'str(node.name).to_lower() == "gobutton"' in bridge
     assert '"realtime_control"' in bridge
@@ -178,6 +181,31 @@ def test_ui_automation_only_uses_enabled_exact_targets():
     assert AutoUiController().choose(state)["id"] == "/root/Choice"
 
 
+def test_ui_automation_sends_only_one_upgrade_choice_until_phase_changes():
+    controller = AutoUiController()
+    state = dict(_state(wave=3), phase="upgrade")
+    state["ui"] = {
+        "actions": [
+            {
+                "id": "/root/Main/UI/UpgradesUI/UpgradeUI/ChooseButton",
+                "name": "ChooseButton",
+                "role": "upgrade_choice",
+                "enabled": True,
+            },
+            {
+                "id": "/root/Main/UI/UpgradesUI/UpgradeUI2/ChooseButton",
+                "name": "ChooseButton",
+                "role": "upgrade_choice",
+                "enabled": True,
+            },
+        ]
+    }
+    choice = controller.choose(state)
+    assert choice["id"].endswith("UpgradeUI/ChooseButton")
+    controller.mark_sent(state, choice)
+    assert controller.choose(state) is None
+
+
 def test_ui_automation_advances_wave_end_shop_and_next_wave():
     wave_end = dict(_state(wave=3), phase="wave_end", tick=10)
     shop = dict(_state(wave=3, materials=20), phase="shop", tick=11)
@@ -214,6 +242,8 @@ def test_ui_automation_advances_wave_end_shop_and_next_wave():
         "/root/Shop/Go",
     ]
     assert result.sequence == 7
+    assert result.sent_roles == ["buy", "next_wave"]
+    assert result.confirmed_roles == ["next_wave"]
 
 
 def test_wait_for_state_accepts_low_tick_after_reconnect(monkeypatch):

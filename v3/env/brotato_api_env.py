@@ -52,6 +52,8 @@ class BrotatoApiEnv(gym.Env):
         state = self.server.wait_for_state(
             timeout_sec=self.cfg.reset_timeout_sec,
         )
+        ui_sent = []
+        ui_confirmed = []
         if self.cfg.automate_menus and state.get("phase") != "combat":
             result = self.ui_controller.advance(
                 self.server,
@@ -62,6 +64,8 @@ class BrotatoApiEnv(gym.Env):
             )
             state = result.state
             self.sequence = result.sequence
+            ui_sent = result.sent_roles
+            ui_confirmed = result.confirmed_roles
         elif state.get("phase") != "combat":
             state = self.server.wait_for_state(
                 timeout_sec=self.cfg.reset_timeout_sec,
@@ -72,7 +76,13 @@ class BrotatoApiEnv(gym.Env):
         self.previous_action = int(MoveAction.IDLE)
         self.reward_engine.reset(state)
         observation = self.vectorizer.build(state, self.previous_action)
-        return observation, {"tick": int(state.get("tick", -1)), "phase": state.get("phase")}
+        return observation, {
+            "tick": int(state.get("tick", -1)),
+            "phase": state.get("phase"),
+            "wave": state.get("wave", {}).get("number", 0),
+            "ui_sent": ui_sent,
+            "ui_confirmed": ui_confirmed,
+        }
 
     def step(self, action):
         normalized = int(MoveAction(int(action)))
@@ -86,6 +96,8 @@ class BrotatoApiEnv(gym.Env):
         )
         reward = self.reward_engine.step(state)
         terminated = bool(state.get("dead") or state.get("victory"))
+        ui_sent = []
+        ui_confirmed = []
         if self.cfg.automate_menus and not terminated and state.get("phase") != "combat":
             result = self.ui_controller.advance(
                 self.server,
@@ -97,6 +109,8 @@ class BrotatoApiEnv(gym.Env):
             for menu_state in result.states:
                 reward += self.reward_engine.step(menu_state)
             state = result.state
+            ui_sent = result.sent_roles
+            ui_confirmed = result.confirmed_roles
             terminated = bool(state.get("dead") or state.get("victory"))
         truncated = not terminated and state.get("phase") != "combat"
         self.last_state = state
@@ -106,6 +120,8 @@ class BrotatoApiEnv(gym.Env):
             "tick": int(state.get("tick", -1)),
             "phase": state.get("phase"),
             "wave": state.get("wave", {}).get("number", 0),
+            "ui_sent": ui_sent,
+            "ui_confirmed": ui_confirmed,
         }
         return observation, reward, terminated, truncated, info
 

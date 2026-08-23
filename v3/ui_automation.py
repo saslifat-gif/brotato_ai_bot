@@ -28,6 +28,8 @@ class UiAutomationResult:
     state: dict[str, Any]
     sequence: int
     states: list[dict[str, Any]]
+    sent_roles: list[str]
+    confirmed_roles: list[str]
 
 
 class AutoUiController:
@@ -38,12 +40,14 @@ class AutoUiController:
         self._shop_buys = 0
         self._shop_rerolls = 0
         self._attempted: set[tuple[str, int]] = set()
+        self._upgrade_attempted_waves: set[int] = set()
 
     def reset_episode(self) -> None:
         self._shop_wave = None
         self._shop_buys = 0
         self._shop_rerolls = 0
         self._attempted.clear()
+        self._upgrade_attempted_waves.clear()
 
     def _enter_shop(self, state: Mapping[str, Any]) -> None:
         wave = state.get("wave", {})
@@ -59,6 +63,9 @@ class AutoUiController:
         phase = str(state.get("phase", "menu"))
         if phase == "upgrade":
             choices = available_actions(state, "upgrade_choice")
+            wave = int(state.get("wave", {}).get("number", -1))
+            if wave in self._upgrade_attempted_waves:
+                return None
             return choices[0] if choices else None
         if phase == "shop":
             self._enter_shop(state)
@@ -84,7 +91,10 @@ class AutoUiController:
 
     def mark_sent(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> None:
         role = str(action.get("role", ""))
-        if role == "buy":
+        if role == "upgrade_choice":
+            wave = int(state.get("wave", {}).get("number", -1))
+            self._upgrade_attempted_waves.add(wave)
+        elif role == "buy":
             materials = int(state.get("counters", {}).get("materials", 0))
             self._attempted.add((str(action.get("id", "")), materials))
             self._shop_buys += 1
@@ -103,9 +113,19 @@ class AutoUiController:
     ) -> UiAutomationResult:
         deadline = time.monotonic() + max(1.0, float(timeout_sec))
         observed: list[dict[str, Any]] = []
+        sent_roles: list[str] = []
+        confirmed_roles: list[str] = []
         no_action_states = 0
+        pending_phase_change: tuple[str, str] | None = None
         while state.get("phase") != "combat":
             phase = str(state.get("phase", "menu"))
+            if pending_phase_change is not None and phase != pending_phase_change[0]:
+                print(
+                    f"[v3-ui] confirmed role={pending_phase_change[1]} "
+                    f"phase={pending_phase_change[0]}->{phase}"
+                )
+                confirmed_roles.append(pending_phase_change[1])
+                pending_phase_change = None
             if phase == "victory" or (phase == "game_over" and not allow_restart):
                 break
             action = self.choose(state)
@@ -122,6 +142,13 @@ class AutoUiController:
                     timeout_sec=min(remaining, 10.0),
                 )
                 self.mark_sent(state, action)
+                sent_roles.append(str(action.get("role", "")))
+                print(
+                    f"[v3-ui] sent role={action.get('role')} "
+                    f"name={action.get('name', '')} target={action.get('id')}"
+                )
+                if action.get("role") in {"upgrade_choice", "next_wave", "restart"}:
+                    pending_phase_change = (phase, str(action.get("role")))
                 minimum_sequence = sequence
                 no_action_states = 0
             else:
@@ -135,4 +162,16 @@ class AutoUiController:
                 minimum_sequence=minimum_sequence,
             )
             observed.append(state)
-        return UiAutomationResult(state=state, sequence=sequence, states=observed)
+        if pending_phase_change is not None and state.get("phase") != pending_phase_change[0]:
+            print(
+                f"[v3-ui] confirmed role={pending_phase_change[1]} "
+                f"phase={pending_phase_change[0]}->{state.get('phase')}"
+            )
+            confirmed_roles.append(pending_phase_change[1])
+        return UiAutomationResult(
+            state=state,
+            sequence=sequence,
+            states=observed,
+            sent_roles=sent_roles,
+            confirmed_roles=confirmed_roles,
+        )

@@ -286,7 +286,19 @@ func _build_state() -> Dictionary:
 	var dead: bool = run_lost or (player != null and (
 		bool(_property(player, "dead", false)) or health <= 0.0
 	))
-	var phase := _phase_for_scene(scene_name, player, main, dead, run_won)
+	# Upgrade and retry overlays live inside Main in current Brotato builds.  A
+	# cached player reference can therefore remain valid while one of those
+	# overlays is waiting for input.  Detect an actionable visible overlay
+	# before using the player reference to call the state combat.
+	var visible_ui_phase := _detect_visible_ui_phase(get_tree().current_scene)
+	var phase := _phase_for_scene(
+		scene_name,
+		player,
+		main,
+		dead,
+		run_won,
+		visible_ui_phase
+	)
 	if phase != "combat" and phase != "wave_end":
 		_collect_ui_actions(get_tree().current_scene, ui_actions, phase)
 	if wave_number != _last_wave_number:
@@ -368,7 +380,9 @@ func _ui_role(node, phase: String, text: String) -> String:
 		return "restart"
 	if token.find("lock") >= 0 or token.find("锁") >= 0:
 		return "lock"
-	if phase == "upgrade" and token.find("back") < 0 and token.find("返回") < 0:
+	if phase == "upgrade" and str(node.name).to_lower() == "choosebutton" and (
+		token.find("upgradeui") >= 0 or token.find("upgrade_ui") >= 0
+	):
 		return "upgrade_choice"
 	if phase == "shop" and token.find("shop_item") >= 0 and token.find("lock") < 0:
 		return "buy"
@@ -377,17 +391,46 @@ func _ui_role(node, phase: String, text: String) -> String:
 	return "other"
 
 
+func _detect_visible_ui_phase(node) -> String:
+	if node == null:
+		return ""
+	if node is CanvasItem and not node.is_visible_in_tree():
+		return ""
+	var token := str(node.name).to_lower() + " " + str(node.get_path()).to_lower()
+	var script = node.get_script()
+	if script != null:
+		token += " " + str(script.resource_path).to_lower()
+	if token.find("retrywave") >= 0 or token.find("end_run") >= 0:
+		return "game_over"
+	if node is BaseButton:
+		var button_name := str(node.name).to_lower()
+		if button_name == "choosebutton" and (
+			token.find("upgradeui") >= 0 or token.find("upgrade_ui") >= 0
+		):
+			return "upgrade"
+		if button_name == "gobutton":
+			return "shop"
+	for child in node.get_children():
+		var child_phase := _detect_visible_ui_phase(child)
+		if not child_phase.empty():
+			return child_phase
+	return ""
+
+
 func _phase_for_scene(
 	scene_name: String,
 	player,
 	main,
 	dead: bool,
-	victory: bool
+	victory: bool,
+	visible_ui_phase: String
 ) -> String:
 	if victory:
 		return "victory"
 	if dead:
 		return "game_over"
+	if not visible_ui_phase.empty():
+		return visible_ui_phase
 	var lower := scene_name.to_lower()
 	if player != null:
 		if bool(_property(main, "_cleaning_up", false)):
