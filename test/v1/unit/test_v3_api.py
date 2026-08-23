@@ -684,6 +684,11 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     )
     workshop_host.mkdir(parents=True)
     (workshop_host / "Subscribed-Mod.zip").touch()
+    stale_local = game / "mods" / f"{MOD_DIR_NAME}-0.1.1.zip"
+    stale_local.parent.mkdir(parents=True)
+    stale_local.touch()
+    stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
+    stale_workshop.touch()
     package = install_mod(game)
     assert package == game / "mods" / f"{MOD_DIR_NAME}-0.2.0.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
@@ -702,6 +707,8 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
         / package.name
     )
     assert workshop_package.read_bytes() == package.read_bytes()
+    assert not stale_local.exists()
+    assert not stale_workshop.exists()
 
 
 def test_installer_activates_bridge_in_current_profile(tmp_path):

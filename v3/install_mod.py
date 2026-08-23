@@ -12,6 +12,19 @@ MOD_DIR_NAME = "Lifat-BrotatoRLBridge"
 BROTATO_STEAM_APP_ID = "1942280"
 
 
+def remove_stale_packages(directory: Path, keep_name: str) -> list[Path]:
+    """Remove older bridge archives that confuse ModLoader's folder scan."""
+
+    removed: list[Path] = []
+    if not directory.is_dir():
+        return removed
+    for candidate in directory.glob(f"{MOD_DIR_NAME}-*.zip"):
+        if candidate.name != keep_name:
+            candidate.unlink()
+            removed.append(candidate)
+    return removed
+
+
 def choose_game_directory() -> Path | None:
     try:
         from tkinter import Tk, filedialog
@@ -125,6 +138,7 @@ def install_mod(game_directory: Path, source: Path | None = None) -> Path:
     mods = game_directory / "mods"
     mods.mkdir(parents=True, exist_ok=True)
     package = mods / f"{MOD_DIR_NAME}-{version}.zip"
+    remove_stale_packages(mods, package.name)
     archive_root = Path("mods-unpacked") / MOD_DIR_NAME
     with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(source.rglob("*")):
@@ -132,6 +146,7 @@ def install_mod(game_directory: Path, source: Path | None = None) -> Path:
                 archive.write(path, (archive_root / path.relative_to(source)).as_posix())
     workshop_package = steam_workshop_target(game_directory, package.name)
     if workshop_package is not None:
+        remove_stale_packages(workshop_package.parent, workshop_package.name)
         shutil.copy2(package, workshop_package)
     return package
 
