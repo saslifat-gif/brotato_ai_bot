@@ -1,0 +1,11 @@
+path: datasets/v2/combat
+train: images/train
+val: images/val
+
+names:
+  0: player
+  1: enemy
+  2: projectile
+  3: loot
+  4: obstacle
+

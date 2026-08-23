@@ -28,6 +28,7 @@ Thumbs.db
 
 # Model artifacts / outputs
 models/
+datasets/
 point/
 raw_models/runs/
 *.zip

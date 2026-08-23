@@ -4,13 +4,15 @@ opencv-python>=4.10
 torch>=2.2
 torchvision>=0.17
 gymnasium>=0.29
-stable-baselines3>=2.3
+stable-baselines3>=2.3,<3
+sb3-contrib>=2.3,<3
 tensorboard>=2.14  # required by SB3 when tensorboard_log is set (see v1/train.py)
+pyyaml>=6.0
 
 # Capture / input / detection
 mss>=9.0
 pydirectinput>=1.0
-ultralytics>=8.2
+ultralytics>=8.4.63
 inference-sdk>=0.34
 windows-capture>=1.3
 

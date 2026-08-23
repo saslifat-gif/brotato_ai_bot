@@ -4,6 +4,10 @@ Windows-only reinforcement learning project for **Brotato**.
 
 A reinforcement learning bot for Brotato running on **Windows**. Uses PPO to train a policy network, with modules for the game environment, reward system, shop strategy, and runtime control.
 
+An experimental detector-driven v2 is also available in [`v2/`](v2/README.md).
+It uses custom YOLO26 detection, a compact combat-state vector, detected UI
+button boxes and RecurrentPPO. V1 remains available for compatibility.
+
 ## Features
 
 - PPO training pipeline: `v1/train.py`
