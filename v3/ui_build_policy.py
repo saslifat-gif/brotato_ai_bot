@@ -1,0 +1,361 @@
+"""Small reusable policy base for structured Brotato UI decisions.
+
+The real-time movement policy stays separate.  This module ranks the variable
+number of actions advertised by shop, upgrade and found-item screens.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+import numpy as np
+import torch
+from torch import nn
+
+
+STAT_KEYS = (
+    "stat_max_hp",
+    "stat_armor",
+    "stat_crit_chance",
+    "stat_luck",
+    "stat_attack_speed",
+    "stat_elemental_damage",
+    "stat_hp_regeneration",
+    "stat_lifesteal",
+    "stat_melee_damage",
+    "stat_percent_damage",
+    "stat_dodge",
+    "stat_engineering",
+    "stat_range",
+    "stat_ranged_damage",
+    "stat_speed",
+    "stat_harvesting",
+)
+ROLE_NAMES = (
+    "buy",
+    "upgrade_choice",
+    "take_item",
+    "recycle_item",
+    "reroll",
+    "next_wave",
+    "lock",
+    "other",
+)
+CATEGORY_NAMES = ("item", "weapon", "upgrade")
+ID_BUCKETS = 1024
+ID_EMBEDDING_SIZE = 8
+CONTEXT_SIZE = 4 + len(STAT_KEYS) + 4
+CHOICE_SIZE = 5 + len(CATEGORY_NAMES) + 3 + len(ROLE_NAMES) + len(STAT_KEYS)
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return result if math.isfinite(result) else float(default)
+
+
+def _hash_bucket(value: Any) -> int:
+    encoded = str(value or "unknown").encode("utf-8", errors="replace")
+    return int.from_bytes(hashlib.blake2b(encoded, digest_size=8).digest(), "little") % ID_BUCKETS
+
+
+def choice_data(action: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _mapping(action.get("choice"))
+
+
+def effect_totals(choice: Mapping[str, Any]) -> dict[str, float]:
+    totals = {key: 0.0 for key in STAT_KEYS}
+    effects = choice.get("effects", [])
+    if not isinstance(effects, Iterable) or isinstance(effects, (str, bytes, Mapping)):
+        return totals
+    for effect in effects:
+        effect = _mapping(effect)
+        key = str(effect.get("key", "")).lower()
+        if key in totals:
+            totals[key] += _number(effect.get("value"))
+    return totals
+
+
+@dataclass(frozen=True)
+class RankedUiAction:
+    action: dict[str, Any]
+    score: float
+    source: str
+
+
+class StickMeleeTeacher:
+    """Language-independent rule teacher for the first UI curriculum."""
+
+    stat_weights = {
+        "stat_melee_damage": 8.0,
+        "stat_percent_damage": 3.0,
+        "stat_attack_speed": 2.5,
+        "stat_lifesteal": 2.0,
+        "stat_max_hp": 1.2,
+        "stat_armor": 3.0,
+        "stat_dodge": 1.0,
+        "stat_speed": 0.8,
+        "stat_hp_regeneration": 0.8,
+        "stat_range": 0.25,
+        "stat_crit_chance": 0.5,
+        "stat_luck": 0.25,
+        "stat_harvesting": 0.3,
+        "stat_ranged_damage": -5.0,
+        "stat_elemental_damage": -3.0,
+        "stat_engineering": -3.0,
+    }
+
+    @staticmethod
+    def _is_stick(choice: Mapping[str, Any]) -> bool:
+        item_id = str(choice.get("id", "")).lower()
+        base_id = str(choice.get("base_id", "")).lower()
+        return base_id == "weapon_stick" or item_id.startswith("weapon_stick_")
+
+    def score_choice(self, choice: Mapping[str, Any], wave: int) -> float:
+        if not choice:
+            return float("-inf")
+        category = str(choice.get("category", "item")).lower()
+        base_id = str(choice.get("base_id", "")).lower()
+        item_id = str(choice.get("id", "")).lower()
+        score = _number(choice.get("tier")) * 1.5
+        if self._is_stick(choice):
+            score += 200.0
+        elif category == "weapon":
+            score += 8.0 if int(_number(choice.get("weapon_type"), -1)) == 0 else -40.0
+        if base_id == "upgrade_melee_damage" or item_id.startswith("upgrade_melee_damage_"):
+            score += 80.0
+        elif base_id == "upgrade_attack_speed" or item_id.startswith("upgrade_attack_speed_"):
+            score += 35.0
+        elif base_id in {"upgrade_percent_damage", "upgrade_armor", "upgrade_health"}:
+            score += 20.0
+        totals = effect_totals(choice)
+        for key, value in totals.items():
+            weight = self.stat_weights.get(key, 0.0)
+            if key == "stat_harvesting" and wave > 10:
+                weight *= 0.25
+            score += weight * value
+        tags = " ".join(str(tag).lower() for tag in choice.get("tags", []))
+        if "melee" in tags:
+            score += 8.0
+        return score
+
+    def select(
+        self,
+        state: Mapping[str, Any],
+        actions: Sequence[Mapping[str, Any]],
+    ) -> RankedUiAction | None:
+        candidates = [dict(action) for action in actions if choice_data(action)]
+        if not candidates:
+            return None
+        wave = int(_number(_mapping(state.get("wave")).get("number"), 0))
+        materials = _number(_mapping(state.get("counters")).get("materials"), 0)
+        ranked: list[tuple[float, dict[str, Any]]] = []
+        for action in candidates:
+            role = str(action.get("role", ""))
+            choice = choice_data(action)
+            base_score = self.score_choice(choice, wave)
+            if role == "buy":
+                price = max(0.0, _number(choice.get("price")))
+                if choice.get("affordable") is False or price > materials:
+                    continue
+                # Price matters, but never overwhelms the explicit Stick bonus.
+                score = base_score - (price / max(20.0, materials)) * 8.0
+                if score < 4.0:
+                    continue
+            elif role == "take_item":
+                score = base_score + 4.0
+            elif role == "recycle_item":
+                score = -base_score
+            elif role == "upgrade_choice":
+                score = base_score
+            else:
+                continue
+            ranked.append((score, action))
+        if not ranked:
+            return None
+        score, action = max(ranked, key=lambda item: item[0])
+        return RankedUiAction(action=action, score=float(score), source="stick_melee_teacher")
+
+
+@dataclass(frozen=True)
+class UiFeatureRow:
+    context: np.ndarray
+    choice: np.ndarray
+    item_bucket: int
+    base_bucket: int
+
+
+class UiChoiceVectorizer:
+    """Fixed features shared by teacher imitation and learned UI policies."""
+
+    def build(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> UiFeatureRow:
+        wave = _mapping(state.get("wave"))
+        counters = _mapping(state.get("counters"))
+        build = _mapping(state.get("build"))
+        stats = _mapping(build.get("stats"))
+        weapons = build.get("weapons", []) if isinstance(build.get("weapons"), list) else []
+        items = build.get("items", []) if isinstance(build.get("items"), list) else []
+        stick_count = sum(1 for item in weapons if StickMeleeTeacher._is_stick(_mapping(item)))
+        context_values = [
+            np.clip(_number(wave.get("number")) / 20.0, 0.0, 2.0),
+            np.clip(_number(wave.get("time_left")) / 60.0, 0.0, 1.0),
+            np.clip(_number(counters.get("materials")) / 500.0, 0.0, 4.0),
+            1.0 if state.get("phase") != "combat" else 0.0,
+            *[np.clip(_number(stats.get(key)) / 100.0, -5.0, 5.0) for key in STAT_KEYS],
+            np.clip(len(weapons) / 6.0, 0.0, 2.0),
+            np.clip(stick_count / 6.0, 0.0, 2.0),
+            np.clip(len(items) / 100.0, 0.0, 2.0),
+            1.0,
+        ]
+        choice = choice_data(action)
+        role = str(action.get("role", "other"))
+        category = str(choice.get("category", "item"))
+        weapon_type = int(_number(choice.get("weapon_type"), -1))
+        totals = effect_totals(choice)
+        choice_values = [
+            np.clip(_number(choice.get("tier")) / 4.0, 0.0, 2.0),
+            np.clip(_number(choice.get("price")) / 500.0, -1.0, 4.0),
+            np.clip(_number(choice.get("base_value")) / 500.0, -1.0, 4.0),
+            1.0 if choice.get("affordable", True) else 0.0,
+            1.0 if StickMeleeTeacher._is_stick(choice) else 0.0,
+            *[1.0 if category == name else 0.0 for name in CATEGORY_NAMES],
+            *[1.0 if weapon_type == value else 0.0 for value in (-1, 0, 1)],
+            *[1.0 if role == name else 0.0 for name in ROLE_NAMES],
+            *[np.clip(totals[key] / 20.0, -5.0, 5.0) for key in STAT_KEYS],
+        ]
+        context_array = np.asarray(context_values, dtype=np.float32)
+        choice_array = np.asarray(choice_values, dtype=np.float32)
+        if context_array.shape != (CONTEXT_SIZE,) or choice_array.shape != (CHOICE_SIZE,):
+            raise RuntimeError(
+                f"UI feature shape mismatch context={context_array.shape} choice={choice_array.shape}"
+            )
+        return UiFeatureRow(
+            context=context_array,
+            choice=choice_array,
+            item_bucket=_hash_bucket(choice.get("id")),
+            base_bucket=_hash_bucket(choice.get("base_id")),
+        )
+
+
+class UiBuildBase(nn.Module):
+    """Tiny candidate-scoring backbone reusable across later UI tasks."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.item_embedding = nn.Embedding(ID_BUCKETS, ID_EMBEDDING_SIZE)
+        self.base_embedding = nn.Embedding(ID_BUCKETS, ID_EMBEDDING_SIZE)
+        self.context_encoder = nn.Sequential(
+            nn.Linear(CONTEXT_SIZE, 48), nn.Tanh(), nn.Linear(48, 32), nn.Tanh()
+        )
+        self.choice_encoder = nn.Sequential(
+            nn.Linear(CHOICE_SIZE + ID_EMBEDDING_SIZE * 2, 64),
+            nn.Tanh(),
+            nn.Linear(64, 48),
+            nn.Tanh(),
+        )
+        self.score_head = nn.Sequential(
+            nn.Linear(80, 32), nn.Tanh(), nn.Linear(32, 1)
+        )
+
+    def forward(
+        self,
+        context: torch.Tensor,
+        choice: torch.Tensor,
+        item_bucket: torch.Tensor,
+        base_bucket: torch.Tensor,
+    ) -> torch.Tensor:
+        embedded = torch.cat(
+            [choice, self.item_embedding(item_bucket), self.base_embedding(base_bucket)], dim=-1
+        )
+        hidden = torch.cat(
+            [self.context_encoder(context), self.choice_encoder(embedded)], dim=-1
+        )
+        return self.score_head(hidden).squeeze(-1)
+
+    @property
+    def parameter_count(self) -> int:
+        return sum(parameter.numel() for parameter in self.parameters())
+
+
+class LearnedUiBuildPolicy:
+    def __init__(self, checkpoint: Path):
+        payload = torch.load(checkpoint, map_location="cpu")
+        self.model = UiBuildBase()
+        self.model.load_state_dict(payload["state_dict"])
+        self.model.eval()
+        self.vectorizer = UiChoiceVectorizer()
+
+    def select(
+        self,
+        state: Mapping[str, Any],
+        actions: Sequence[Mapping[str, Any]],
+    ) -> RankedUiAction | None:
+        candidates = [dict(action) for action in actions if choice_data(action)]
+        if not candidates:
+            return None
+        rows = [self.vectorizer.build(state, action) for action in candidates]
+        with torch.no_grad():
+            scores = self.model(
+                torch.from_numpy(np.stack([row.context for row in rows])),
+                torch.from_numpy(np.stack([row.choice for row in rows])),
+                torch.tensor([row.item_bucket for row in rows], dtype=torch.long),
+                torch.tensor([row.base_bucket for row in rows], dtype=torch.long),
+            )
+        index = int(torch.argmax(scores).item())
+        return RankedUiAction(
+            action=candidates[index],
+            score=float(scores[index].item()),
+            source="ui_build_base",
+        )
+
+
+class UiDecisionLogger:
+    def __init__(self, path: Path | None):
+        self.path = path
+
+    def record(
+        self,
+        state: Mapping[str, Any],
+        selected: Mapping[str, Any],
+        *,
+        source: str,
+        score: float | None,
+    ) -> None:
+        if self.path is None:
+            return
+        ui = _mapping(state.get("ui"))
+        actions = [dict(action) for action in ui.get("actions", []) if isinstance(action, Mapping)]
+        selected_id = str(selected.get("id", ""))
+        selected_index = next(
+            (index for index, action in enumerate(actions) if str(action.get("id", "")) == selected_id),
+            -1,
+        )
+        record = {
+            "schema": 1,
+            "timestamp": time.time(),
+            "phase": state.get("phase"),
+            "wave": dict(_mapping(state.get("wave"))),
+            "counters": dict(_mapping(state.get("counters"))),
+            "build": dict(_mapping(state.get("build"))),
+            "actions": actions,
+            "selected_index": selected_index,
+            "selected_id": selected_id,
+            "selected_role": selected.get("role"),
+            "policy_source": source,
+            "policy_score": score,
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")

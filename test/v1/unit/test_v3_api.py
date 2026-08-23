@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -21,6 +22,13 @@ from v3.protocol import (
 from v3.reward import ApiRewardEngine
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
 from v3.ui_automation import AutoUiController, available_actions
+from v3.ui_build_policy import (
+    CHOICE_SIZE,
+    CONTEXT_SIZE,
+    StickMeleeTeacher,
+    UiBuildBase,
+    UiChoiceVectorizer,
+)
 
 
 def _state(*, hp=10, max_hp=10, wave=1, materials=0, kills=0):
@@ -216,6 +224,145 @@ def test_bridge_detects_found_item_take_and_recycle_buttons():
     assert 'return "recycle_item"' in bridge
     assert 'button_text.find("拿取")' in bridge
     assert 'button_text.find("回收")' in bridge
+
+
+def test_bridge_advertises_language_independent_build_choices():
+    bridge = (
+        ROOT / "v3" / "mod" / MOD_DIR_NAME / "bridge.gd"
+    ).read_text(encoding="utf-8")
+    assert '"choice"' in bridge
+    assert '"build": build_state' in bridge
+    assert '"base_id": weapon_id if not weapon_id.empty() else upgrade_id' in bridge
+    assert '"affordable"' in bridge
+    assert '"stat_melee_damage"' in bridge
+    assert 'property_name = "upgrade_data"' in bridge
+
+
+def test_stick_melee_teacher_prioritizes_stick_and_melee_upgrade():
+    teacher = StickMeleeTeacher()
+    shop = dict(_state(wave=4, materials=100), phase="shop")
+    stick = {
+        "id": "/root/Shop/Stick/BuyButton",
+        "role": "buy",
+        "enabled": True,
+        "choice": {
+            "id": "weapon_stick_1",
+            "base_id": "weapon_stick",
+            "category": "weapon",
+            "weapon_type": 0,
+            "price": 30,
+            "affordable": True,
+            "tier": 0,
+            "effects": [],
+        },
+    }
+    ranged = {
+        "id": "/root/Shop/Gun/BuyButton",
+        "role": "buy",
+        "enabled": True,
+        "choice": {
+            "id": "weapon_pistol_1",
+            "base_id": "weapon_pistol",
+            "category": "weapon",
+            "weapon_type": 1,
+            "price": 10,
+            "affordable": True,
+            "tier": 0,
+            "effects": [],
+        },
+    }
+    assert teacher.select(shop, [ranged, stick]).action["id"] == stick["id"]
+
+    upgrade = dict(_state(wave=4), phase="upgrade")
+    melee = dict(
+        stick,
+        id="/root/Upgrade/Melee",
+        role="upgrade_choice",
+        choice={
+            "id": "upgrade_melee_damage_2",
+            "base_id": "upgrade_melee_damage",
+            "category": "upgrade",
+            "tier": 1,
+            "effects": [{"key": "stat_melee_damage", "value": 4}],
+        },
+    )
+    elemental = dict(
+        melee,
+        id="/root/Upgrade/Elemental",
+        choice={
+            "id": "upgrade_elemental_damage_2",
+            "base_id": "upgrade_elemental_damage",
+            "category": "upgrade",
+            "tier": 1,
+            "effects": [{"key": "stat_elemental_damage", "value": 4}],
+        },
+    )
+    assert teacher.select(upgrade, [elemental, melee]).action["id"] == melee["id"]
+
+
+def test_ui_build_base_is_small_and_has_stable_features():
+    state = dict(_state(wave=7, materials=120), phase="shop")
+    state["build"] = {
+        "character_id": "character_well_rounded",
+        "weapons": [{"id": "weapon_stick_1", "base_id": "weapon_stick"}],
+        "items": [],
+        "stats": {"stat_melee_damage": 8, "stat_attack_speed": 12},
+    }
+    action = {
+        "id": "/root/Shop/Stick/BuyButton",
+        "role": "buy",
+        "choice": {
+            "id": "weapon_stick_2",
+            "base_id": "weapon_stick",
+            "category": "weapon",
+            "weapon_type": 0,
+            "tier": 1,
+            "price": 55,
+            "affordable": True,
+            "effects": [{"key": "stat_melee_damage", "value": 2}],
+        },
+    }
+    features = UiChoiceVectorizer().build(state, action)
+    assert features.context.shape == (CONTEXT_SIZE,)
+    assert features.choice.shape == (CHOICE_SIZE,)
+    model = UiBuildBase()
+    assert model.parameter_count < 200_000
+    score = model(
+        torch.from_numpy(features.context[None, :]),
+        torch.from_numpy(features.choice[None, :]),
+        torch.tensor([features.item_bucket]),
+        torch.tensor([features.base_bucket]),
+    )
+    assert score.shape == (1,)
+
+
+def test_stick_melee_teacher_recycles_conflicting_found_item():
+    state = dict(_state(wave=7), phase="item_found")
+    choice = {
+        "id": "item_book",
+        "base_id": "",
+        "category": "item",
+        "tier": 0,
+        "effects": [
+            {"key": "stat_engineering", "value": 2},
+            {"key": "stat_elemental_damage", "value": 1},
+            {"key": "stat_luck", "value": -1},
+        ],
+    }
+    take = {
+        "id": "/root/Main/UI/ItemBoxUI/TakeButton",
+        "role": "take_item",
+        "enabled": True,
+        "choice": choice,
+    }
+    recycle = {
+        "id": "/root/Main/UI/ItemBoxUI/DiscardButton",
+        "role": "recycle_item",
+        "enabled": True,
+        "choice": choice,
+    }
+    selected = StickMeleeTeacher().select(state, [take, recycle])
+    assert selected.action["role"] == "recycle_item"
 
 
 def test_ui_automation_handles_multiple_upgrades_in_one_wave():

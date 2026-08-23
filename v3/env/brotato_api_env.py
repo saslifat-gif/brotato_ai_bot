@@ -37,6 +37,9 @@ class BrotatoApiEnv(gym.Env):
         self.ui_controller = AutoUiController(
             max_shop_buys=cfg.max_shop_buys,
             max_shop_rerolls=cfg.max_shop_rerolls,
+            build_profile=cfg.ui_build_profile,
+            ui_model_path=cfg.ui_model_path,
+            decision_log_path=cfg.ui_decision_log,
         )
 
     def reset(self, *, seed=None, options=None):

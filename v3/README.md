@@ -102,3 +102,16 @@ Protocol details are in `v3/PROTOCOL.md`.
 - `BROTATO_V3_AUTOMATE_MENUS` — defaults to `1`; set `0` for manual menus.
 - `BROTATO_V3_MAX_SHOP_BUYS` — maximum purchases per shop, default `4`.
 - `BROTATO_V3_MAX_SHOP_REROLLS` — maximum rerolls per shop, default `1`.
+- `BROTATO_V3_UI_BUILD_PROFILE` — structured UI teacher; defaults to `stick_melee`.
+- `BROTATO_V3_UI_DATASET` — JSONL decision log used to train the small UI Build Base.
+- `BROTATO_V3_UI_MODEL` — optional trained UI Build Base checkpoint; the rule teacher remains a fallback.
+
+The Stick/Melee profile ranks internal item IDs and numeric effects rather than
+localized screen text. It prioritizes Stick weapons plus melee/attack upgrades,
+masks unaffordable purchases, and records structured decisions to
+`models/version_3/ui_decisions.jsonl`. Train the compact reusable scorer after
+collecting decisions:
+
+```powershell
+python -m v3.train_ui_build --dataset models/version_3/ui_decisions.jsonl --output models/version_3/ui_build_base.pt
+```

@@ -11,6 +11,25 @@ const MAX_ENEMIES := 128
 const MAX_PROJECTILES := 128
 const MAX_PICKUPS := 64
 const MAX_UI_ACTIONS := 64
+const MAX_BUILD_ITEMS := 128
+const BUILD_STAT_KEYS := [
+	"stat_max_hp",
+	"stat_armor",
+	"stat_crit_chance",
+	"stat_luck",
+	"stat_attack_speed",
+	"stat_elemental_damage",
+	"stat_hp_regeneration",
+	"stat_lifesteal",
+	"stat_melee_damage",
+	"stat_percent_damage",
+	"stat_dodge",
+	"stat_engineering",
+	"stat_range",
+	"stat_ranged_damage",
+	"stat_speed",
+	"stat_harvesting"
+]
 
 var _stream: StreamPeerTCP = StreamPeerTCP.new()
 var _receive_buffer := ""
@@ -273,6 +292,7 @@ func _build_state() -> Dictionary:
 	var timer = _property(main, "_wave_timer", null)
 	var run_data = root.get_node_or_null("RunData")
 	var run_player_data = _run_player_data(run_data, player)
+	var build_state := {}
 	var zone_service = root.get_node_or_null("ZoneService")
 	var arena_size = _property(zone_service, "current_zone_max_position", Vector2(1920, 1080))
 	if typeof(arena_size) != TYPE_VECTOR2:
@@ -300,6 +320,7 @@ func _build_state() -> Dictionary:
 		visible_ui_phase
 	)
 	if phase != "combat" and phase != "wave_end":
+		build_state = _build_state_for_policy(run_data, run_player_data)
 		_collect_ui_actions(get_tree().current_scene, ui_actions, phase)
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
@@ -333,6 +354,7 @@ func _build_state() -> Dictionary:
 		"enemies": enemies,
 		"projectiles": projectiles,
 		"pickups": pickups,
+		"build": build_state,
 		"ui": {"actions": ui_actions},
 		"dead": dead,
 		"victory": run_won
@@ -345,14 +367,21 @@ func _collect_ui_actions(node, output: Array, phase: String) -> void:
 	if node is BaseButton and node.is_visible_in_tree():
 		var path := str(node.get_path())
 		var text := str(_property(node, "text", "")).strip_edges()
-		output.append({
+		var role := _ui_role(node, phase, text)
+		var action = {
 			"id": path,
 			"name": str(node.name),
 			"text": text,
-			"role": _ui_role(node, phase, text),
+			"role": role,
 			"enabled": not bool(_property(node, "disabled", false)),
 			"pressed": bool(_property(node, "pressed", false))
-		})
+		}
+		var choice = _ui_choice_data(node, phase, role)
+		if not choice.empty():
+			action["choice"] = choice
+			if role == "buy" and choice.has("affordable"):
+				action["enabled"] = bool(action["enabled"]) and bool(choice["affordable"])
+		output.append(action)
 	for child in node.get_children():
 		if output.size() >= MAX_UI_ACTIONS:
 			break
@@ -394,6 +423,147 @@ func _ui_role(node, phase: String, text: String) -> String:
 	if token.find("start") >= 0 or token.find("开始") >= 0:
 		return "start"
 	return "other"
+
+
+func _ui_choice_data(node, phase: String, role: String) -> Dictionary:
+	var property_name := ""
+	if role == "buy":
+		property_name = "item_data"
+	elif role == "upgrade_choice":
+		property_name = "upgrade_data"
+	elif role == "take_item" or role == "recycle_item":
+		property_name = "item_data"
+	else:
+		return {}
+
+	var cursor = node
+	var depth := 0
+	while cursor != null and depth < 12:
+		var data = _property(cursor, property_name, null)
+		if data != null:
+			var price := int(_property(cursor, "value", _property(data, "value", 0)))
+			var result := _item_policy_data(data, price)
+			if role == "buy":
+				result["affordable"] = price <= _current_materials()
+				result["locked"] = bool(_property(cursor, "locked", false))
+			return result
+		cursor = cursor.get_parent()
+		depth += 1
+	return {}
+
+
+func _item_policy_data(data, price: int = -1) -> Dictionary:
+	if data == null:
+		return {}
+	var item_id := str(_property(data, "my_id", ""))
+	var weapon_id := str(_property(data, "weapon_id", ""))
+	var upgrade_id := str(_property(data, "upgrade_id", ""))
+	var name_key := str(_property(data, "name", ""))
+	var category := "item"
+	if not weapon_id.empty():
+		category = "weapon"
+	elif not upgrade_id.empty():
+		category = "upgrade"
+	var effects := []
+	var raw_effects = _property(data, "effects", [])
+	if typeof(raw_effects) == TYPE_ARRAY:
+		for effect in raw_effects:
+			if effects.size() >= 32:
+				break
+			if effect != null:
+				effects.append(_effect_policy_data(effect))
+	var tags := []
+	var raw_tags = _property(data, "tags", [])
+	if typeof(raw_tags) == TYPE_ARRAY:
+		for tag in raw_tags:
+			tags.append(str(tag))
+	var sets := []
+	var raw_sets = _property(data, "sets", [])
+	if typeof(raw_sets) == TYPE_ARRAY:
+		for set_data in raw_sets:
+			sets.append(str(_first_property(set_data, ["my_id", "set_id", "name"], "")))
+	return {
+		"id": item_id,
+		"base_id": weapon_id if not weapon_id.empty() else upgrade_id,
+		"name_key": name_key,
+		"display_name": tr(name_key) if not name_key.empty() else item_id,
+		"category": category,
+		"tier": int(_property(data, "tier", 0)),
+		"base_value": int(_property(data, "value", 0)),
+		"price": price,
+		"weapon_type": int(_property(data, "type", -1)) if category == "weapon" else -1,
+		"tags": tags,
+		"sets": sets,
+		"effects": effects
+	}
+
+
+func _effect_policy_data(effect) -> Dictionary:
+	var result := {}
+	for property_name in [
+		"key",
+		"custom_key",
+		"text_key",
+		"value",
+		"stat_scaled",
+		"nb_stat_scaled",
+		"to_stat",
+		"to_value",
+		"stat_name",
+		"weapon_id"
+	]:
+		var value = _property(effect, property_name, null)
+		if value != null and typeof(value) in [TYPE_BOOL, TYPE_INT, TYPE_REAL, TYPE_STRING]:
+			result[property_name] = value
+	return result
+
+
+func _current_materials() -> int:
+	var observed_player = null
+	if _observed_player != null and is_instance_valid(_observed_player):
+		observed_player = _observed_player
+	var run_player_data = _run_player_data(RunData, observed_player)
+	return int(_first_property(
+		run_player_data,
+		["gold", "materials"],
+		_first_property(RunData, ["gold", "materials"], 0)
+	))
+
+
+func _build_state_for_policy(run_data, run_player_data) -> Dictionary:
+	var weapons := []
+	var raw_weapons = _first_property(
+		run_player_data,
+		["weapons"],
+		_property(run_data, "weapons", [])
+	)
+	if typeof(raw_weapons) == TYPE_ARRAY:
+		for weapon in raw_weapons:
+			if weapons.size() >= MAX_BUILD_ITEMS:
+				break
+			weapons.append(_item_policy_data(weapon))
+	var items := []
+	var raw_items = _first_property(
+		run_player_data,
+		["items"],
+		_property(run_data, "items", [])
+	)
+	if typeof(raw_items) == TYPE_ARRAY:
+		for item in raw_items:
+			if items.size() >= MAX_BUILD_ITEMS:
+				break
+			items.append(_item_policy_data(item))
+	var stats := {}
+	if run_data != null and run_data.has_method("get_stat"):
+		for stat_key in BUILD_STAT_KEYS:
+			stats[stat_key] = float(run_data.call("get_stat", stat_key))
+	var character = _property(run_data, "current_character", null)
+	return {
+		"character_id": str(_property(character, "my_id", "")),
+		"weapons": weapons,
+		"items": items,
+		"stats": stats
+	}
 
 
 func _detect_visible_ui_phase(node) -> String:

@@ -9,7 +9,10 @@ Game to trainer:
 - `hello`: mod/game versions and capabilities.
 - `state`: tick, phase (`combat`, `wave_end`, `item_found`, `shop`, `upgrade`,
   `game_over`, `victory` or `menu`), player, arena, wave, counters, enemies, projectiles,
-  pickups, available structured UI actions, death and victory fields. `sequence` acknowledges the most recent
+  pickups, build metadata, available structured UI actions, death and victory fields. Shop,
+  upgrade and found-item actions include a language-independent `choice` object with internal
+  IDs, category, tier, price, affordability, tags and numeric effects. Rich inventory/build
+  metadata is emitted only during UI phases so combat frames remain small. `sequence` acknowledges the most recent
   action applied by the bridge, so queued old states are never used as a new
   training step.
 - `event`: non-state notification such as `manual_reset_required`.

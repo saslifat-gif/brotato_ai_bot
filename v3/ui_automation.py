@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 from v3.bridge_server import BridgeServer
 from v3.protocol import ui_action_message
+from v3.ui_build_policy import (
+    LearnedUiBuildPolicy,
+    RankedUiAction,
+    StickMeleeTeacher,
+    UiDecisionLogger,
+)
 
 MAX_NO_ACTION_STATES = 30
 MAX_TRANSITION_WAIT_STATES = 300
@@ -39,7 +46,15 @@ class UiAutomationResult:
 
 
 class AutoUiController:
-    def __init__(self, max_shop_buys: int = 4, max_shop_rerolls: int = 1):
+    def __init__(
+        self,
+        max_shop_buys: int = 4,
+        max_shop_rerolls: int = 1,
+        *,
+        build_profile: str = "stick_melee",
+        ui_model_path: Path | None = None,
+        decision_log_path: Path | None = None,
+    ):
         self.max_shop_buys = max(0, int(max_shop_buys))
         self.max_shop_rerolls = max(0, int(max_shop_rerolls))
         self._shop_wave = None
@@ -48,6 +63,26 @@ class AutoUiController:
         self._attempted: set[tuple[str, int]] = set()
         self._upgrade_clicks: dict[int, int] = {}
         self._item_claims: dict[int, int] = {}
+        self._teacher = StickMeleeTeacher() if build_profile == "stick_melee" else None
+        self._learned = LearnedUiBuildPolicy(ui_model_path) if ui_model_path else None
+        self._decision_logger = UiDecisionLogger(decision_log_path)
+
+    def _rank_structured(
+        self,
+        state: Mapping[str, Any],
+        actions: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        ranked: RankedUiAction | None = None
+        if self._learned is not None:
+            ranked = self._learned.select(state, actions)
+        if ranked is None and self._teacher is not None:
+            ranked = self._teacher.select(state, actions)
+        if ranked is None:
+            return None
+        action = dict(ranked.action)
+        action["_policy_source"] = ranked.source
+        action["_policy_score"] = ranked.score
+        return action
 
     def reset_episode(self) -> None:
         self._shop_wave = None
@@ -74,24 +109,35 @@ class AutoUiController:
             wave = int(state.get("wave", {}).get("number", -1))
             if self._upgrade_clicks.get(wave, 0) >= MAX_UPGRADE_CLICKS_PER_WAVE:
                 return None
-            return choices[0] if choices else None
+            return self._rank_structured(state, choices) or (choices[0] if choices else None)
         if phase == "item_found":
             wave = int(state.get("wave", {}).get("number", -1))
             if self._item_claims.get(wave, 0) >= MAX_ITEM_CLAIMS_PER_WAVE:
                 return None
             take = available_actions(state, "take_item")
+            recycle = available_actions(state, "recycle_item")
+            ranked = self._rank_structured(state, [*take, *recycle])
+            if ranked is not None:
+                return ranked
             if take:
                 return take[0]
-            recycle = available_actions(state, "recycle_item")
             return recycle[0] if recycle else None
         if phase == "shop":
             self._enter_shop(state)
             materials = int(state.get("counters", {}).get("materials", 0))
             if self._shop_buys < self.max_shop_buys:
+                buy_candidates = []
                 for action in available_actions(state, "buy"):
                     key = (str(action["id"]), materials)
                     if key not in self._attempted:
-                        return action
+                        buy_candidates.append(action)
+                ranked = self._rank_structured(state, buy_candidates)
+                if ranked is not None:
+                    return ranked
+                # Old bridge packages have no structured choice metadata. Keep
+                # the verified first-affordable fallback during upgrades.
+                if buy_candidates and not any(action.get("choice") for action in buy_candidates):
+                    return buy_candidates[0]
             if self._shop_rerolls < self.max_shop_rerolls:
                 rerolls = available_actions(state, "reroll")
                 if rerolls:
@@ -107,6 +153,16 @@ class AutoUiController:
         return None
 
     def mark_sent(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> None:
+        self._decision_logger.record(
+            state,
+            action,
+            source=str(action.get("_policy_source", "script_fallback")),
+            score=(
+                float(action["_policy_score"])
+                if action.get("_policy_score") is not None
+                else None
+            ),
+        )
         role = str(action.get("role", ""))
         if role == "upgrade_choice":
             wave = int(state.get("wave", {}).get("number", -1))
@@ -202,7 +258,10 @@ class AutoUiController:
                 sent_roles.append(str(action.get("role", "")))
                 print(
                     f"[v3-ui] sent role={action.get('role')} "
-                    f"name={action.get('name', '')} target={action.get('id')}"
+                    f"name={action.get('name', '')} target={action.get('id')} "
+                    f"choice={action.get('choice', {}).get('id', '-')} "
+                    f"policy={action.get('_policy_source', 'script_fallback')} "
+                    f"score={action.get('_policy_score', '-')}"
                 )
                 if action.get("role") in {
                     "upgrade_choice",
