@@ -19,22 +19,15 @@ from v3.combat_policy import (
     CombatHeuristicTeacher,
     CombatPolicyBase,
     RichCombatVectorizer,
+    load_combat_base,
 )
 from v3.config import load_config
 
 
 def load_combat_bc(path: Path) -> tuple[CombatPolicyBase, dict]:
-    resolved = path.resolve()
-    try:
-        checkpoint = torch.load(resolved, map_location="cpu", weights_only=False)
-    except TypeError:
-        checkpoint = torch.load(resolved, map_location="cpu")
-    if not isinstance(checkpoint, dict) or checkpoint.get("format") != "brotato_combat_base_v1":
-        raise RuntimeError(f"unsupported combat BC checkpoint: {resolved}")
-    model = CombatPolicyBase()
-    model.load_state_dict(checkpoint["state_dict"])
-    model.eval()
-    return model, checkpoint
+    """Backward-compatible alias used by existing evaluation commands."""
+
+    return load_combat_base(path)
 
 
 def main() -> int:

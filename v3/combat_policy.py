@@ -327,6 +327,22 @@ class CombatPolicyBase(nn.Module):
         return sum(parameter.numel() for parameter in self.parameters())
 
 
+def load_combat_base(path: Path) -> tuple[CombatPolicyBase, dict]:
+    """Load the compact human combat base without coupling callers to a runner."""
+
+    resolved = Path(path).resolve()
+    try:
+        checkpoint = torch.load(resolved, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(resolved, map_location="cpu")
+    if not isinstance(checkpoint, dict) or checkpoint.get("format") != "brotato_combat_base_v1":
+        raise RuntimeError(f"unsupported combat BC checkpoint: {resolved}")
+    model = CombatPolicyBase()
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return model, checkpoint
+
+
 class CombatDecisionLogger:
     def __init__(self, path: Path | None):
         self.path = path

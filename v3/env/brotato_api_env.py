@@ -18,12 +18,17 @@ from v3.vectorizer import ApiStateVectorizer
 class BrotatoApiEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, cfg: V3Config, server: Optional[BridgeServer] = None):
+    def __init__(
+        self,
+        cfg: V3Config,
+        server: Optional[BridgeServer] = None,
+        vectorizer=None,
+    ):
         super().__init__()
         self.cfg = cfg
         self.server = server or BridgeServer(cfg.host, cfg.port)
         self.server.start()
-        self.vectorizer = ApiStateVectorizer()
+        self.vectorizer = vectorizer or ApiStateVectorizer()
         self.reward_engine = ApiRewardEngine()
         self.action_space = spaces.Discrete(len(MoveAction))
         self.observation_space = spaces.Box(
@@ -141,6 +146,11 @@ class BrotatoApiEnv(gym.Env):
             "safety_overridden": decision.overridden,
             "requested_risk": decision.requested_risk,
             "applied_risk": decision.applied_risk,
+            "materials": int(state.get("counters", {}).get("materials", 0)),
+            "health_fraction": float(state.get("player", {}).get("health", 0.0))
+            / max(1.0, float(state.get("player", {}).get("max_health", 1.0))),
+            "enemy_count": len(state.get("enemies", [])),
+            "projectile_count": len(state.get("projectiles", [])),
         }
         return observation, reward, terminated, truncated, info
 

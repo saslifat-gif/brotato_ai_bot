@@ -1,0 +1,269 @@
+"""Fine-tune the compact human combat base with PPO and a BC anchor."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+import torch
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from torch import nn
+from torch.nn import functional as F
+
+from v3.combat_policy import (
+    CombatPolicyBase,
+    RICH_OBSERVATION_SIZE,
+    RichCombatVectorizer,
+    load_combat_base,
+)
+from v3.config import load_config
+from v3.env.brotato_api_env import BrotatoApiEnv
+from v3.runtime_callbacks import SaveBestRollingRewardCallback
+from v3.train_combat_bc import load_records
+
+
+class CombatLayerNormExtractor(BaseFeaturesExtractor):
+    """The exact input normalization layer used by CombatPolicyBase."""
+
+    def __init__(self, observation_space):
+        super().__init__(observation_space, features_dim=RICH_OBSERVATION_SIZE)
+        self.layer_norm = nn.LayerNorm(RICH_OBSERVATION_SIZE)
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        return self.layer_norm(observations)
+
+
+def actor_logits(policy, observations: torch.Tensor) -> torch.Tensor:
+    features = policy.extract_features(observations)
+    latent = policy.mlp_extractor.forward_actor(features)
+    return policy.action_net(latent)
+
+
+def initialize_actor_from_human_base(model: PPO, base: CombatPolicyBase) -> float:
+    """Copy every human-base actor weight into the equivalent PPO actor."""
+
+    extractor = model.policy.features_extractor
+    if not isinstance(extractor, CombatLayerNormExtractor):
+        raise RuntimeError("PPO policy is missing CombatLayerNormExtractor")
+    extractor.layer_norm.load_state_dict(base.network[0].state_dict())
+    policy_linears = [
+        layer for layer in model.policy.mlp_extractor.policy_net if isinstance(layer, nn.Linear)
+    ]
+    base_linears = [base.network[1], base.network[3]]
+    if len(policy_linears) != len(base_linears):
+        raise RuntimeError("PPO actor layout does not match the human combat base")
+    for target, source in zip(policy_linears, base_linears):
+        target.load_state_dict(source.state_dict())
+    model.policy.action_net.load_state_dict(base.network[5].state_dict())
+
+    probe = torch.zeros((2, RICH_OBSERVATION_SIZE), device=model.device)
+    probe[1] = torch.linspace(-1.0, 1.0, RICH_OBSERVATION_SIZE, device=model.device)
+    base = base.to(model.device)
+    with torch.no_grad():
+        difference = float((actor_logits(model.policy, probe) - base(probe)).abs().max().item())
+    if difference > 1e-5:
+        raise RuntimeError(f"human actor transfer verification failed: max_abs_diff={difference}")
+    return difference
+
+
+class HumanAnchoredPPO(PPO):
+    """PPO with a small supervised update after each rollout to limit forgetting."""
+
+    def __init__(
+        self,
+        *args,
+        bc_coefficient: float = 0.20,
+        bc_batches: int = 2,
+        bc_batch_size: int = 256,
+        **kwargs,
+    ):
+        self.bc_coefficient = float(bc_coefficient)
+        self.bc_batches = max(0, int(bc_batches))
+        self.bc_batch_size = max(16, int(bc_batch_size))
+        self._bc_features = None
+        self._bc_actions = None
+        super().__init__(*args, **kwargs)
+
+    def _excluded_save_params(self) -> list[str]:
+        return super()._excluded_save_params() + ["_bc_features", "_bc_actions"]
+
+    def set_human_anchor(self, features: np.ndarray, actions: np.ndarray) -> None:
+        if len(features) != len(actions) or len(features) == 0:
+            raise ValueError("human anchor requires matching non-empty features and actions")
+        self._bc_features = torch.as_tensor(features, dtype=torch.float32, device=self.device)
+        self._bc_actions = torch.as_tensor(actions, dtype=torch.long, device=self.device)
+
+    def train(self) -> None:
+        super().train()
+        if self._bc_features is None or self.bc_batches <= 0 or self.bc_coefficient <= 0.0:
+            return
+        self.policy.set_training_mode(True)
+        losses = []
+        accuracies = []
+        count = int(self._bc_features.shape[0])
+        for _ in range(self.bc_batches):
+            indices = torch.randint(count, (min(self.bc_batch_size, count),), device=self.device)
+            observations = self._bc_features[indices]
+            targets = self._bc_actions[indices]
+            logits = actor_logits(self.policy, observations)
+            loss = F.cross_entropy(logits, targets)
+            self.policy.optimizer.zero_grad()
+            (loss * self.bc_coefficient).backward()
+            nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+            self.policy.optimizer.step()
+            losses.append(float(loss.detach().cpu().item()))
+            accuracies.append(float((logits.argmax(dim=1) == targets).float().mean().item()))
+        self.logger.record("human_bc/cross_entropy", float(np.mean(losses)))
+        self.logger.record("human_bc/accuracy", float(np.mean(accuracies)))
+        self.logger.record("human_bc/coefficient", self.bc_coefficient)
+
+
+class CombatTensorboardCallback(BaseCallback):
+    """Expose game-specific progress that SB3 cannot infer from reward alone."""
+
+    def __init__(self):
+        super().__init__()
+        self.best_wave = 0
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones", [])
+        for index, info in enumerate(infos):
+            wave = int(info.get("wave", 0))
+            applied = int(info.get("applied_action", 0))
+            self.best_wave = max(self.best_wave, wave)
+            self.logger.record_mean("combat/current_wave", wave)
+            self.logger.record("combat/best_wave", self.best_wave)
+            self.logger.record_mean(
+                "combat/safety_override_rate", float(bool(info.get("safety_overridden")))
+            )
+            self.logger.record_mean("combat/health_fraction", float(info.get("health_fraction", 0.0)))
+            self.logger.record_mean("combat/materials", float(info.get("materials", 0)))
+            self.logger.record_mean("combat/enemy_count", float(info.get("enemy_count", 0)))
+            self.logger.record_mean("combat/projectile_count", float(info.get("projectile_count", 0)))
+            for action in range(9):
+                self.logger.record_mean(
+                    f"actions/applied_{action}", float(applied == action)
+                )
+            if index < len(dones) and bool(dones[index]):
+                self.logger.record_mean("combat/episode_wave", wave)
+        return True
+
+
+def _anchor_arrays(records: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+    features = np.asarray([record["features"] for record in records], dtype=np.float32)
+    actions = np.asarray([int(record["action"]) for record in records], dtype=np.int64)
+    return features, actions
+
+
+def main() -> int:
+    cfg = load_config()
+    parser = argparse.ArgumentParser(
+        description="Fine-tune the human Brotato combat base with anchored PPO"
+    )
+    parser.add_argument(
+        "--base-model",
+        type=Path,
+        default=cfg.output_dir / "human_combat_base_candidate.pt",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=cfg.output_dir / "human_combat_v1.jsonl",
+    )
+    parser.add_argument("--timesteps", type=int, default=cfg.total_timesteps)
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--bc-coefficient", type=float, default=0.20)
+    parser.add_argument("--bc-batches", type=int, default=2)
+    parser.add_argument("--resume", type=Path)
+    parser.add_argument("--no-safety", action="store_true")
+    args = parser.parse_args()
+
+    cfg = replace(cfg, safety_shield=not args.no_safety)
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    base, metadata = load_combat_base(args.base_model)
+    records = load_records(args.dataset)
+    if len(records) < 100:
+        raise RuntimeError(f"only {len(records)} valid human records in {args.dataset}")
+    features, actions = _anchor_arrays(records)
+
+    env = Monitor(BrotatoApiEnv(cfg, vectorizer=RichCombatVectorizer()))
+    checkpoints = cfg.output_dir / "human_finetune_checkpoints"
+    checkpoints.mkdir(parents=True, exist_ok=True)
+    if args.resume:
+        model = HumanAnchoredPPO.load(args.resume, env=env, device=args.device)
+        transfer_difference = None
+        print(f"[human-ppo] resumed={args.resume.resolve()}")
+    else:
+        model = HumanAnchoredPPO(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            learning_rate=3e-5,
+            n_steps=1024,
+            batch_size=256,
+            n_epochs=4,
+            gamma=0.995,
+            gae_lambda=0.95,
+            ent_coef=0.002,
+            tensorboard_log=str(cfg.output_dir / "logs"),
+            device=args.device,
+            bc_coefficient=args.bc_coefficient,
+            bc_batches=args.bc_batches,
+            policy_kwargs={
+                "features_extractor_class": CombatLayerNormExtractor,
+                "net_arch": {"pi": [128, 64], "vf": [128, 64]},
+                "activation_fn": nn.Tanh,
+            },
+        )
+        transfer_difference = initialize_actor_from_human_base(model, base)
+    model.bc_coefficient = max(0.0, float(args.bc_coefficient))
+    model.bc_batches = max(0, int(args.bc_batches))
+    model.set_human_anchor(features, actions)
+    print(
+        f"[human-ppo] base={args.base_model.resolve()} records={len(records)} "
+        f"validation_accuracy={metadata.get('validation_accuracy')} "
+        f"transfer_max_abs_diff={transfer_difference} safety={cfg.safety_shield} "
+        f"bc_coefficient={model.bc_coefficient}"
+    )
+    callbacks = CallbackList([
+        CheckpointCallback(
+            save_freq=20_000,
+            save_path=str(checkpoints),
+            name_prefix="human_base_ppo",
+        ),
+        SaveBestRollingRewardCallback(cfg.output_dir / "human_finetune_best", min_episodes=10),
+        CombatTensorboardCallback(),
+    ])
+    try:
+        model.learn(
+            total_timesteps=max(1, int(args.timesteps)),
+            callback=callbacks,
+            tb_log_name="HumanBasePPO",
+            reset_num_timesteps=not bool(args.resume),
+        )
+    except KeyboardInterrupt:
+        target = cfg.output_dir / "human_base_ppo_interrupted"
+        model.save(str(target))
+        print(f"[human-ppo] interrupted model saved={target}.zip")
+        return 130
+    except Exception:
+        target = cfg.output_dir / "human_base_ppo_recovery"
+        model.save(str(target))
+        print(f"[human-ppo] error recovery model saved={target}.zip")
+        raise
+    finally:
+        env.close()
+    target = cfg.output_dir / "human_base_ppo_final"
+    model.save(str(target))
+    print(f"[human-ppo] final model saved={target}.zip")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

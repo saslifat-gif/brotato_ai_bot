@@ -105,6 +105,18 @@ compact behavior-cloning base:
 python -m v3.train_combat_bc --dataset models/version_3/human_combat_v1.jsonl --output models/version_3/human_combat_base.pt
 ```
 
+Fine-tune that human base online without discarding its behavior:
+
+```bat
+train_v3_human_base.bat
+```
+
+This uses a rich 384-value PPO environment initialized exactly from the compact
+human actor. A small behavior-cloning update follows every PPO rollout to limit
+catastrophic forgetting. TensorBoard writes the run as `HumanBasePPO` and adds
+game-specific `combat/*`, `actions/*`, and `human_bc/*` curves alongside SB3's
+standard reward and optimization metrics.
+
 ## API observation and actions
 
 The observation is a fixed 256-value vector containing player status, wave and
