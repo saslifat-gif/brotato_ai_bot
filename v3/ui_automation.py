@@ -11,6 +11,8 @@ from v3.protocol import ui_action_message
 
 MAX_NO_ACTION_STATES = 30
 MAX_TRANSITION_WAIT_STATES = 300
+MAX_UPGRADE_CLICKS_PER_WAVE = 32
+UPGRADE_FALLBACK_WAIT_STATES = 4
 
 
 def available_actions(state: Mapping[str, Any], role: str) -> list[dict[str, Any]]:
@@ -43,12 +45,14 @@ class AutoUiController:
         self._shop_buys = 0
         self._shop_rerolls = 0
         self._attempted: set[tuple[str, int]] = set()
+        self._upgrade_clicks: dict[int, int] = {}
 
     def reset_episode(self) -> None:
         self._shop_wave = None
         self._shop_buys = 0
         self._shop_rerolls = 0
         self._attempted.clear()
+        self._upgrade_clicks.clear()
 
     def _enter_shop(self, state: Mapping[str, Any]) -> None:
         wave = state.get("wave", {})
@@ -64,6 +68,9 @@ class AutoUiController:
         phase = str(state.get("phase", "menu"))
         if phase == "upgrade":
             choices = available_actions(state, "upgrade_choice")
+            wave = int(state.get("wave", {}).get("number", -1))
+            if self._upgrade_clicks.get(wave, 0) >= MAX_UPGRADE_CLICKS_PER_WAVE:
+                return None
             return choices[0] if choices else None
         if phase == "shop":
             self._enter_shop(state)
@@ -89,7 +96,10 @@ class AutoUiController:
 
     def mark_sent(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> None:
         role = str(action.get("role", ""))
-        if role == "buy":
+        if role == "upgrade_choice":
+            wave = int(state.get("wave", {}).get("number", -1))
+            self._upgrade_clicks[wave] = self._upgrade_clicks.get(wave, 0) + 1
+        elif role == "buy":
             materials = int(state.get("counters", {}).get("materials", 0))
             self._attempted.add((str(action.get("id", "")), materials))
             self._shop_buys += 1
@@ -130,9 +140,17 @@ class AutoUiController:
                     for action in available_actions(state, "restart")
                 )
             )
+            upgrade_fallback_ready = (
+                pending_phase_change is not None
+                and pending_phase_change[1] == "upgrade_choice"
+                and not result_ok
+                and no_action_states >= UPGRADE_FALLBACK_WAIT_STATES
+                and bool(available_actions(state, "upgrade_choice"))
+            )
             if pending_phase_change is not None and (
                 phase != pending_phase_change[0]
                 or (pending_phase_change[1] == "upgrade_choice" and result_changed)
+                or upgrade_fallback_ready
                 or restart_stage_changed
             ):
                 print(

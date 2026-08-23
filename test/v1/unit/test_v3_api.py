@@ -124,8 +124,8 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '["gold", "materials"]' in bridge
     assert "func _collect_ui_actions(node, output: Array, phase: String)" in bridge
     assert "func _detect_visible_ui_phase(node)" in bridge
-    assert "func _ui_action_context(node)" in bridge
-    assert '"last_result": _last_ui_action_result' in bridge
+    assert "func _ui_action_context(node)" not in bridge
+    assert "_last_ui_action_result" not in bridge
     assert 'button_name == "choosebutton"' in bridge
     assert "visible_ui_phase" in bridge
     assert 'node.emit_signal("pressed")' in bridge
@@ -200,12 +200,12 @@ def test_ui_automation_handles_multiple_upgrades_in_one_wave():
         ],
         "last_result": {},
     }
-    second_upgrade = dict(upgrade, tick=11)
-    second_upgrade["ui"] = {
-        **upgrade["ui"],
-        "last_result": {"sequence": 6, "ok": True, "changed": True},
-    }
-    shop = dict(_state(wave=3), phase="shop", tick=12)
+    second_upgrade_states = []
+    for tick in range(11, 16):
+        second_upgrade = dict(upgrade, tick=tick)
+        second_upgrade["ui"] = dict(upgrade["ui"])
+        second_upgrade_states.append(second_upgrade)
+    shop = dict(_state(wave=3), phase="shop", tick=16)
     shop["ui"] = {
         "actions": [
             {
@@ -217,11 +217,11 @@ def test_ui_automation_handles_multiple_upgrades_in_one_wave():
         ],
         "last_result": {"sequence": 7, "ok": True, "changed": True},
     }
-    combat = dict(_state(wave=4), tick=13)
+    combat = dict(_state(wave=4), tick=17)
 
     class FakeServer:
         def __init__(self):
-            self.states = iter([second_upgrade, shop, combat])
+            self.states = iter([*second_upgrade_states, shop, combat])
             self.sent = []
 
         def send(self, message, timeout_sec):
