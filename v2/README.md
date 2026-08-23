@@ -24,6 +24,17 @@ record_v2.bat
 The recorder saves 10 frames per second plus the human WASD action under
 `datasets/v2/raw/session_*`. Press F8 to stop recording.
 
+Curate the recording before labeling:
+
+```bat
+curate_v2.bat
+```
+
+The visual curator samples every tenth frame. Press `C` for a combat frame,
+`U` for a shop/upgrade/item/death UI frame, or `S` to skip it. Use `N` and `P`
+to inspect adjacent frames. Selected images are copied into
+`datasets/v2/to_label/combat` and `datasets/v2/to_label/ui`.
+
 ## 2. Label two datasets
 
 Use CVAT, Roboflow, or another YOLO-compatible annotation tool. SAM 2 can help
