@@ -42,19 +42,23 @@ It also keeps an editable diagnostic copy under
 `<Brotato>\mods-unpacked\Lifat-BrotatoRLBridge`. The ZIP contains the required
 `mods-unpacked\Lifat-BrotatoRLBridge\...` internal structure.
 
-For Steam installations, it additionally copies the ZIP to Brotato's official
-local Workshop test location:
+For Steam installations, it additionally copies the ZIP beside an existing
+subscribed Workshop mod:
 
 ```text
-<Steam>\steamapps\workshop\content\1942280\Lifat-BrotatoRLBridge-local
+<Steam>\steamapps\workshop\content\1942280\<numeric-workshop-id>
 ```
 
-In Steam, open **Brotato → Properties → General → Launch Options** and add
-`--enable-mods`. Launch the normal game, enable **BrotatoRLBridge** in its Mods
-menu, then restart Brotato once more.
+This is required because Brotato's bundled ModLoader only scans subscribed
+numeric Workshop directories. The installer also activates **BrotatoRLBridge**
+in the current ModLoader profile when that profile already exists.
 
-Open Brotato, enable **BrotatoRLBridge** in the Mods menu, close the game and
-launch it again. Do not publish this training bridge to Workshop.
+In Steam, open **Brotato → Properties → General → Launch Options** and add
+`--enable-mods`. Launch the game, then restart Brotato once more.
+
+If the installer says the profile was not found, enable **BrotatoRLBridge** in
+the Mods menu after the first mod-enabled launch and restart. Do not publish
+this training bridge to Workshop.
 
 ## 2. Verify the API before training
 

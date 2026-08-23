@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -35,21 +36,72 @@ def resolve_game_directory(selected: Path) -> Path:
     return path
 
 
-def steam_workshop_target(game_directory: Path, package_name: str) -> Path | None:
+def steam_workshop_root(game_directory: Path) -> Path | None:
     steamapps = next(
         (parent for parent in game_directory.parents if parent.name.lower() == "steamapps"),
         None,
     )
     if steamapps is None:
         return None
-    return (
-        steamapps
-        / "workshop"
-        / "content"
-        / BROTATO_STEAM_APP_ID
-        / f"{MOD_DIR_NAME}-local"
-        / package_name
+    return steamapps / "workshop" / "content" / BROTATO_STEAM_APP_ID
+
+
+def steam_workshop_target(game_directory: Path, package_name: str) -> Path | None:
+    """Choose a Workshop folder that this Brotato build will actually scan.
+
+    Older Brotato ModLoader builds only inspect numeric directories belonging to
+    subscribed Workshop items. A custom sibling such as ``MyMod-local`` appears
+    in the log but is silently skipped. Keep the local bridge beside an existing
+    subscribed mod ZIP so it is discoverable without publishing the bridge.
+    """
+
+    workshop_root = steam_workshop_root(game_directory)
+    if workshop_root is None or not workshop_root.is_dir():
+        return None
+    candidates = sorted(
+        directory
+        for directory in workshop_root.iterdir()
+        if directory.is_dir()
+        and directory.name.isdigit()
+        and any(directory.glob("*.zip"))
     )
+    if not candidates:
+        return None
+    return candidates[0] / package_name
+
+
+def default_profile_path() -> Path | None:
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    return Path(appdata) / "Brotato" / "mod_user_profiles.json"
+
+
+def activate_mod_profile(profile_path: Path, package: Path) -> bool:
+    """Enable the bridge in the current ModLoader profile, preserving a backup."""
+
+    if not profile_path.is_file():
+        return False
+    data = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+    current_profile = str(data.get("current_profile") or "default")
+    profiles = data.setdefault("profiles", {})
+    profile = profiles.setdefault(current_profile, {})
+    mod_list = profile.setdefault("mod_list", {})
+    mod_list[MOD_DIR_NAME] = {
+        "is_active": True,
+        "zip_path": package.as_posix(),
+    }
+
+    backup = profile_path.with_name(f"{profile_path.name}.before-v3.bak")
+    if not backup.exists():
+        shutil.copy2(profile_path, backup)
+    temporary = profile_path.with_name(f"{profile_path.name}.v3.tmp")
+    temporary.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(profile_path)
+    return True
 
 
 def install_mod(game_directory: Path, source: Path | None = None) -> Path:
@@ -80,7 +132,6 @@ def install_mod(game_directory: Path, source: Path | None = None) -> Path:
                 archive.write(path, (archive_root / path.relative_to(source)).as_posix())
     workshop_package = steam_workshop_target(game_directory, package.name)
     if workshop_package is not None:
-        workshop_package.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(package, workshop_package)
     return package
 
@@ -101,10 +152,18 @@ def main() -> int:
     )
     workshop_package = steam_workshop_target(package.parent.parent, package.name)
     if workshop_package is not None:
-        print(f"[v3-install] steam_test_package={workshop_package}")
+        print(f"[v3-install] discoverable_workshop_package={workshop_package}")
+        profile_path = default_profile_path()
+        if profile_path is not None and activate_mod_profile(profile_path, workshop_package):
+            print(f"[v3-install] activated_profile={profile_path}")
+        else:
+            print("[v3-install] profile not found; enable BrotatoRLBridge in the Mods menu")
     else:
-        print("[v3-install] non-Steam layout; no Steam workshop test copy created")
-    print("[v3-install] enable BrotatoRLBridge in Brotato's Mods menu, then restart the game")
+        print(
+            "[v3-install] no subscribed numeric Workshop folder found; "
+            "subscribe to any Brotato mod, launch once, and rerun this installer"
+        )
+    print("[v3-install] launch Brotato with --enable-mods, then restart the game")
     return 0
 
 

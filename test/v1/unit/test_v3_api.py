@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 from v3.bridge_server import BridgeServer
-from v3.install_mod import MOD_DIR_NAME, install_mod
+from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
 from v3.protocol import BridgeProtocolError, action_message, decode_message, encode_message
 from v3.reward import ApiRewardEngine
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
@@ -118,6 +118,17 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     game = tmp_path / "Steam" / "steamapps" / "common" / "Brotato"
     game.mkdir(parents=True)
     (game / "Brotato.exe").touch()
+    workshop_host = (
+        tmp_path
+        / "Steam"
+        / "steamapps"
+        / "workshop"
+        / "content"
+        / "1942280"
+        / "2931388196"
+    )
+    workshop_host.mkdir(parents=True)
+    (workshop_host / "Subscribed-Mod.zip").touch()
     package = install_mod(game)
     assert package == game / "mods" / f"{MOD_DIR_NAME}-0.1.1.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
@@ -132,7 +143,28 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
         / "workshop"
         / "content"
         / "1942280"
-        / f"{MOD_DIR_NAME}-local"
+        / "2931388196"
         / package.name
     )
     assert workshop_package.read_bytes() == package.read_bytes()
+
+
+def test_installer_activates_bridge_in_current_profile(tmp_path):
+    profile_path = tmp_path / "Brotato" / "mod_user_profiles.json"
+    profile_path.parent.mkdir()
+    profile_path.write_text(
+        json.dumps(
+            {
+                "current_profile": "training",
+                "profiles": {"training": {"mod_list": {}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    package = tmp_path / "1942280" / "2931388196" / "bridge.zip"
+    assert activate_mod_profile(profile_path, package)
+
+    saved = json.loads(profile_path.read_text(encoding="utf-8"))
+    entry = saved["profiles"]["training"]["mod_list"][MOD_DIR_NAME]
+    assert entry == {"is_active": True, "zip_path": package.as_posix()}
+    assert profile_path.with_name("mod_user_profiles.json.before-v3.bak").is_file()

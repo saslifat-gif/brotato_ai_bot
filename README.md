@@ -38,10 +38,12 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Then run `install_v3_mod.bat`, enable **BrotatoRLBridge** in Brotato's Mods
-menu and restart the game. Run `diagnose_v3.bat` once; if the state stream is
-healthy, train with `train_v3.bat`. See [`v3/README.md`](v3/README.md) for the
-current manual shop/reset limitation and troubleshooting.
+Then run `install_v3_mod.bat`, set Brotato's Steam Launch Options to
+`--enable-mods`, and restart the game. The installer activates
+**BrotatoRLBridge** when a ModLoader profile already exists. Run
+`diagnose_v3.bat` once; if the state stream is healthy, train with
+`train_v3.bat`. See [`v3/README.md`](v3/README.md) for the current manual
+shop/reset limitation and troubleshooting.
 
 For the legacy v1 path:
 
