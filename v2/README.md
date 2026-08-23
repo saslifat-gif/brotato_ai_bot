@@ -26,10 +26,35 @@ frames per second plus the human WASD action under `datasets/v2/raw/session_*`.
 Start it while a battle is ready to play and play normally. To stop safely,
 Alt+Tab to the recorder console and press `Q` or `Enter`. There is no global
 stop hotkey, so the stop command cannot also trigger an action inside Brotato.
-V2 uses Windows Graphics Capture by default because it produces fresh frames
-for the game on the primary monitor. At the end, `visual_change_ratio` should
-be well above zero. If the recorder reports that capture appears frozen, do
-not label that session.
+V2 uses OBS Virtual Camera by default because desktop capture is frozen on
+some game/driver combinations. In OBS, add a **Game Capture** source for
+Brotato, set the canvas/output to 1920x1080, fit the game source to the canvas,
+and click **Start Virtual Camera** before running any v2 batch file. The bot
+still records WASD directly from Windows while it receives video from OBS. At
+the end, `visual_change_ratio` should be well above zero. If the recorder
+reports that capture appears frozen, do not label that session.
+
+The recorder does not log mouse clicks. V2 does not learn menu clicks from
+demonstrations; its UI controller clicks high-confidence button detections.
+
+If index `0` opens the wrong camera, set another index before starting:
+
+```powershell
+$env:BROTATO_OBS_CAMERA_INDEX="1"
+.\record_v2.bat
+```
+
+Alternatively, for detector-only data, make a normal OBS recording without
+overlays and run:
+
+```bat
+import_obs_v2.bat
+```
+
+Choose the OBS `.mp4` or `.mkv` file. The importer extracts five frames per
+second into a new raw session. You can also drag the video file directly onto
+`import_obs_v2.bat`. OBS video imports do not contain WASD labels, but those
+labels are not required by the current detector plus PPO workflow.
 
 Curate the recording before labeling:
 
@@ -37,9 +62,10 @@ Curate the recording before labeling:
 curate_v2.bat
 ```
 
-The visual curator samples every tenth frame. Press `C` for a combat frame,
-`U` for a shop/upgrade/item/death UI frame, or `S` to skip it. Use `N` and `P`
-to inspect adjacent raw frames. Selected images are copied into
+The visual curator uses the session frame rate to sample about once per
+second. Press `C` for a combat frame, `U` for a shop/upgrade/item/death UI
+frame, or `S` to skip it. Use `N` and `P` to inspect adjacent raw frames.
+Selected images are copied into
 `datasets/v2/to_label/combat` and `datasets/v2/to_label/ui`.
 
 Near-duplicate skipping is optional. To enable it for a mostly static

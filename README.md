@@ -71,7 +71,8 @@ pytest
 | `BROTATO_OUTPUT_DIR` | Optional | Output directory for models and checkpoints |
 | `BROTATO_WINDOW_TITLE` | Optional | Game window title |
 | `BROTATO_EXE_NAME` | Optional | Game executable name (e.g. `Brotato.exe`) |
-| `BROTATO_CAPTURE_BACKEND` | Optional | `mss` (default, virtual-desktop safe) or explicit `windows-capture` |
+| `BROTATO_CAPTURE_BACKEND` | Optional | V1 uses `mss`; V2 supports `obs-camera`, `windows-capture`, or `mss` |
+| `BROTATO_OBS_CAMERA_INDEX` | Optional | OBS Virtual Camera device index for V2 (default `0`) |
 | `BROTATO_INPUT_MODE` | Optional | `physical_foreground` (default) or `background` Win32 messages |
 | `BROTATO_CONTROL_PANEL` | Optional | Show the OpenCV control panel; default `false` so it cannot steal game focus |
 | `BROTATO_ACTION_DIAGONAL` | Optional | `true` enables 8-direction movement (`Discrete(9)`: cardinals + diagonals) for circular kiting. Default `false` (5 actions). Changing this invalidates existing checkpoints. |

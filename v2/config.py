@@ -14,6 +14,7 @@ def _boolean(name: str, default: bool) -> bool:
 class V2Config:
     window_title: str
     capture_backend: str
+    obs_camera_index: int
     combat_weights: Path
     ui_weights: Path
     detector_device: str
@@ -37,7 +38,8 @@ def load_config() -> V2Config:
         ui_weights = (root / ui_weights).resolve()
     return V2Config(
         window_title=os.environ.get("BROTATO_WINDOW_TITLE", "Brotato"),
-        capture_backend=os.environ.get("BROTATO_CAPTURE_BACKEND", "windows-capture").strip().lower(),
+        capture_backend=os.environ.get("BROTATO_CAPTURE_BACKEND", "obs-camera").strip().lower(),
+        obs_camera_index=max(0, int(os.environ.get("BROTATO_OBS_CAMERA_INDEX", "0"))),
         combat_weights=combat_weights,
         ui_weights=ui_weights,
         detector_device=os.environ.get("BROTATO_V2_DEVICE", "cpu"),

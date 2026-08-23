@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 from v2.curate_recording import frame_change_score, next_distinct_index
+from v2.import_obs_video import source_frame_indices
 from v2.record_gameplay import visual_change_score
 
 
@@ -39,3 +40,9 @@ def test_visual_change_score_detects_motion():
 
     assert visual_change_score(first, first.copy()) == 0.0
     assert visual_change_score(first, second) > 200.0
+
+
+def test_obs_source_frame_indices_resample_to_target_fps():
+    indices = list(source_frame_indices(source_fps=30.0, target_fps=5.0, total_frames=31))
+
+    assert indices == [0, 6, 12, 18, 24, 30]

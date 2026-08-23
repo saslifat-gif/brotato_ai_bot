@@ -1,15 +1,15 @@
-"""Capture boundary with monitor-independent coordinates.
-
-MSS accepts absolute virtual-desktop coordinates, which avoids the common
-Windows-capture monitor-index mismatch on two-monitor setups.  The optional
-Windows Capture backend remains available for users who explicitly select it.
-"""
+"""Capture boundary for MSS, Windows Graphics Capture, and OBS Virtual Camera."""
 
 import threading
 import time
 from typing import Optional, Tuple
 
 import numpy as np
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
 
 try:
     import mss
@@ -125,14 +125,86 @@ class WindowsCaptureCamera:
             pass
 
 
+class OBSVirtualCamera:
+    """Read OBS Virtual Camera frames through OpenCV/DirectShow."""
+
+    backend_name = "obs-camera"
+
+    def __init__(
+        self,
+        camera_index: int,
+        output_size: Tuple[int, int],
+        target_fps: int = 60,
+    ):
+        if cv2 is None:
+            raise RuntimeError("opencv-python is not installed")
+        self.camera_index = int(camera_index)
+        self.output_size = (max(1, int(output_size[0])), max(1, int(output_size[1])))
+        backend = cv2.CAP_DSHOW if hasattr(cv2, "CAP_DSHOW") else cv2.CAP_ANY
+        self._capture = cv2.VideoCapture(self.camera_index, backend)
+        if not self._capture.isOpened():
+            self._capture.release()
+            raise RuntimeError(
+                "OBS Virtual Camera could not be opened at index "
+                f"{self.camera_index}. Start Virtual Camera in OBS, or set "
+                "BROTATO_OBS_CAMERA_INDEX to the correct camera index."
+            )
+        width, height = self.output_size
+        self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self._capture.set(cv2.CAP_PROP_FPS, max(1, int(target_fps)))
+        self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._latest: Optional[np.ndarray] = None
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        if self._running:
+            return self
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, name="brotato-obs-camera", daemon=True)
+        self._thread.start()
+        return self
+
+    def _loop(self):
+        wanted_width, wanted_height = self.output_size
+        while self._running:
+            ok, frame_bgr = self._capture.read()
+            if not ok or frame_bgr is None or frame_bgr.size == 0:
+                time.sleep(0.01)
+                continue
+            if frame_bgr.shape[1] != wanted_width or frame_bgr.shape[0] != wanted_height:
+                frame_bgr = cv2.resize(
+                    frame_bgr,
+                    (wanted_width, wanted_height),
+                    interpolation=cv2.INTER_AREA,
+                )
+            frame_rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
+            with self._lock:
+                self._latest = frame_rgb
+
+    def get_latest_frame(self):
+        with self._lock:
+            return None if self._latest is None else self._latest.copy()
+
+    def stop(self):
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        self._capture.release()
+
+
 def create_camera(
     backend: str,
     region: Tuple[int, int, int, int],
     monitor_index: int = 0,
     monitor_origin: Tuple[int, int] = (0, 0),
     target_fps: int = 90,
+    obs_camera_index: int = 0,
 ):
-    """Create exactly one backend; ``auto`` prefers MSS for multi-monitor safety."""
+    """Create exactly one explicitly selected frame source."""
     requested = str(backend or "mss").strip().lower()
     if requested in {"mss", "auto"}:
         return MSSCamera(region, target_fps=target_fps).start()
@@ -143,4 +215,11 @@ def create_camera(
             monitor_index=monitor_index,
             region_in_monitor=(left - ox, top - oy, region[2] - ox, region[3] - oy),
         )
+    if requested in {"obs", "obs-camera", "obs-virtual-camera"}:
+        left, top, right, bottom = region
+        return OBSVirtualCamera(
+            camera_index=obs_camera_index,
+            output_size=(right - left, bottom - top),
+            target_fps=target_fps,
+        ).start()
     raise ValueError(f"unsupported capture backend: {backend}")

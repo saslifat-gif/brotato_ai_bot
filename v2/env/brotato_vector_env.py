@@ -43,6 +43,7 @@ class BrotatoVectorEnv(gym.Env):
             monitor_index=monitor_index,
             monitor_origin=monitor_origin,
             target_fps=60,
+            obs_camera_index=cfg.obs_camera_index,
         )
         self.input = InputDriver(self.hwnd, input_mode="physical_foreground", move_physical=True)
         self.combat_detector = YoloDetector(

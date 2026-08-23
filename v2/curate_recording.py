@@ -1,6 +1,7 @@
 """Interactively sort recorded frames into combat and UI labeling queues."""
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
@@ -66,7 +67,12 @@ def main() -> int:
     parser.add_argument("--session", default="latest", help="session directory or 'latest'")
     parser.add_argument("--raw-root", default="datasets/v2/raw")
     parser.add_argument("--output", default="datasets/v2/to_label")
-    parser.add_argument("--stride", type=int, default=10)
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=0,
+        help="frame step; 0 automatically samples approximately once per second",
+    )
     parser.add_argument(
         "--min-change",
         type=float,
@@ -84,7 +90,16 @@ def main() -> int:
     output = Path(args.output).resolve()
     combat_dir = output / "combat"
     ui_dir = output / "ui"
-    stride = max(1, int(args.stride))
+    recorded_fps = 10.0
+    metadata_path = session / "metadata.json"
+    if metadata_path.is_file():
+        try:
+            recorded_fps = float(
+                json.loads(metadata_path.read_text(encoding="utf-8")).get("fps", 10.0)
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+    stride = max(1, int(args.stride)) if args.stride > 0 else max(1, int(round(recorded_fps)))
     index = 0
     combat_count = 0
     ui_count = 0

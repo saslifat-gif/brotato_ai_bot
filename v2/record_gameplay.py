@@ -80,6 +80,7 @@ def main() -> int:
         monitor_index=monitor_index,
         monitor_origin=monitor_origin,
         target_fps=max(30, int(args.fps * 2)),
+        obs_camera_index=cfg.obs_camera_index,
     )
 
     root = Path(args.output).resolve() / datetime.now().strftime("session_%Y%m%d_%H%M%S")
@@ -116,6 +117,11 @@ def main() -> int:
             while not console_stop_requested():
                 tick = time.perf_counter()
                 frame = camera.get_latest_frame()
+                if frame_id == 0 and frame is None and time.time() - started >= 5.0:
+                    raise RuntimeError(
+                        "no OBS camera frames received for five seconds; confirm Start Virtual Camera "
+                        "and BROTATO_OBS_CAMERA_INDEX"
+                    )
                 if frame is not None and frame.size > 0:
                     if previous_frame is not None:
                         compared_frames += 1
