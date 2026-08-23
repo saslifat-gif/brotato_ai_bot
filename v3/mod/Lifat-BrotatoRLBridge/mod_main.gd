@@ -12,10 +12,8 @@ func _init() -> void:
 	var movement_extension := mod_dir_path.plus_file(
 		"extensions/entities/units/movement_behaviors/player_movement_behavior.gd"
 	)
-	var main_extension := mod_dir_path.plus_file("extensions/main.gd")
-	ModLoaderMod.install_script_extension(main_extension)
 	ModLoaderMod.install_script_extension(movement_extension)
-	ModLoaderLog.info("Installed game-state and movement extensions", MOD_LOG)
+	ModLoaderLog.info("Installed movement extension; vanilla death/drop logic preserved", MOD_LOG)
 
 
 func _ready() -> void:

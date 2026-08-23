@@ -178,6 +178,17 @@ func record_enemy_death() -> void:
 	_kills_this_wave += 1
 
 
+func _observe_enemy_death(enemy) -> void:
+	if enemy == null or not enemy.has_signal("died"):
+		return
+	if not enemy.is_connected("died", self, "_on_enemy_died_observed"):
+		enemy.connect("died", self, "_on_enemy_died_observed")
+
+
+func _on_enemy_died_observed(_enemy, _death_data) -> void:
+	record_enemy_death()
+
+
 func record_player_death() -> void:
 	_reset_kills_on_combat = true
 
@@ -225,6 +236,7 @@ func _build_state() -> Dictionary:
 				if enemies.size() >= MAX_ENEMIES:
 					break
 				if is_instance_valid(enemy):
+					_observe_enemy_death(enemy)
 					enemies.append(_entity_state(enemy))
 		_append_children(main.get_node_or_null("Projectiles"), projectiles, "projectile", MAX_PROJECTILES)
 		_append_children(main.get_node_or_null("Items"), pickups, "item", MAX_PICKUPS)

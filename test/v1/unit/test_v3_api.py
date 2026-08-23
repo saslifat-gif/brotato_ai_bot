@@ -84,10 +84,7 @@ def test_mod_manifest_and_extension_are_packaged():
     assert manifest["extra"]["godot"]["compatible_mod_loader_version"]
     assert (mod / "mod_main.gd").is_file()
     assert (mod / "bridge.gd").is_file()
-    assert (mod / "extensions" / "main.gd").is_file()
-    main_extension = (mod / "extensions" / "main.gd").read_text(encoding="utf-8")
-    assert "func _on_enemy_died(enemy, death_data)" in main_extension
-    assert "._on_enemy_died(enemy, death_data)" in main_extension
+    assert not (mod / "extensions" / "main.gd").exists()
     assert (
         mod
         / "extensions"
@@ -106,7 +103,10 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "var player = TempStats.player" in bridge
     assert "func observe_movement_behavior(behavior)" in bridge
     assert "_find_player_descendant(main)" in bridge
+    assert 'enemy.connect("died", self, "_on_enemy_died_observed")' in bridge
     assert 'if lower == "main":' in bridge
+    assert "main_extension" not in mod_main
+    assert "vanilla death/drop logic preserved" in mod_main
     assert "bridge_script.can_instance()" in mod_main
     assert "Bridge script failed to load" in mod_main
     assert 'call_deferred("_attach_bridge", root, _bridge)' in mod_main
