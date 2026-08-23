@@ -358,3 +358,39 @@ class CombatDecisionLogger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+
+class HumanCombatDecisionLogger:
+    """Append human movement demonstrations in the combat-BC schema."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.vectorizer = RichCombatVectorizer()
+
+    def record(
+        self,
+        state: Mapping[str, Any],
+        action: int,
+        *,
+        previous_action: int,
+        episode: int,
+    ) -> None:
+        normalized = int(MoveAction(int(action)))
+        features = self.vectorizer.build(state, previous_action)
+        record = {
+            "schema": 1,
+            "dataset": "human_combat_v1",
+            "timestamp": time.time(),
+            "session": str(state.get("session", "")),
+            "episode": int(episode),
+            "tick": int(_number(state.get("tick"), -1)),
+            "wave": int(_number(_mapping(state.get("wave")).get("number"))),
+            "features": [round(float(value), 6) for value in features],
+            "previous_action": int(MoveAction(int(previous_action))),
+            "action": normalized,
+            "human_input_age_ms": int(_number(state.get("human_input_age_ms"), -1)),
+            "source": "human_wasd",
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")

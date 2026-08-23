@@ -28,6 +28,29 @@ def load_records(path: Path) -> list[dict]:
     return records
 
 
+def split_records_by_episode(
+    records: list[dict], *, seed: int, validation_fraction: float = 0.1
+) -> tuple[list[dict], list[dict]]:
+    """Keep complete demonstrations on one side of the validation split."""
+
+    groups: dict[tuple[str, int], list[dict]] = {}
+    for index, record in enumerate(records):
+        session = str(record.get("session", ""))
+        episode = record.get("episode")
+        key = (session, int(episode)) if session and episode is not None else ("row", index)
+        groups.setdefault(key, []).append(record)
+    keys = list(groups)
+    random.Random(seed).shuffle(keys)
+    validation_groups = max(1, round(len(keys) * float(validation_fraction)))
+    validation_groups = min(validation_groups, max(1, len(keys) - 1))
+    validation_keys = set(keys[:validation_groups])
+    train = [record for key in keys if key not in validation_keys for record in groups[key]]
+    validation = [record for key in keys if key in validation_keys for record in groups[key]]
+    if not train:
+        train, validation = validation[:-1], validation[-1:]
+    return train, validation
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train the compact Brotato combat BC base")
     parser.add_argument("--dataset", type=Path, required=True)
@@ -43,9 +66,7 @@ def main() -> int:
             f"only {len(records)} valid combat decisions in {args.dataset}; "
             f"collect at least {max(100, int(args.min_records))} before training"
         )
-    random.Random(args.seed).shuffle(records)
-    split = max(1, int(len(records) * 0.9))
-    train, validation = records[:split], records[split:] or records[-1:]
+    train, validation = split_records_by_episode(records, seed=args.seed)
     x_train = torch.tensor(np.asarray([r["features"] for r in train]), dtype=torch.float32)
     y_train = torch.tensor([int(r["action"]) for r in train], dtype=torch.long)
     x_valid = torch.tensor(np.asarray([r["features"] for r in validation]), dtype=torch.float32)
@@ -79,6 +100,9 @@ def main() -> int:
         "state_dict": model.state_dict(),
         "parameters": model.parameter_count,
         "training_records": len(train),
+        "validation_records": len(validation),
+        "training_episodes": len({(r.get("session"), r.get("episode")) for r in train}),
+        "validation_episodes": len({(r.get("session"), r.get("episode")) for r in validation}),
         "validation_accuracy": accuracy,
     }, args.output)
     print(f"[combat-bc] saved={args.output} parameters={model.parameter_count}")

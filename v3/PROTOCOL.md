@@ -15,7 +15,10 @@ Game to trainer:
   metadata is emitted only during UI phases. Combat states contain a compact `combat` summary
   with character, weapon counts/range, movement speed, armor and attack speed. Enemy and
   projectile entries additionally advertise IDs, collision radius, attack type and available
-  charge/boss metadata for geometric safety and future rich policies. `sequence` acknowledges the most recent
+  charge/boss metadata for geometric safety and future rich policies. Bridge 0.2.1 also emits
+  `human_action`, the nine-way action returned by Brotato's vanilla movement behavior, plus
+  `human_input_age_ms`. Observation-only recorders can capture keyboard demonstrations without
+  sending combat actions. `sequence` acknowledges the most recent
   action applied by the bridge, so queued old states are never used as a new
   training step.
 - `event`: non-state notification such as `manual_reset_required`.

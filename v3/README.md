@@ -36,7 +36,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.1.1.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.2.1.zip
 ```
 
 It also keeps an editable diagnostic copy under
@@ -82,6 +82,26 @@ verified shop, upgrade, next-wave and retry-wave screens are automated.
 Models and TensorBoard logs are written under `models/version_3`.
 Press `Ctrl+C` in the training console to save the interrupted model and
 disconnect the bridge; Brotato then unpauses and restores normal keyboard input.
+
+## Record human combat demonstrations
+
+Run `record_v3_human.bat` when the bridge is installed. Python sends no combat
+actions in this mode, so Brotato's normal WASD movement remains authoritative.
+The structured Stick/Melee teacher handles shops, upgrades, found items, next
+wave and restart controls while you play the waves.
+
+Human movement is sampled at 8 Hz, immediate direction changes are retained,
+and repeated idle input is limited to 2 Hz. Records are written to
+`models/version_3/human_combat_v1.jsonl` with a bridge session and episode ID.
+This is structured state/action data, not screen video. Train/validation splits
+keep complete episodes together to prevent adjacent-frame leakage.
+
+After collecting several complete runs and at least 10,000 records, train the
+compact behavior-cloning base:
+
+```powershell
+python -m v3.train_combat_bc --dataset models/version_3/human_combat_v1.jsonl --output models/version_3/human_combat_base.pt
+```
 
 ## API observation and actions
 

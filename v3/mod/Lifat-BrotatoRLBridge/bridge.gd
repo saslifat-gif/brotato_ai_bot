@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.2.0"
+const MOD_VERSION := "0.2.1"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -49,6 +49,8 @@ var _observed_player = null
 var _logged_player_probe := false
 var _entity_static_cache := {}
 var _projectile_static_cache := {}
+var _latest_human_action := 0
+var _last_human_input_ms := 0
 
 
 func _ready() -> void:
@@ -181,12 +183,14 @@ func get_movement() -> Vector2:
 			return Vector2.ZERO
 
 
-func observe_movement_behavior(behavior) -> void:
+func observe_movement_behavior(behavior, human_movement = Vector2.ZERO) -> void:
 	# This hook runs from the movement behavior owned by the live player. It is
 	# more reliable than version-specific Main/TempStats fields, especially in
 	# newer co-op-capable builds.
 	if behavior == null:
 		return
+	_latest_human_action = _movement_to_action(human_movement)
+	_last_human_input_ms = OS.get_ticks_msec()
 	var candidate = _property(behavior, "player", null)
 	if candidate == null:
 		candidate = behavior.get_parent()
@@ -360,6 +364,8 @@ func _build_state() -> Dictionary:
 		"projectiles": projectiles,
 		"pickups": pickups,
 		"combat": combat_state,
+		"human_action": _latest_human_action,
+		"human_input_age_ms": max(0, OS.get_ticks_msec() - _last_human_input_ms),
 		"build": build_state,
 		"ui": {"actions": ui_actions},
 		"dead": dead,
@@ -953,6 +959,38 @@ func _vector_json(value) -> Dictionary:
 	return {"x": float(value.x), "y": float(value.y)}
 
 
+func _movement_to_action(value) -> int:
+	if typeof(value) != TYPE_VECTOR2:
+		return 0
+	var horizontal := 0
+	var vertical := 0
+	if value.x < -0.25:
+		horizontal = -1
+	elif value.x > 0.25:
+		horizontal = 1
+	if value.y < -0.25:
+		vertical = -1
+	elif value.y > 0.25:
+		vertical = 1
+	if horizontal == 0 and vertical == -1:
+		return 1
+	if horizontal == 0 and vertical == 1:
+		return 2
+	if horizontal == -1 and vertical == 0:
+		return 3
+	if horizontal == 1 and vertical == 0:
+		return 4
+	if horizontal == -1 and vertical == -1:
+		return 5
+	if horizontal == 1 and vertical == -1:
+		return 6
+	if horizontal == -1 and vertical == 1:
+		return 7
+	if horizontal == 1 and vertical == 1:
+		return 8
+	return 0
+
+
 func _send_hello() -> void:
 	_send({
 		"type": "hello",
@@ -965,7 +1003,8 @@ func _send_hello() -> void:
 			"realtime_control",
 			"ui_actions",
 			"combat_build_summary",
-			"threat_geometry"
+			"threat_geometry",
+			"human_input_observation"
 		]
 	})
 

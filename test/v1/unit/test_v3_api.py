@@ -15,10 +15,12 @@ from v3.combat_policy import (
     CombatHeuristicTeacher,
     CombatPolicyBase,
     CombatSafetyShield,
+    HumanCombatDecisionLogger,
     RICH_OBSERVATION_SIZE,
     RichCombatVectorizer,
 )
 from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
+from v3.record_human import require_human_input_capability, should_record
 from v3.protocol import (
     BridgeProtocolError,
     action_message,
@@ -28,6 +30,7 @@ from v3.protocol import (
 )
 from v3.reward import ApiRewardEngine
 from v3.train_ui_build import load_records
+from v3.train_combat_bc import split_records_by_episode
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
 from v3.ui_automation import AutoUiController, available_actions
 from v3.ui_build_policy import (
@@ -123,6 +126,49 @@ def test_rich_combat_vectorizer_and_base_are_versioned_and_small():
     assert model(torch.from_numpy(observation[None, :])).shape == (1, 9)
 
 
+def test_human_combat_logger_writes_bc_record(tmp_path):
+    path = tmp_path / "human.jsonl"
+    state = dict(_state(wave=3), session="demo-session", human_input_age_ms=4)
+    HumanCombatDecisionLogger(path).record(
+        state, 8, previous_action=4, episode=2
+    )
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["dataset"] == "human_combat_v1"
+    assert record["source"] == "human_wasd"
+    assert record["session"] == "demo-session"
+    assert record["episode"] == 2
+    assert record["action"] == 8
+    assert len(record["features"]) == RICH_OBSERVATION_SIZE
+
+
+def test_human_recorder_samples_transitions_and_throttles_idle():
+    assert should_record(4, 3, 0.01, sample_hz=8, idle_hz=2)
+    assert not should_record(4, 4, 0.05, sample_hz=8, idle_hz=2)
+    assert should_record(4, 4, 0.13, sample_hz=8, idle_hz=2)
+    assert not should_record(0, 0, 0.3, sample_hz=8, idle_hz=2)
+    assert should_record(0, 0, 0.51, sample_hz=8, idle_hz=2)
+
+
+def test_human_recorder_rejects_old_bridge():
+    require_human_input_capability({"capabilities": ["structured_state", "human_input_observation"]})
+    with pytest.raises(RuntimeError, match="Bridge 0.2.1"):
+        require_human_input_capability({"capabilities": ["structured_state"]})
+
+
+def test_combat_bc_validation_split_keeps_episodes_together():
+    records = [
+        {"session": "s", "episode": episode, "row": row}
+        for episode in range(5)
+        for row in range(4)
+    ]
+    train, validation = split_records_by_episode(records, seed=7)
+    train_episodes = {(row["session"], row["episode"]) for row in train}
+    validation_episodes = {(row["session"], row["episode"]) for row in validation}
+    assert train_episodes
+    assert validation_episodes
+    assert train_episodes.isdisjoint(validation_episodes)
+
+
 def test_safety_shield_sidesteps_an_incoming_projectile():
     state = _state()
     state["projectiles"] = [{
@@ -186,7 +232,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     mod_main = (mod / "mod_main.gd").read_text(encoding="utf-8")
     assert "var dead: bool =" in bridge
     assert "var player = TempStats.player" in bridge
-    assert "func observe_movement_behavior(behavior)" in bridge
+    assert "func observe_movement_behavior(behavior, human_movement" in bridge
+    assert '"human_action": _latest_human_action' in bridge
+    assert '"human_input_observation"' in bridge
     assert "_find_player_descendant(main)" in bridge
     assert 'enemy.connect("died", self, "_on_enemy_died_observed")' in bridge
     assert "func _run_player_data(run_data, player)" in bridge
@@ -218,7 +266,8 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
         / "movement_behaviors"
         / "player_movement_behavior.gd"
     ).read_text(encoding="utf-8")
-    assert "bridge.observe_movement_behavior(self)" in movement_extension
+    assert "bridge.observe_movement_behavior(self, human_movement)" in movement_extension
+    assert "var human_movement = .get_movement()" in movement_extension
 
 
 def test_ui_automation_buys_then_rerolls_then_starts_wave():
@@ -690,7 +739,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.2.0.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.2.1.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())
