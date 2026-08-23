@@ -1,7 +1,6 @@
 import ctypes
 import os
 import random
-import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -22,19 +21,11 @@ from runtime.debug_windows import (
     DebugWindowManager,
 )
 from runtime.input_driver import InputDriver, RECT
+from runtime.capture import create_camera
+from runtime.state_machine import RuntimePhase, RuntimeStateMachine
 from runtime.stop_manager import StopManager
 from shop.ocr_winmedia import ShopOcrWorker, WinMediaOCR, score_upgrade_text, normalize_text
 from shop.shop_policy import ShopPolicy
-
-try:
-    import mss
-except Exception:
-    mss = None
-
-try:
-    import windows_capture as wc
-except Exception:
-    wc = None
 
 try:
     from ultralytics import YOLO
@@ -153,102 +144,6 @@ def hwnd_client_screen_rect(hwnd: int) -> Tuple[int, int, int, int]:
     return (int(tl.x), int(tl.y), int(br.x), int(br.y))
 
 
-class MSSCameraAdapter:
-    def __init__(self, region: Tuple[int, int, int, int], target_fps: int = 60):
-        if mss is None:
-            raise RuntimeError("mss not installed")
-        self.region = region
-        self.target_fps = max(1, int(target_fps))
-        self.interval = 1.0 / float(self.target_fps)
-        self._latest = None
-        self._lock = threading.Lock()
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-
-    def start(self):
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def _loop(self):
-        with mss.mss() as sct:
-            l, t, r, b = self.region
-            monitor = {
-                "left": int(l),
-                "top": int(t),
-                "width": int(max(1, r - l)),
-                "height": int(max(1, b - t)),
-            }
-            while self._running:
-                t0 = time.perf_counter()
-                raw = np.asarray(sct.grab(monitor))
-                frame = raw[:, :, [2, 1, 0]]
-                with self._lock:
-                    self._latest = frame
-                dt = time.perf_counter() - t0
-                sleep_t = self.interval - dt
-                if sleep_t > 0:
-                    time.sleep(sleep_t)
-
-    def get_latest_frame(self):
-        with self._lock:
-            return None if self._latest is None else self._latest.copy()
-
-    def stop(self):
-        self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-
-
-class WindowsCaptureAdapter:
-    def __init__(self, monitor_idx: int, region_in_monitor: Tuple[int, int, int, int]):
-        if wc is None:
-            raise RuntimeError("windows-capture not installed")
-        self._lock = threading.Lock()
-        self._latest = None
-        self._finished = False
-        self._control = None
-        self._region = region_in_monitor
-
-        self._cap = wc.WindowsCapture(monitor_index=int(monitor_idx) + 1)
-
-        @self._cap.event
-        def on_frame_arrived(frame, control):
-            if self._control is None:
-                self._control = control
-            fb = frame.convert_to_bgr().frame_buffer
-            l, t, r, b = self._region
-            h, w = fb.shape[:2]
-            x1 = int(np.clip(l, 0, max(0, w - 1)))
-            y1 = int(np.clip(t, 0, max(0, h - 1)))
-            x2 = int(np.clip(r, x1 + 1, max(x1 + 1, w)))
-            y2 = int(np.clip(b, y1 + 1, max(y1 + 1, h)))
-            out = fb[y1:y2, x1:x2]
-            rgb = np.ascontiguousarray(out[:, :, ::-1])
-            with self._lock:
-                self._latest = rgb
-
-        @self._cap.event
-        def on_closed():
-            self._finished = True
-
-        self._control = self._cap.start_free_threaded()
-
-    def get_latest_frame(self):
-        with self._lock:
-            return None if self._latest is None else self._latest.copy()
-
-    def stop(self):
-        try:
-            if self._control is not None and not self._control.is_finished():
-                self._control.stop()
-        except Exception:
-            pass
-
-
 class YOLOStateInfer:
     def __init__(self, model, image_size: int = 256, device: str = "0"):
         self.model = model
@@ -331,22 +226,17 @@ class BrotatoEnv(gym.Env):
         cy = (t + b) // 2
         mon_idx, mon_origin = monitor_for_point(cx, cy)
 
-        self.capture_backend = cfg.capture_backend
-        self.camera = None
-        if self.capture_backend in ("windows-capture", "auto") and wc is not None:
-            try:
-                ml, mt = mon_origin
-                region_in_monitor = (l - ml, t - mt, r - ml, b - mt)
-                self.camera = WindowsCaptureAdapter(monitor_idx=mon_idx, region_in_monitor=region_in_monitor)
-                self.capture_backend = "windows-capture"
-            except Exception as e:
-                print(f"[capture] windows-capture unavailable, fallback mss: {e}")
-                self.camera = None
-
-        if self.camera is None:
-            self.camera = MSSCameraAdapter(region=self.game_region, target_fps=90)
-            self.camera.start()
-            self.capture_backend = "mss"
+        # Capture is a single, explicit service.  ``auto`` intentionally uses
+        # MSS because it addresses the virtual desktop directly and does not
+        # depend on Windows' monitor enumeration order.
+        self.camera = create_camera(
+            backend=cfg.capture_backend,
+            region=self.game_region,
+            monitor_index=mon_idx,
+            monitor_origin=mon_origin,
+            target_fps=90,
+        )
+        self.capture_backend = str(getattr(self.camera, "backend_name", cfg.capture_backend))
 
         self.input = InputDriver(
             hwnd=self.hwnd,
@@ -473,6 +363,11 @@ class BrotatoEnv(gym.Env):
 
         self.state_name = "unknown"
         self.state_score = 0.0
+        self.runtime_phase = RuntimePhase.UNKNOWN
+        self.phase_machine = RuntimeStateMachine(
+            non_battle_threshold=float(cfg.state_non_battle_min_score),
+            hysteresis_sec=float(cfg.state_non_battle_hold_sec),
+        )
         self.raw_state = "unknown"
         self.raw_state_score = 0.0
         self.last_tpl_scores = {"go": 0.0, "choose": 0.0, "restart": 0.0}
@@ -861,7 +756,7 @@ class BrotatoEnv(gym.Env):
                     # Arm immediately after menu operations.
                     self.non_battle_hold_until_ts = 0.0
                     if bool(getattr(self.cfg, "input_move_physical", False)):
-                        self._focus_game_window_soft()
+                        self.input.focus_game()
                 print(f"[control] {'armed' if self.control_armed else 'paused'} (F7)")
 
         if self._poll_hotkey_pressed(0x75, "_debug_hotkey_down"):
@@ -876,14 +771,6 @@ class BrotatoEnv(gym.Env):
                 self._quit_hotkey_last_ts = now
                 if self.stop_manager.request_stop("F8"):
                     print("[control] stop requested (F8)")
-
-    def _focus_game_window_soft(self):
-        try:
-            ctypes.windll.user32.ShowWindow(self.hwnd, 5)
-            ctypes.windll.user32.SetForegroundWindow(self.hwnd)
-            ctypes.windll.user32.SetActiveWindow(self.hwnd)
-        except Exception:
-            pass
 
     @staticmethod
     def _in_rect(x: int, y: int, rect: Tuple[int, int, int, int]) -> bool:
@@ -905,7 +792,7 @@ class BrotatoEnv(gym.Env):
             else:
                 self.non_battle_hold_until_ts = 0.0
                 if bool(getattr(self.cfg, "input_move_physical", False)):
-                    self._focus_game_window_soft()
+                    self.input.focus_game()
             print(f"[control] {'armed' if self.control_armed else 'paused'} (panel)")
             return
 
@@ -920,6 +807,8 @@ class BrotatoEnv(gym.Env):
                 print("[control] stop requested (panel)")
 
     def _render_control_panel(self):
+        if not bool(getattr(self.cfg, "control_panel_enabled", False)):
+            return
         now = time.perf_counter()
         if now - self._control_panel_last_ts < self._control_panel_interval:
             return
@@ -1242,7 +1131,7 @@ class BrotatoEnv(gym.Env):
         s = self._normalize_state_name(state_name)
         if not self._menu_action_ready():
             return False, "cooldown"
-        self._focus_game_window_soft()
+        self.input.focus_game()
 
         if s in ("shop", "go"):
             click_res = self.input.click_client_rect(self.cfg.shop_go_rect)
@@ -1804,6 +1693,12 @@ class BrotatoEnv(gym.Env):
             choose_tpl=choose_tpl,
             restart_tpl=restart_tpl,
         )
+        phase_obs = self.phase_machine.observe(
+            detector_state=self.state_name,
+            detector_score=float(self.state_score),
+            template_scores={"go": go_tpl, "choose": choose_tpl, "restart": restart_tpl},
+        )
+        self.runtime_phase = phase_obs.phase
         tpl_non_battle = max(go_tpl, choose_tpl, restart_tpl)
         if tpl_non_battle >= 0.62:
             self.non_battle_hold_until_ts = max(
@@ -1865,17 +1760,19 @@ class BrotatoEnv(gym.Env):
         )
 
         if time.time() < self.align_until_ts:
+            self.runtime_phase = RuntimePhase.ALIGN
             self.input.release_movement()
             obs = self._get_obs(frame)
             self._render_debug(frame, obs)
-            return obs, 0.0, False, False, {"phase": "align", "state": self.state_name, "state_score": self.state_score}
+            return obs, 0.0, False, False, {"phase": RuntimePhase.ALIGN.value, "state": self.state_name, "state_score": self.state_score}
 
         if not self.control_armed:
+            self.runtime_phase = RuntimePhase.PAUSED
             self.input.release_movement()
             obs = self._get_obs(frame)
             self._render_debug(frame, obs)
             return obs, 0.0, False, False, {
-                "phase": "paused",
+                "phase": RuntimePhase.PAUSED.value,
                 "state": self.state_name,
                 "state_score": self.state_score,
                 "armed": bool(self.control_armed),
@@ -1883,7 +1780,7 @@ class BrotatoEnv(gym.Env):
 
         if self.cfg.shop_policy_enable and (in_shop or go_tpl >= 0.40 or self.state_name == "shop"):
             self.input.release_movement()
-            self._focus_game_window_soft()
+            self.input.focus_game()
             dec = self.shop_policy.evaluate(
                 frame_rgb=frame,
                 in_shop=bool(in_shop),
@@ -1891,6 +1788,7 @@ class BrotatoEnv(gym.Env):
                 allow_action=(not shop_lock_active),
             )
             if in_shop:
+                self.runtime_phase = RuntimePhase.SHOP
                 obs = self._get_obs(frame)
                 self.last_info = {
                     "phase": ("shop_lock" if shop_lock_active else "shop_policy"),
@@ -1908,6 +1806,14 @@ class BrotatoEnv(gym.Env):
                 return obs, 0.0, False, False, dict(self.last_info)
 
         if bool(script_menu_state) or is_non_battle or in_non_battle_hold:
+            if script_menu_state == "upgrade":
+                self.runtime_phase = RuntimePhase.UPGRADE
+            elif gameover_signal:
+                self.runtime_phase = RuntimePhase.GAMEOVER
+            elif script_menu_state == "item_pick":
+                self.runtime_phase = RuntimePhase.ITEM_PICK
+            elif not in_shop:
+                self.runtime_phase = RuntimePhase.UNKNOWN
             self.input.release_movement()
             acted = False
             action_msg = "skip"
@@ -1991,6 +1897,7 @@ class BrotatoEnv(gym.Env):
 
         # Hard gate: PPO movement/action is allowed only in confirmed battle state.
         if not effective_battle:
+            self.runtime_phase = RuntimePhase.UNKNOWN
             self.input.release_movement()
             obs = self._get_obs(frame)
             self.last_info = {
@@ -2008,6 +1915,7 @@ class BrotatoEnv(gym.Env):
             return obs, 0.0, False, False, dict(self.last_info)
 
         # battle loop
+        self.runtime_phase = RuntimePhase.BATTLE
         total_reward = 0.0
         done = False
         next_frame = frame
@@ -2122,7 +2030,7 @@ class BrotatoEnv(gym.Env):
         self.total_reward += float(total_reward)
         self.step_counter += 1
         self.last_info = {
-            "phase": ("non_battle" if is_non_battle else "battle"),
+            "phase": RuntimePhase.BATTLE.value,
             "state": self.state_name,
             "state_score": self.state_score,
             "reward_components_last": dict(self.reward_engine.reward_components_last),
@@ -2161,6 +2069,8 @@ class BrotatoEnv(gym.Env):
         self._render_control_panel()
 
         self.input.release_movement()
+        self.phase_machine.reset()
+        self.runtime_phase = RuntimePhase.UNKNOWN
         self.shop_policy.reset_episode()   # clears bought_weapons + cycle counters
         self.reward_engine.reset_episode()
 

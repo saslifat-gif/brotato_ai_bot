@@ -26,6 +26,12 @@ class FakeInput:
         return type("R", (), {"ok": True, "method": "post_message", "error": ""})()
 
 
+class FailingInput(FakeInput):
+    def click_client_point(self, pos):
+        self.clicked_points.append(tuple(pos))
+        return type("R", (), {"ok": False, "method": "physical_foreground", "error": "focus_rejected"})()
+
+
 class FakeOcrWorker:
     def __init__(self):
         self.last_submit = None
@@ -209,6 +215,30 @@ class ShopPolicyTests(unittest.TestCase):
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
         dec = policy.evaluate(frame_rgb=frame, in_shop=True, state_score=1.0)
         self.assertIn(dec.action, ("buy_click", "wait_confirm", "buy_confirmed"))
+
+    def test_failed_buy_input_does_not_enter_pending_confirmation(self):
+        policy = ShopPolicy(
+            input_driver=FailingInput(),
+            ocr_worker=FakeOcrWorker(),
+            shop_points=[(100, 100), (200, 100), (300, 100), (400, 100)],
+            refresh_rect=(10, 10, 20, 20),
+            go_rect=(30, 30, 40, 40),
+            card_w=100,
+            card_h=120,
+            card_down=30,
+            buy_min_score=0.4,
+            refresh_max=2,
+            max_buys=4,
+            action_cooldown_sec=0.0,
+            confirm_frames=2,
+            confirm_hamming=1,
+            buy_retry_max=0,
+            ocr_max_age_sec=1.0,
+        )
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        dec = policy.evaluate(frame_rgb=frame, in_shop=True, state_score=1.0)
+        self.assertEqual(dec.action, "input_failed")
+        self.assertIsNone(policy.pending_buy)
 
     def test_attack_stat_item_is_whitelisted_for_buy(self):
         policy = ShopPolicy(

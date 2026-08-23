@@ -11,8 +11,12 @@ set BROTATO_EXE_NAME=Brotato.exe
 set BROTATO_WINDOW_W=1920
 set BROTATO_WINDOW_H=1080
 set BROTATO_FORCE_WINDOW_RESIZE=false
+set BROTATO_CAPTURE_BACKEND=mss
+set BROTATO_INPUT_MODE=physical_foreground
+set BROTATO_INPUT_MOVE_PHYSICAL=true
+set BROTATO_CONTROL_PANEL=false
 
-set BROTATO_DEBUG_WINDOWS=true
+set BROTATO_DEBUG_WINDOWS=false
 set BROTATO_DEBUG_WINDOWS_SET=core4
 set BROTATO_DEBUG_RENDER_FPS=12
 
@@ -49,6 +53,14 @@ call conda activate bota_ai 2>nul || echo [warn] conda activate skipped
 python -c "import inference_sdk" 2>nul || (
     echo [setup] Installing inference-sdk...
     pip install inference-sdk
+)
+
+echo [preflight] checking game window and capture backend...
+python v1\diagnose_runtime.py
+if errorlevel 1 (
+    echo [preflight] failed; training was not started.
+    pause
+    exit /b 1
 )
 
 python v1/train.py

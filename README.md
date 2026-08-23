@@ -44,6 +44,14 @@ Or use the batch script:
 train_mask.bat
 ```
 
+Before training on a multi-monitor machine, run the preflight check:
+```bat
+diagnose_runtime.bat
+```
+It verifies the Brotato window, its absolute desktop region, capture frames,
+and the selected input backend. Add `--focus --move-test` to the Python
+command only when you want to test a real foreground W-key hold.
+
 ## Testing
 
 Default unit test directory is `test/v1/unit`:
@@ -59,6 +67,9 @@ pytest
 | `BROTATO_OUTPUT_DIR` | Optional | Output directory for models and checkpoints |
 | `BROTATO_WINDOW_TITLE` | Optional | Game window title |
 | `BROTATO_EXE_NAME` | Optional | Game executable name (e.g. `Brotato.exe`) |
+| `BROTATO_CAPTURE_BACKEND` | Optional | `mss` (default, virtual-desktop safe) or explicit `windows-capture` |
+| `BROTATO_INPUT_MODE` | Optional | `physical_foreground` (default) or `background` Win32 messages |
+| `BROTATO_CONTROL_PANEL` | Optional | Show the OpenCV control panel; default `false` so it cannot steal game focus |
 | `BROTATO_ACTION_DIAGONAL` | Optional | `true` enables 8-direction movement (`Discrete(9)`: cardinals + diagonals) for circular kiting. Default `false` (5 actions). Changing this invalidates existing checkpoints. |
 
 Full configuration options: `v1/config/runtime_config.py`
@@ -94,11 +105,12 @@ tensorboard --logdir models/version_1/ppo_brotato_logs
 │  ├─config/          # Runtime configuration
 │  ├─env/             # Game environment and detection adapters
 │  ├─reward/          # Reward calculation
-│  ├─runtime/         # Input, stop control, debug window
+│  ├─runtime/         # Input, capture, phase state, stop control, debug window
 │  └─shop/            # Shop strategy and OCR
 ├─test/               # Tests
 ├─raw_models/         # Raw models, assets, experimental scripts
 ├─train_mask.bat      # Windows launch script
+├─diagnose_runtime.bat # Window/capture/input preflight
 └─requirements.txt    # Dependencies
 ```
 

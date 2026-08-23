@@ -1,3 +1,11 @@
+"""Single, deterministic input boundary for the game runtime.
+
+The driver has two explicit contracts: ``background`` Win32 messages or
+``physical_foreground`` input.  An action never silently switches between
+them, so a successful return value means the selected backend actually sent
+the event.
+"""
+
 import ctypes
 import random
 import time
@@ -13,22 +21,21 @@ except Exception:
 
         @staticmethod
         def press(_key):
-            return None
+            raise RuntimeError("pydirectinput is unavailable")
 
         @staticmethod
         def keyDown(_key):
-            return None
+            raise RuntimeError("pydirectinput is unavailable")
 
         @staticmethod
         def keyUp(_key):
-            return None
+            raise RuntimeError("pydirectinput is unavailable")
 
         @staticmethod
         def click(_x=None, _y=None):
-            return None
+            raise RuntimeError("pydirectinput is unavailable")
 
     pydirectinput = _NoDirectInput()  # type: ignore[assignment]
-    print("[input] pydirectinput unavailable; using no-op fallback")
 
 
 @dataclass
@@ -51,202 +58,208 @@ class RECT(ctypes.Structure):
     ]
 
 
-VK_MAP = {
-    "w": 0x57,
-    "a": 0x41,
-    "s": 0x53,
-    "d": 0x44,
-    "enter": 0x0D,
-}
+VK_MAP = {"w": 0x57, "a": 0x41, "s": 0x53, "d": 0x44, "enter": 0x0D}
+
+
+def normalize_input_mode(value: str) -> str:
+    """Map legacy values to the two supported input contracts."""
+    mode = str(value or "physical_foreground").strip().lower().replace("-", "_")
+    if mode in {"safe_background", "background", "post_message"}:
+        return "background"
+    if mode in {"aggressive_click", "physical", "physical_click", "physical_foreground"}:
+        return "physical_foreground"
+    return "physical_foreground"
 
 
 class InputDriver:
     def __init__(
         self,
         hwnd: int,
-        input_mode: str = "safe_background",
+        input_mode: str = "physical_foreground",
         allow_physical_fallback: bool = False,
         move_physical: bool = True,
+        focus_timeout_sec: float = 0.20,
     ):
-        self.hwnd = hwnd
-        self.input_mode = str(input_mode or "safe_background").strip().lower()
+        self.hwnd = int(hwnd)
+        self.input_mode = normalize_input_mode(input_mode)
         self.allow_physical_fallback = bool(allow_physical_fallback)
         self.move_physical = bool(move_physical)
-        self.current_move_keys: set = set()
-
-        pydirectinput.FAILSAFE = False
+        self.focus_timeout_sec = max(0.02, float(focus_timeout_sec))
+        self.current_move_keys: set[str] = set()
+        self.last_error = ""
         try:
+            pydirectinput.FAILSAFE = False
             pydirectinput.PAUSE = 0.0
         except Exception:
             pass
 
     def _is_game_foreground(self) -> bool:
         try:
-            fg = int(ctypes.windll.user32.GetForegroundWindow())
-            return fg == int(self.hwnd)
+            return int(ctypes.windll.user32.GetForegroundWindow()) == self.hwnd
         except Exception:
             return False
 
-    def _focus_if_needed(self):
-        if self.input_mode != "aggressive_click":
-            return
+    def focus_game(self) -> bool:
+        """Bring the game forward and verify Windows accepted the request."""
         try:
-            ctypes.windll.user32.ShowWindow(self.hwnd, 5)
-            ctypes.windll.user32.SetForegroundWindow(self.hwnd)
-            ctypes.windll.user32.SetActiveWindow(self.hwnd)
-        except Exception:
-            pass
+            user32 = ctypes.windll.user32
+            user32.ShowWindow(self.hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(self.hwnd)
+            user32.SetActiveWindow(self.hwnd)
+        except Exception as exc:
+            self.last_error = f"focus_exception:{exc}"
+            return False
+        deadline = time.perf_counter() + self.focus_timeout_sec
+        while time.perf_counter() < deadline:
+            if self._is_game_foreground():
+                return True
+            time.sleep(0.005)
+        self.last_error = "focus_rejected"
+        return False
 
     @staticmethod
     def _vk_of(key: str) -> Optional[int]:
-        k = str(key or "").strip().lower()
-        return VK_MAP.get(k)
+        return VK_MAP.get(str(key or "").strip().lower())
 
-    def _post_key_down(self, key: str) -> bool:
+    def _post_key(self, key: str, down: bool) -> bool:
         vk = self._vk_of(key)
         if vk is None:
+            self.last_error = f"unsupported_key:{key}"
             return False
         try:
-            ctypes.windll.user32.PostMessageW(self.hwnd, 0x0100, vk, 0)
-            return True
-        except Exception:
-            return False
-
-    def _post_key_up(self, key: str) -> bool:
-        vk = self._vk_of(key)
-        if vk is None:
-            return False
-        try:
-            ctypes.windll.user32.PostMessageW(self.hwnd, 0x0101, vk, 0)
-            return True
-        except Exception:
+            msg = 0x0100 if down else 0x0101
+            return bool(ctypes.windll.user32.PostMessageW(self.hwnd, msg, vk, 0))
+        except Exception as exc:
+            self.last_error = f"post_key_exception:{exc}"
             return False
 
     def _is_client_pos_valid(self, pos: Tuple[int, int]) -> bool:
-        x, y = int(pos[0]), int(pos[1])
-        crect = RECT()
-        if not ctypes.windll.user32.GetClientRect(self.hwnd, ctypes.byref(crect)):
+        try:
+            crect = RECT()
+            if not ctypes.windll.user32.GetClientRect(self.hwnd, ctypes.byref(crect)):
+                return False
+            x, y = int(pos[0]), int(pos[1])
+            return int(crect.right) > 0 and int(crect.bottom) > 0 and 0 <= x < int(crect.right) and 0 <= y < int(crect.bottom)
+        except Exception:
             return False
-        cw, ch = int(crect.right), int(crect.bottom)
-        return cw > 0 and ch > 0 and (0 <= x < cw) and (0 <= y < ch)
 
     def _client_to_screen(self, pos: Tuple[int, int]) -> Tuple[int, int]:
-        pt = POINT()
-        pt.x = int(pos[0])
-        pt.y = int(pos[1])
-        ctypes.windll.user32.ClientToScreen(self.hwnd, ctypes.byref(pt))
+        pt = POINT(int(pos[0]), int(pos[1]))
+        if not ctypes.windll.user32.ClientToScreen(self.hwnd, ctypes.byref(pt)):
+            raise RuntimeError("ClientToScreen failed")
         return int(pt.x), int(pt.y)
 
-    def click_client_point(self, pos: Tuple[int, int]) -> ClickResult:
-        self._focus_if_needed()
-        x, y = int(pos[0]), int(pos[1])
+    @staticmethod
+    def _cursor_pos() -> Optional[Tuple[int, int]]:
         try:
-            if self._is_client_pos_valid((x, y)):
-                lparam = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
-                ctypes.windll.user32.PostMessageW(self.hwnd, 0x0201, 0x0001, lparam)
-                time.sleep(0.025)
-                ctypes.windll.user32.PostMessageW(self.hwnd, 0x0202, 0x0000, lparam)
-                return ClickResult(ok=True, method="post_message")
-        except Exception as e:
-            post_error = str(e)
-        else:
-            post_error = "post_message_failed"
+            pt = POINT()
+            if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+                return int(pt.x), int(pt.y)
+        except Exception:
+            pass
+        return None
 
-        if not self.allow_physical_fallback:
-            return ClickResult(ok=False, method="post_message", error=post_error)
-
-        try:
-            sx, sy = self._client_to_screen((x, y))
-            pydirectinput.click(sx, sy)
-            return ClickResult(ok=True, method="physical")
-        except Exception as e:
-            return ClickResult(ok=False, method="physical", error=str(e))
-
-    def click_client_rect(self, rect: Tuple[int, int, int, int]) -> ClickResult:
-        x1, y1, x2, y2 = rect
-        lx, rx = sorted((int(x1), int(x2)))
-        ty, by = sorted((int(y1), int(y2)))
-        if lx == rx and ty == by:
-            return self.click_client_point((lx, ty))
-        px = int(random.randrange(lx, rx))
-        py = int(random.randrange(ty, by))
-        return self.click_client_point((px, py))
-
-    def press_key(self, key: str):
-        self._focus_if_needed()
-        k = str(key).strip().lower()
-        sent = self._post_key_down(k)
-        time.sleep(0.005)
-        sent = self._post_key_up(k) and sent
-        if sent:
-            return
-        if not self.allow_physical_fallback:
+    @staticmethod
+    def _restore_cursor(pos: Optional[Tuple[int, int]]) -> None:
+        if pos is None:
             return
         try:
-            pydirectinput.press(k)
+            ctypes.windll.user32.SetCursorPos(int(pos[0]), int(pos[1]))
         except Exception:
             pass
 
-    def _hold_key_down(self, key: str) -> bool:
-        """Press and hold a single movement key. Returns True if it is now held."""
-        if self.move_physical:
-            if not self._is_game_foreground():
-                return False
-            try:
-                pydirectinput.keyDown(key)
-                return True
-            except Exception:
-                return False
-        if self._post_key_down(key):
+    def _background_click(self, x: int, y: int) -> ClickResult:
+        if not self._is_client_pos_valid((x, y)):
+            return ClickResult(False, "background", "invalid_client_point")
+        try:
+            lparam = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+            user32 = ctypes.windll.user32
+            down = bool(user32.PostMessageW(self.hwnd, 0x0201, 0x0001, lparam))
+            time.sleep(0.025)
+            up = bool(user32.PostMessageW(self.hwnd, 0x0202, 0x0000, lparam))
+            if down and up:
+                return ClickResult(True, "background")
+            return ClickResult(False, "background", "post_message_rejected")
+        except Exception as exc:
+            return ClickResult(False, "background", f"post_message_exception:{exc}")
+
+    def _physical_click(self, x: int, y: int) -> ClickResult:
+        if not self.focus_game():
+            return ClickResult(False, "physical_foreground", self.last_error or "focus_rejected")
+        cursor = self._cursor_pos()
+        try:
+            sx, sy = self._client_to_screen((x, y))
+            pydirectinput.click(sx, sy)
+            return ClickResult(True, "physical_foreground")
+        except Exception as exc:
+            return ClickResult(False, "physical_foreground", str(exc))
+        finally:
+            self._restore_cursor(cursor)
+
+    def click_client_point(self, pos: Tuple[int, int]) -> ClickResult:
+        x, y = int(pos[0]), int(pos[1])
+        if not self._is_client_pos_valid((x, y)):
+            return ClickResult(False, self.input_mode, "invalid_client_point")
+        if self.input_mode == "background":
+            return self._background_click(x, y)
+        return self._physical_click(x, y)
+
+    def click_client_rect(self, rect: Tuple[int, int, int, int]) -> ClickResult:
+        x1, y1, x2, y2 = [int(v) for v in rect]
+        lx, rx = sorted((x1, x2))
+        ty, by = sorted((y1, y2))
+        px = lx if rx <= lx else random.randint(lx, rx - 1)
+        py = ty if by <= ty else random.randint(ty, by - 1)
+        return self.click_client_point((px, py))
+
+    def press_key(self, key: str) -> bool:
+        k = str(key or "").strip().lower()
+        if self.input_mode == "background":
+            return self._post_key(k, True) and self._post_key(k, False)
+        if not self.focus_game():
+            return False
+        try:
+            pydirectinput.press(k)
             return True
-        if self.allow_physical_fallback:
-            try:
-                pydirectinput.keyDown(key)
-                return True
-            except Exception:
-                return False
-        return False
+        except Exception as exc:
+            self.last_error = f"physical_key_exception:{exc}"
+            return False
 
-    def _hold_key_up(self, key: str):
-        """Release a single held movement key."""
-        if self.move_physical:
-            try:
-                pydirectinput.keyUp(key)
-            except Exception:
-                pass
-            return
-        if not self._post_key_up(key):
-            if self.allow_physical_fallback:
-                try:
-                    pydirectinput.keyUp(key)
-                except Exception:
-                    pass
+    def _hold_key_down(self, key: str) -> bool:
+        if self.input_mode == "background":
+            return self._post_key(key, True)
+        if not self.focus_game():
+            return False
+        try:
+            pydirectinput.keyDown(key)
+            return True
+        except Exception as exc:
+            self.last_error = f"physical_keydown_exception:{exc}"
+            return False
 
-    def set_move_keys(self, move_keys):
-        """Hold exactly the given set of movement keys (subset of w/a/s/d).
+    def _hold_key_up(self, key: str) -> bool:
+        if self.input_mode == "background":
+            return self._post_key(key, False)
+        try:
+            pydirectinput.keyUp(key)
+            return True
+        except Exception as exc:
+            self.last_error = f"physical_keyup_exception:{exc}"
+            return False
 
-        Diff-based: releases keys no longer wanted and presses newly requested
-        ones, so holding a diagonal (e.g. {"w", "a"}) is supported. Passing None
-        or an empty iterable releases all movement keys.
-        """
-        if move_keys is None:
-            desired = set()
-        else:
-            desired = {str(k).strip().lower() for k in move_keys}
-            desired = {k for k in desired if k in ("w", "a", "s", "d")}
-        if desired == self.current_move_keys:
-            return
-        # Release keys that are no longer desired.
-        for key in list(self.current_move_keys - desired):
+    def set_move_keys(self, move_keys) -> None:
+        desired = set() if move_keys is None else {
+            str(k).strip().lower() for k in move_keys if str(k).strip().lower() in {"w", "a", "s", "d"}
+        }
+        for key in sorted(self.current_move_keys - desired):
             self._hold_key_up(key)
             self.current_move_keys.discard(key)
-        # Press newly desired keys.
         for key in sorted(desired - self.current_move_keys):
             if self._hold_key_down(key):
                 self.current_move_keys.add(key)
 
-    def set_move_key(self, move_key: Optional[str]):
+    def set_move_key(self, move_key: Optional[str]) -> None:
         self.set_move_keys(None if move_key is None else [move_key])
 
-    def release_movement(self):
+    def release_movement(self) -> None:
         self.set_move_keys(None)

@@ -167,6 +167,7 @@ class RuntimeConfig:
     debug_windows_enabled: bool
     debug_windows_set: str
     debug_render_fps: int
+    control_panel_enabled: bool
 
     require_arm_hotkey: bool
     enable_quit_hotkey: bool
@@ -326,18 +327,23 @@ def load_runtime_config() -> RuntimeConfig:
     window_h = int(_get_env("BROTATO_WINDOW_H", 1080, int))
     raw_models_dir = str(_get_env("BROTATO_RAW_MODELS_DIR", "raw_models", str)).strip()
 
-    capture_backend = str(_get_env("BROTATO_CAPTURE_BACKEND", "windows-capture", str)).strip().lower()
+    # MSS uses absolute virtual-desktop coordinates and is stable when the
+    # game is on a secondary monitor.  Windows Capture remains opt-in.
+    capture_backend = str(_get_env("BROTATO_CAPTURE_BACKEND", "mss", str)).strip().lower()
     output_idx = int(_get_env("BROTATO_OUTPUT_IDX", -1, int))
     align_wait_sec = float(_get_env("BROTATO_ALIGN_WAIT", 3.0, float, ["BROTATO_ALIGN_WAIT"]))
 
     stop_mode = str(_get_env("BROTATO_STOP_MODE", "safe", str)).strip().lower()
-    input_mode = str(_get_env("BROTATO_INPUT_MODE", "safe_background", str)).strip().lower()
+    # Real foreground input is the only reliable path for Godot/DirectX
+    # movement and menu clicks.  The legacy background path is opt-in.
+    input_mode = str(_get_env("BROTATO_INPUT_MODE", "physical_foreground", str)).strip().lower()
     input_physical_fallback = bool(_get_env("BROTATO_INPUT_PHYSICAL_FALLBACK", False, _to_bool))
     input_move_physical = bool(_get_env("BROTATO_INPUT_MOVE_PHYSICAL", True, _to_bool))
 
     debug_windows_enabled = bool(_get_env("BROTATO_DEBUG_WINDOWS", True, _to_bool))
     debug_windows_set = str(_get_env("BROTATO_DEBUG_WINDOWS_SET", "core4", str)).strip().lower()
     debug_render_fps = max(1, int(_get_env("BROTATO_DEBUG_RENDER_FPS", 12, int, ["BROTATO_DEBUG_RENDER_FPS"])))
+    control_panel_enabled = bool(_get_env("BROTATO_CONTROL_PANEL", False, _to_bool))
 
     require_arm_hotkey = bool(_get_env("BROTATO_REQUIRE_ARM", True, _to_bool))
     enable_quit_hotkey = bool(_get_env("BROTATO_ENABLE_QUIT_HOTKEY", True, _to_bool))
@@ -504,6 +510,7 @@ def load_runtime_config() -> RuntimeConfig:
         debug_windows_enabled=debug_windows_enabled,
         debug_windows_set=debug_windows_set,
         debug_render_fps=debug_render_fps,
+        control_panel_enabled=control_panel_enabled,
         require_arm_hotkey=require_arm_hotkey,
         enable_quit_hotkey=enable_quit_hotkey,
         hotkey_debounce_sec=hotkey_debounce_sec,

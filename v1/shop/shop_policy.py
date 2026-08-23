@@ -347,6 +347,19 @@ class ShopPolicy:
             buy_pt = self._safe_buy_point(slot - 1)
             click_res = self.input_driver.click_client_point(buy_pt)
             self.last_action_ts = time.time()
+            if not bool(click_res.ok):
+                self.total_buy_fail += 1
+                self.buy_fail_streak += 1
+                self.blocked_slots_until[int(slot)] = int(self.frame_idx + max(8, self.confirm_frames * 2))
+                self.pending_buy = None
+                self.last_action = "buy_input_failed"
+                return ShopDecision(
+                    action="input_failed",
+                    slot=slot,
+                    reason=f"buy_retry_input:{click_res.error or click_res.method}",
+                    best_score=self.last_best_score,
+                    debug={"click_error": click_res.error},
+                )
             self.pending_buy = {
                 "slot": slot,
                 "before": now_hash,
@@ -620,6 +633,18 @@ class ShopPolicy:
             buy_pt = self._safe_buy_point(best_idx)
             click_res = self.input_driver.click_client_point(buy_pt)
             self.last_action_ts = time.time()
+            if not bool(click_res.ok):
+                self.total_buy_fail += 1
+                self.buy_fail_streak += 1
+                self.blocked_slots_until[int(slot)] = int(self.frame_idx + max(8, self.confirm_frames * 2))
+                self.last_action = "buy_input_failed"
+                return ShopDecision(
+                    action="input_failed",
+                    slot=slot,
+                    reason=f"buy_input:{click_res.error or click_res.method}",
+                    best_score=best_score,
+                    debug={"click_error": click_res.error},
+                )
             best_weapon_name = str(self.last_slots[best_idx].get("weapon_name", "") if best_idx < len(self.last_slots) else "")
             self._start_pending_buy(slot=slot, before_hash=card_hashes.get(slot, 0), weapon_name=best_weapon_name)
             self.last_action = f"buy_{slot}_click"
