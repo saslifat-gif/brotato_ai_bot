@@ -70,8 +70,8 @@ def main() -> int:
     parser.add_argument(
         "--min-change",
         type=float,
-        default=2.0,
-        help="skip sampled frames with less mean pixel change; 0 disables deduplication",
+        default=0.0,
+        help="optionally skip near-duplicates; 0 keeps predictable stride steps",
     )
     args = parser.parse_args()
 
@@ -90,7 +90,10 @@ def main() -> int:
     ui_count = 0
     duplicate_count = 0
     print(f"[curate] session={session} frames={len(frames)} stride={stride}")
-    print(f"[curate] near-duplicate skipping min_change={max(0.0, args.min_change):.2f}")
+    if args.min_change > 0:
+        print(f"[curate] near-duplicate skipping enabled min_change={args.min_change:.2f}")
+    else:
+        print("[curate] near-duplicate skipping disabled")
     print("[curate] C=combat U=UI S/Space=skip N=next frame P=previous frame Q/Esc=quit")
 
     try:

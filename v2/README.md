@@ -33,11 +33,13 @@ Curate the recording before labeling:
 curate_v2.bat
 ```
 
-The visual curator samples every tenth frame and automatically jumps over
-near-identical samples. Press `C` for a combat frame, `U` for a
-shop/upgrade/item/death UI frame, or `S` to skip it. Use `N` and `P` to inspect
-adjacent raw frames. Selected images are copied into
+The visual curator samples every tenth frame. Press `C` for a combat frame,
+`U` for a shop/upgrade/item/death UI frame, or `S` to skip it. Use `N` and `P`
+to inspect adjacent raw frames. Selected images are copied into
 `datasets/v2/to_label/combat` and `datasets/v2/to_label/ui`.
+
+Near-duplicate skipping is optional. To enable it for a mostly static
+recording, run `python -m v2.curate_recording --min-change 2`.
 
 ## 2. Label two datasets
 
