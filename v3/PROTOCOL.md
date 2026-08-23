@@ -1,0 +1,30 @@
+# Brotato RL Bridge Protocol v1
+
+The game mod is a TCP client. The Python trainer listens only on
+`127.0.0.1:4242`. Each message is one UTF-8 JSON object followed by `\n`.
+Every message contains `"protocol": 1` and a string `type`.
+
+Game to trainer:
+
+- `hello`: mod/game versions and capabilities.
+- `state`: tick, phase (`combat`, `wave_end`, `shop`, `upgrade`, `game_over`,
+  `victory` or `menu`), player, arena, wave, counters, enemies, projectiles,
+  pickups, death and victory fields. `sequence` acknowledges the most recent
+  action applied by the bridge, so queued old states are never used as a new
+  training step.
+- `event`: non-state notification such as `manual_reset_required`.
+- `error`: rejected command or protocol error.
+
+Trainer to game:
+
+- `action`: sequence and discrete movement action `0..8`.
+- `reset`: asks the adapter to reset. The initial adapter reports
+  `manual_reset_required` until the installed Brotato version's menu hooks are
+  verified.
+
+Movement actions are idle, up, down, left, right, up-left, up-right,
+down-left and down-right. In combat, the bridge pauses the scene after sending
+an acknowledged observation and resumes it when the next action arrives. It
+restores normal human input and unpauses immediately after a disconnect.
+The trainer resends the last movement action after a reconnect, and accepts a
+new low tick value when Brotato itself has restarted.

@@ -1,12 +1,13 @@
-# Brotato AI Bot (v1)
+# Brotato AI Bot
 
 Windows-only reinforcement learning project for **Brotato**.
 
 A reinforcement learning bot for Brotato running on **Windows**. Uses PPO to train a policy network, with modules for the game environment, reward system, shop strategy, and runtime control.
 
-An experimental detector-driven v2 is also available in [`v2/`](v2/README.md).
-It uses custom YOLO26 detection, a compact combat-state vector, detected UI
-button boxes and RecurrentPPO. V1 remains available for compatibility.
+The recommended API-first v3 is available in [`v3/`](v3/README.md). It uses a
+local Brotato mod to exchange structured state and actions without screen
+capture, OCR or mouse coordinates. The detector-driven [`v2/`](v2/README.md)
+and original v1 remain available for compatibility.
 
 ## Features
 
@@ -24,22 +25,31 @@ button boxes and RecurrentPPO. V1 remains available for compatibility.
 
 ## Quick Start
 
-1. Create and activate a virtual environment
+For the recommended v3 API path, first create and activate a virtual environment:
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 ```
 
-2. Install dependencies
+Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Configure environment variables (optional)
+Then run `install_v3_mod.bat`, enable **BrotatoRLBridge** in Brotato's Mods
+menu and restart the game. Run `diagnose_v3.bat` once; if the state stream is
+healthy, train with `train_v3.bat`. See [`v3/README.md`](v3/README.md) for the
+current manual shop/reset limitation and troubleshooting.
+
+For the legacy v1 path:
+
+1. Configure environment variables (optional)
    - Copy `.env.example` and edit as needed.
    - If using the Roboflow detector, provide a `ROBOFLOW_API_KEY`.
 
-4. Start training
+2. Start training
 ```bash
 python v1/train.py
 ```
@@ -112,6 +122,8 @@ tensorboard --logdir models/version_1/ppo_brotato_logs
 │  ├─reward/          # Reward calculation
 │  ├─runtime/         # Input, capture, phase state, stop control, debug window
 │  └─shop/            # Shop strategy and OCR
+├─v2/                 # Experimental detector-driven vision agent
+├─v3/                 # Local mod API, structured environment and trainer
 ├─test/               # Tests
 ├─raw_models/         # Raw models, assets, experimental scripts
 ├─train_mask.bat      # Windows launch script

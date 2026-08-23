@@ -1,0 +1,21 @@
+{
+  "name": "BrotatoRLBridge",
+  "namespace": "Lifat",
+  "version_number": "0.1.0",
+  "description": "Local-only structured-state bridge for Brotato reinforcement learning.",
+  "website_url": "https://github.com/saslifat-gif/brotato_ai_bot",
+  "dependencies": [],
+  "extra": {
+    "godot": {
+      "authors": ["lifat"],
+      "tags": ["ai", "utility", "training"],
+      "description_rich": "Connects Brotato to a trainer on 127.0.0.1:4242.",
+      "optional_dependencies": [],
+      "load_before": [],
+      "incompatibilities": [],
+      "compatible_mod_loader_version": ["6.2.0", "6.3.0"],
+      "compatible_game_version": [],
+      "config_schema": {}
+    }
+  }
+}
