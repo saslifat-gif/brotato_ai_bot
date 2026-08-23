@@ -244,6 +244,7 @@ func _build_state() -> Dictionary:
 
 	var timer = _property(main, "_wave_timer", null)
 	var run_data = root.get_node_or_null("RunData")
+	var run_player_data = _run_player_data(run_data, player)
 	var zone_service = root.get_node_or_null("ZoneService")
 	var arena_size = _property(zone_service, "current_zone_max_position", Vector2(1920, 1080))
 	if typeof(arena_size) != TYPE_VECTOR2:
@@ -280,7 +281,11 @@ func _build_state() -> Dictionary:
 			"duration": float(_property(timer, "wait_time", 60.0))
 		},
 		"counters": {
-			"materials": int(_first_property(run_data, ["gold", "materials"], 0)),
+			"materials": int(_first_property(
+				run_player_data,
+				["gold", "materials"],
+				_first_property(run_data, ["gold", "materials"], 0)
+			)),
 			"kills": _kills_this_wave
 		},
 		"enemies": enemies,
@@ -420,6 +425,21 @@ func _player_state(player) -> Dictionary:
 	}
 
 
+func _run_player_data(run_data, player):
+	# Brotato 1.1.15 stores currency and other run values per player. Preserve
+	# the old global fallback in _build_state for earlier single-player builds.
+	var players_data = _property(run_data, "players_data", [])
+	if typeof(players_data) != TYPE_ARRAY or players_data.empty():
+		return null
+	var player_index := int(_first_property(
+		player,
+		["player_index", "player_id", "index"],
+		0
+	))
+	player_index = int(clamp(player_index, 0, players_data.size() - 1))
+	return players_data[player_index]
+
+
 func _entity_state(entity) -> Dictionary:
 	var current_stats = _property(entity, "current_stats", null)
 	var max_stats = _property(entity, "max_stats", null)
@@ -448,6 +468,10 @@ func _append_children(container, output: Array, kind: String, maximum: int) -> v
 func _property(object, property_name: String, fallback):
 	if object == null:
 		return fallback
+	if typeof(object) == TYPE_DICTIONARY:
+		var dictionary: Dictionary = object
+		var dictionary_value = dictionary.get(property_name, fallback)
+		return fallback if dictionary_value == null else dictionary_value
 	for descriptor in object.get_property_list():
 		if descriptor.has("name") and str(descriptor["name"]) == property_name:
 			var value = object.get(property_name)

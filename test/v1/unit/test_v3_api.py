@@ -104,6 +104,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "func observe_movement_behavior(behavior)" in bridge
     assert "_find_player_descendant(main)" in bridge
     assert 'enemy.connect("died", self, "_on_enemy_died_observed")' in bridge
+    assert "func _run_player_data(run_data, player)" in bridge
+    assert 'if typeof(object) == TYPE_DICTIONARY:' in bridge
+    assert '["gold", "materials"]' in bridge
     assert 'if lower == "main":' in bridge
     assert "main_extension" not in mod_main
     assert "vanilla death/drop logic preserved" in mod_main
