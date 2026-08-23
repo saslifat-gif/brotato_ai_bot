@@ -13,10 +13,10 @@ the archived standalone Brotato-ModLoader package.
 
 The first adapter trains combat movement from exact player, enemy, projectile,
 pickup, wave and arena state. Normal keyboard control is restored whenever the
-trainer disconnects. During training, combat runs step-by-step: Brotato pauses
-after each observation and resumes when the policy returns its next action.
-This prevents PPO updates from leaving the character idle while the real-time
-game continues.
+trainer disconnects or stops sending actions for 1.5 seconds. Combat remains
+real-time at up to 15 structured observations per second; global scene pauses
+are deliberately avoided because they can interrupt Brotato's wave-cleanup
+signals.
 
 The adapter advertises visible, enabled game UI actions through the structured
 API. Training automatically chooses an upgrade, makes a bounded number of shop

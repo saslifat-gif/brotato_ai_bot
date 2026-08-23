@@ -31,6 +31,12 @@ def main() -> int:
                     f"wave={info.get('wave')} materials="
                     f"{state.get('counters', {}).get('materials')} reward={reward:.3f}"
                 )
+            elif (step + 1) % 100 == 0:
+                state = env.last_state or {}
+                print(
+                    f"[v3-smoke] progress step={step + 1} wave={info.get('wave')} "
+                    f"materials={state.get('counters', {}).get('materials')}"
+                )
             if truncated:
                 raise RuntimeError(f"automation stopped in non-combat phase={phase}")
             if terminated:

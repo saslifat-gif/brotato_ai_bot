@@ -125,6 +125,8 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "func _collect_ui_actions(node, output: Array, phase: String)" in bridge
     assert 'node.emit_signal("pressed")' in bridge
     assert 'str(node.name).to_lower() == "gobutton"' in bridge
+    assert '"realtime_control"' in bridge
+    assert "set_pause(true)" not in bridge
     assert 'if lower == "main":' in bridge
     assert "main_extension" not in mod_main
     assert "vanilla death/drop logic preserved" in mod_main

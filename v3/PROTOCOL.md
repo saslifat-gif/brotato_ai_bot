@@ -24,8 +24,8 @@ Trainer to game:
   restart action. It remains safe when no restart action is visible.
 
 Movement actions are idle, up, down, left, right, up-left, up-right,
-down-left and down-right. In combat, the bridge pauses the scene after sending
-an acknowledged observation and resumes it when the next action arrives. It
-restores normal human input and unpauses immediately after a disconnect.
-The trainer resends the last movement action after a reconnect, and accepts a
-new low tick value when Brotato itself has restarted.
+down-left and down-right. Combat runs in real time at up to 15 structured
+observations per second. An action expires after 1.5 seconds without a trainer
+update, and normal human input is restored immediately after expiry or a
+disconnect. The trainer resends its last action after a reconnect and accepts
+a new low tick value when Brotato itself has restarted.

@@ -18,7 +18,6 @@ var _last_status: int = 0
 var _next_connect_ms := 0
 var _connected := false
 var _state_elapsed := 0.0
-var _step_paused := false
 var _tick := 0
 var _latest_action := 0
 var _last_action_ms := 0
@@ -42,8 +41,6 @@ func _process(delta: float) -> void:
 	if not _connected:
 		return
 	_read_messages()
-	if _step_paused:
-		return
 	_state_elapsed += delta
 	if _state_elapsed >= STATE_INTERVAL_SEC:
 		_state_elapsed = 0.0
@@ -117,8 +114,7 @@ func _handle_message(line: String) -> void:
 		_last_sequence = int(message.get("sequence", -1))
 		_last_action_ms = OS.get_ticks_msec()
 		_state_elapsed = 0.0
-		_step_paused = false
-		get_tree().set_pause(false)
+		_resume_game()
 	elif message_type == "reset":
 		_latest_action = 0
 		_last_action_ms = 0
@@ -232,13 +228,9 @@ func _publish_state() -> void:
 	_tick += 1
 	var state := _build_state()
 	_send(state)
-	if _connected and _last_sequence >= 0 and state.get("phase") == "combat":
-		_step_paused = true
-		get_tree().set_pause(true)
 
 
 func _resume_game() -> void:
-	_step_paused = false
 	get_tree().set_pause(false)
 
 
@@ -588,7 +580,7 @@ func _send_hello() -> void:
 		"session": _session_id,
 		"mod_version": MOD_VERSION,
 		"game_version": str(ProjectSettings.get_setting("application/config/version")),
-		"capabilities": ["structured_state", "movement", "step_pause", "manual_reset"]
+		"capabilities": ["structured_state", "movement", "realtime_control", "ui_actions"]
 	})
 
 
