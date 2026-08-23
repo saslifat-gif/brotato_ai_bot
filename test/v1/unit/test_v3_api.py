@@ -11,7 +11,13 @@ sys.path.insert(0, str(ROOT))
 
 from v3.bridge_server import BridgeServer
 from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
-from v3.protocol import BridgeProtocolError, action_message, decode_message, encode_message
+from v3.protocol import (
+    BridgeProtocolError,
+    action_message,
+    decode_message,
+    encode_message,
+    ui_action_message,
+)
 from v3.reward import ApiRewardEngine
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
 
@@ -49,6 +55,13 @@ def test_protocol_round_trip_and_action_validation():
     }
     with pytest.raises(BridgeProtocolError):
         action_message(9, sequence=1)
+    assert ui_action_message("/root/Shop/NextWave", 13) == {
+        "type": "ui_action",
+        "sequence": 13,
+        "target": "/root/Shop/NextWave",
+    }
+    with pytest.raises(BridgeProtocolError):
+        ui_action_message("relative/path", sequence=1)
 
 
 def test_vectorizer_has_fixed_finite_shape_and_nearest_enemy_first():
@@ -107,6 +120,8 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "func _run_player_data(run_data, player)" in bridge
     assert 'if typeof(object) == TYPE_DICTIONARY:' in bridge
     assert '["gold", "materials"]' in bridge
+    assert "func _collect_ui_actions(node, output: Array, phase: String)" in bridge
+    assert 'node.emit_signal("pressed")' in bridge
     assert 'if lower == "main":' in bridge
     assert "main_extension" not in mod_main
     assert "vanilla death/drop logic preserved" in mod_main

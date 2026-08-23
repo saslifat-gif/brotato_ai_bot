@@ -9,7 +9,7 @@ Game to trainer:
 - `hello`: mod/game versions and capabilities.
 - `state`: tick, phase (`combat`, `wave_end`, `shop`, `upgrade`, `game_over`,
   `victory` or `menu`), player, arena, wave, counters, enemies, projectiles,
-  pickups, death and victory fields. `sequence` acknowledges the most recent
+  pickups, available structured UI actions, death and victory fields. `sequence` acknowledges the most recent
   action applied by the bridge, so queued old states are never used as a new
   training step.
 - `event`: non-state notification such as `manual_reset_required`.
@@ -18,6 +18,8 @@ Game to trainer:
 Trainer to game:
 
 - `action`: sequence and discrete movement action `0..8`.
+- `ui_action`: activates one currently visible and enabled game button by the
+  exact node identifier advertised in the latest state.
 - `reset`: asks the adapter to reset. The initial adapter reports
   `manual_reset_required` until the installed Brotato version's menu hooks are
   verified.

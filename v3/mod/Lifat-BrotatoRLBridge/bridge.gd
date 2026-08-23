@@ -10,6 +10,7 @@ const STATE_INTERVAL_SEC := 1.0 / 15.0
 const MAX_ENEMIES := 128
 const MAX_PROJECTILES := 128
 const MAX_PICKUPS := 64
+const MAX_UI_ACTIONS := 64
 
 var _stream: StreamPeerTCP = StreamPeerTCP.new()
 var _receive_buffer := ""
@@ -130,6 +131,11 @@ func _handle_message(line: String) -> void:
 			"event": "manual_reset_required",
 			"sequence": int(message.get("sequence", -1))
 		})
+	elif message_type == "ui_action":
+		_last_sequence = int(message.get("sequence", -1))
+		_activate_ui_action(str(message.get("target", "")), _last_sequence)
+	else:
+		_send_error("unknown_message_type")
 
 
 func should_control() -> bool:
@@ -193,6 +199,35 @@ func record_player_death() -> void:
 	_reset_kills_on_combat = true
 
 
+func _activate_ui_action(target: String, sequence: int) -> void:
+	var root := get_tree().get_root()
+	var scene = get_tree().current_scene
+	var node = root.get_node_or_null(NodePath(target))
+	if node == null or not (node is BaseButton):
+		_send_ui_result(sequence, target, false, "target_not_button")
+		return
+	if scene == null or (node != scene and not scene.is_a_parent_of(node)):
+		_send_ui_result(sequence, target, false, "target_outside_scene")
+		return
+	if bool(_property(node, "disabled", false)) or not node.is_visible_in_tree():
+		_send_ui_result(sequence, target, false, "target_unavailable")
+		return
+	node.emit_signal("pressed")
+	_send_ui_result(sequence, target, true, "")
+	_state_elapsed = STATE_INTERVAL_SEC
+
+
+func _send_ui_result(sequence: int, target: String, ok: bool, error: String) -> void:
+	_send({
+		"type": "event",
+		"event": "ui_action_result",
+		"sequence": sequence,
+		"target": target,
+		"ok": ok,
+		"error": error
+	})
+
+
 func _publish_state() -> void:
 	_tick += 1
 	var state := _build_state()
@@ -227,6 +262,7 @@ func _build_state() -> Dictionary:
 	var enemies := []
 	var projectiles := []
 	var pickups := []
+	var ui_actions := []
 
 	if main != null:
 		var spawner = main.get_node_or_null("EntitySpawner")
@@ -259,6 +295,8 @@ func _build_state() -> Dictionary:
 		bool(_property(player, "dead", false)) or health <= 0.0
 	))
 	var phase := _phase_for_scene(scene_name, player, main, dead, run_won)
+	if phase != "combat" and phase != "wave_end":
+		_collect_ui_actions(get_tree().current_scene, ui_actions, phase)
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
@@ -291,9 +329,58 @@ func _build_state() -> Dictionary:
 		"enemies": enemies,
 		"projectiles": projectiles,
 		"pickups": pickups,
+		"ui": {"actions": ui_actions},
 		"dead": dead,
 		"victory": run_won
 	}
+
+
+func _collect_ui_actions(node, output: Array, phase: String) -> void:
+	if node == null or output.size() >= MAX_UI_ACTIONS:
+		return
+	if node is BaseButton and node.is_visible_in_tree():
+		var path := str(node.get_path())
+		var text := str(_property(node, "text", "")).strip_edges()
+		output.append({
+			"id": path,
+			"name": str(node.name),
+			"text": text,
+			"role": _ui_role(node, phase, text),
+			"enabled": not bool(_property(node, "disabled", false)),
+			"pressed": bool(_property(node, "pressed", false))
+		})
+	for child in node.get_children():
+		if output.size() >= MAX_UI_ACTIONS:
+			break
+		_collect_ui_actions(child, output, phase)
+
+
+func _ui_role(node, phase: String, text: String) -> String:
+	var token := text.to_lower()
+	var cursor = node
+	var depth := 0
+	while cursor != null and depth < 6:
+		token += " " + str(cursor.name).to_lower()
+		var script = cursor.get_script()
+		if script != null:
+			token += " " + str(script.resource_path).to_lower()
+		cursor = cursor.get_parent()
+		depth += 1
+	if token.find("reroll") >= 0 or token.find("刷新") >= 0:
+		return "reroll"
+	if token.find("next_wave") >= 0 or token.find("next wave") >= 0 or token.find("下一波") >= 0:
+		return "next_wave"
+	if token.find("restart") >= 0 or token.find("retry") >= 0 or token.find("重新开始") >= 0:
+		return "restart"
+	if token.find("lock") >= 0 or token.find("锁") >= 0:
+		return "lock"
+	if phase == "upgrade" and token.find("back") < 0 and token.find("返回") < 0:
+		return "upgrade_choice"
+	if phase == "shop" and token.find("shop_item") >= 0 and token.find("lock") < 0:
+		return "buy"
+	if token.find("start") >= 0 or token.find("开始") >= 0:
+		return "start"
+	return "other"
 
 
 func _phase_for_scene(

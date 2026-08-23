@@ -65,3 +65,14 @@ def action_message(action: int, sequence: int) -> dict[str, Any]:
 
 def reset_message(sequence: int) -> dict[str, Any]:
     return {"type": "reset", "sequence": int(sequence)}
+
+
+def ui_action_message(target: str, sequence: int) -> dict[str, Any]:
+    normalized = str(target).strip()
+    if not normalized.startswith("/") or len(normalized) > 1024:
+        raise BridgeProtocolError(f"invalid UI action target: {target!r}")
+    return {
+        "type": "ui_action",
+        "sequence": int(sequence),
+        "target": normalized,
+    }
