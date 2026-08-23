@@ -11,16 +11,22 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-from v3.ui_build_policy import UiBuildBase, UiChoiceVectorizer
+from v3.ui_build_policy import (
+    STICK_MELEE_TEACHER_VERSION,
+    UiBuildBase,
+    UiChoiceVectorizer,
+)
 
 
-def load_records(path: Path) -> list[dict]:
+def load_records(path: Path, policy_source: str) -> list[dict]:
     records = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
             record = json.loads(line)
+            if str(record.get("policy_source", "")) != policy_source:
+                continue
             selected = int(record.get("selected_index", -1))
             actions = record.get("actions", [])
             if 0 <= selected < len(actions) and actions[selected].get("choice"):
@@ -56,10 +62,19 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--min-records", type=int, default=200)
+    parser.add_argument(
+        "--policy-source",
+        default=f"stick_melee_teacher_v{STICK_MELEE_TEACHER_VERSION}",
+    )
     args = parser.parse_args()
-    records = load_records(args.dataset)
-    if not records:
-        raise RuntimeError(f"no trainable structured UI decisions in {args.dataset}")
+    records = load_records(args.dataset, args.policy_source)
+    minimum = max(2, int(args.min_records))
+    if len(records) < minimum:
+        raise RuntimeError(
+            f"only {len(records)} valid {args.policy_source} decisions in {args.dataset}; "
+            f"collect at least {minimum} before training"
+        )
     random.Random(args.seed).shuffle(records)
     random.seed(args.seed)
     split = max(1, int(len(records) * 0.9))

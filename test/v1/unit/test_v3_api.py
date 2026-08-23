@@ -20,6 +20,7 @@ from v3.protocol import (
     ui_action_message,
 )
 from v3.reward import ApiRewardEngine
+from v3.train_ui_build import load_records
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
 from v3.ui_automation import AutoUiController, available_actions
 from v3.ui_build_policy import (
@@ -349,6 +350,40 @@ def test_ui_build_base_is_small_and_has_stable_features():
         torch.tensor([features.base_bucket]),
     )
     assert score.shape == (1,)
+
+
+def test_ui_build_training_filters_stale_and_unstructured_decisions(tmp_path):
+    dataset = tmp_path / "ui_decisions.jsonl"
+    valid_action = {
+        "id": "/root/Shop/Stick/BuyButton",
+        "role": "buy",
+        "choice": {"id": "weapon_stick_1", "category": "weapon"},
+    }
+    records = [
+        {
+            "policy_source": "stick_melee_teacher",
+            "selected_index": 0,
+            "actions": [valid_action],
+        },
+        {
+            "policy_source": "stick_melee_teacher_v2",
+            "selected_index": 0,
+            "actions": [{"id": "/root/Shop/Reroll", "role": "reroll"}],
+        },
+        {
+            "policy_source": "stick_melee_teacher_v2",
+            "selected_index": 0,
+            "actions": [valid_action],
+        },
+    ]
+    dataset.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    loaded = load_records(dataset, "stick_melee_teacher_v2")
+
+    assert len(loaded) == 1
+    assert loaded[0]["actions"][0]["choice"]["id"] == "weapon_stick_1"
 
 
 def test_stick_melee_teacher_recycles_conflicting_found_item():

@@ -50,6 +50,7 @@ ROLE_NAMES = (
 CATEGORY_NAMES = ("item", "weapon", "upgrade")
 ID_BUCKETS = 1024
 ID_EMBEDDING_SIZE = 8
+STICK_MELEE_TEACHER_VERSION = 2
 CONTEXT_SIZE = 4 + len(STAT_KEYS) + 4
 CHOICE_SIZE = 5 + len(CATEGORY_NAMES) + 3 + len(ROLE_NAMES) + len(STAT_KEYS)
 
@@ -188,7 +189,11 @@ class StickMeleeTeacher:
         if not ranked:
             return None
         score, action = max(ranked, key=lambda item: item[0])
-        return RankedUiAction(action=action, score=float(score), source="stick_melee_teacher")
+        return RankedUiAction(
+            action=action,
+            score=float(score),
+            source=f"stick_melee_teacher_v{STICK_MELEE_TEACHER_VERSION}",
+        )
 
 
 @dataclass(frozen=True)

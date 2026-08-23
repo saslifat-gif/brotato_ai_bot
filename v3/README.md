@@ -108,10 +108,10 @@ Protocol details are in `v3/PROTOCOL.md`.
 
 The Stick/Melee profile ranks internal item IDs and numeric effects rather than
 localized screen text. It prioritizes Stick weapons plus melee/attack upgrades,
-masks unaffordable purchases, and records structured decisions to
-`models/version_3/ui_decisions.jsonl`. Train the compact reusable scorer after
-collecting decisions:
+masks unaffordable purchases, and records versioned structured decisions to
+`models/version_3/ui_decisions_stick_melee_v2.jsonl`. Train the compact reusable
+scorer only after collecting at least 200 valid item choices:
 
 ```powershell
-python -m v3.train_ui_build --dataset models/version_3/ui_decisions.jsonl --output models/version_3/ui_build_base.pt
+python -m v3.train_ui_build --dataset models/version_3/ui_decisions_stick_melee_v2.jsonl --output models/version_3/ui_build_base.pt
 ```
