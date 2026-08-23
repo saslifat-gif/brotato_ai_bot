@@ -188,7 +188,7 @@ func _build_state() -> Dictionary:
 	var scene_name := ""
 	if get_tree().current_scene != null:
 		scene_name = str(get_tree().current_scene.name)
-	var player = _property(main, "_player", null)
+	var player = _find_player(root, main)
 	if player != null and not is_instance_valid(player):
 		player = null
 	var player_state := _player_state(player)
@@ -269,11 +269,11 @@ func _phase_for_scene(
 		return "victory"
 	if dead:
 		return "game_over"
-	if player != null:
+	var lower := scene_name.to_lower()
+	if player != null or lower == "main":
 		if bool(_property(main, "_cleaning_up", false)):
 			return "wave_end"
 		return "combat"
-	var lower := scene_name.to_lower()
 	if lower.find("shop") >= 0:
 		return "shop"
 	if lower.find("upgrade") >= 0:
@@ -281,6 +281,20 @@ func _phase_for_scene(
 	if lower.find("end_run") >= 0 or lower.find("game_over") >= 0:
 		return "game_over"
 	return "menu"
+
+
+func _find_player(root, main):
+	# Brotato 1.1.x exposes the live player through the TempStats singleton.
+	# Keep the Main fallbacks for older game builds.
+	var temp_stats = root.get_node_or_null("TempStats")
+	var player = _property(temp_stats, "player", null)
+	if player == null:
+		player = _property(main, "_player", null)
+	if player == null:
+		player = _property(main, "player", null)
+	if player == null and main != null:
+		player = main.get_node_or_null("Player")
+	return player
 
 
 func _player_state(player) -> Dictionary:

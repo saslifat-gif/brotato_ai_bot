@@ -100,6 +100,8 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     bridge = (mod / "bridge.gd").read_text(encoding="utf-8")
     mod_main = (mod / "mod_main.gd").read_text(encoding="utf-8")
     assert "var dead: bool =" in bridge
+    assert 'root.get_node_or_null("TempStats")' in bridge
+    assert 'player != null or lower == "main"' in bridge
     assert "bridge_script.can_instance()" in mod_main
     assert "Bridge script failed to load" in mod_main
     assert 'call_deferred("_attach_bridge", root, _bridge)' in mod_main
