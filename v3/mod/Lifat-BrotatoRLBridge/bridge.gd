@@ -370,6 +370,11 @@ func _ui_role(node, phase: String, text: String) -> String:
 			token += " " + str(script.resource_path).to_lower()
 		cursor = cursor.get_parent()
 		depth += 1
+	if phase == "item_found":
+		if token.find("recycle") >= 0 or token.find("回收") >= 0:
+			return "recycle_item"
+		if token.find("take") >= 0 or token.find("keep") >= 0 or token.find("拿取") >= 0:
+			return "take_item"
 	if token.find("reroll") >= 0 or token.find("刷新") >= 0:
 		return "reroll"
 	if token.find("next_wave") >= 0 or token.find("next wave") >= 0 or token.find("下一波") >= 0:
@@ -404,6 +409,16 @@ func _detect_visible_ui_phase(node) -> String:
 		return "game_over"
 	if node is BaseButton:
 		var button_name := str(node.name).to_lower()
+		var button_text := str(_property(node, "text", "")).strip_edges().to_lower()
+		if (
+			button_name.find("recycle") >= 0
+			or button_text.find("recycle") >= 0
+			or button_text.find("回收") >= 0
+			or button_name.find("take") >= 0
+			or button_text == "take"
+			or button_text.find("拿取") >= 0
+		):
+			return "item_found"
 		if button_name == "choosebutton" and (
 			token.find("upgradeui") >= 0 or token.find("upgrade_ui") >= 0
 		):

@@ -185,6 +185,39 @@ def test_ui_automation_only_uses_enabled_exact_targets():
     assert AutoUiController().choose(state)["id"] == "/root/Choice"
 
 
+def test_ui_automation_takes_found_item_before_recycle():
+    state = dict(_state(wave=7), phase="item_found")
+    state["ui"] = {
+        "actions": [
+            {
+                "id": "/root/Main/UI/ItemFound/RecycleButton",
+                "role": "recycle_item",
+                "enabled": True,
+            },
+            {
+                "id": "/root/Main/UI/ItemFound/TakeButton",
+                "role": "take_item",
+                "enabled": True,
+            },
+        ]
+    }
+    controller = AutoUiController()
+    action = controller.choose(state)
+    assert action["role"] == "take_item"
+    controller.mark_sent(state, action)
+
+
+def test_bridge_detects_found_item_take_and_recycle_buttons():
+    bridge = (
+        ROOT / "v3" / "mod" / MOD_DIR_NAME / "bridge.gd"
+    ).read_text(encoding="utf-8")
+    assert 'return "item_found"' in bridge
+    assert 'return "take_item"' in bridge
+    assert 'return "recycle_item"' in bridge
+    assert 'button_text.find("拿取")' in bridge
+    assert 'button_text.find("回收")' in bridge
+
+
 def test_ui_automation_handles_multiple_upgrades_in_one_wave():
     choice_path = "/root/Main/UI/UpgradesUI/UpgradeUI/ChooseButton"
     go_path = "/root/Shop/GoButton"

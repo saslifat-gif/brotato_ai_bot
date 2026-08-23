@@ -12,6 +12,7 @@ from v3.protocol import ui_action_message
 MAX_NO_ACTION_STATES = 30
 MAX_TRANSITION_WAIT_STATES = 300
 MAX_UPGRADE_CLICKS_PER_WAVE = 32
+MAX_ITEM_CLAIMS_PER_WAVE = 32
 UPGRADE_FALLBACK_WAIT_STATES = 4
 
 
@@ -46,6 +47,7 @@ class AutoUiController:
         self._shop_rerolls = 0
         self._attempted: set[tuple[str, int]] = set()
         self._upgrade_clicks: dict[int, int] = {}
+        self._item_claims: dict[int, int] = {}
 
     def reset_episode(self) -> None:
         self._shop_wave = None
@@ -53,6 +55,7 @@ class AutoUiController:
         self._shop_rerolls = 0
         self._attempted.clear()
         self._upgrade_clicks.clear()
+        self._item_claims.clear()
 
     def _enter_shop(self, state: Mapping[str, Any]) -> None:
         wave = state.get("wave", {})
@@ -72,6 +75,15 @@ class AutoUiController:
             if self._upgrade_clicks.get(wave, 0) >= MAX_UPGRADE_CLICKS_PER_WAVE:
                 return None
             return choices[0] if choices else None
+        if phase == "item_found":
+            wave = int(state.get("wave", {}).get("number", -1))
+            if self._item_claims.get(wave, 0) >= MAX_ITEM_CLAIMS_PER_WAVE:
+                return None
+            take = available_actions(state, "take_item")
+            if take:
+                return take[0]
+            recycle = available_actions(state, "recycle_item")
+            return recycle[0] if recycle else None
         if phase == "shop":
             self._enter_shop(state)
             materials = int(state.get("counters", {}).get("materials", 0))
@@ -99,6 +111,9 @@ class AutoUiController:
         if role == "upgrade_choice":
             wave = int(state.get("wave", {}).get("number", -1))
             self._upgrade_clicks[wave] = self._upgrade_clicks.get(wave, 0) + 1
+        elif role in {"take_item", "recycle_item"}:
+            wave = int(state.get("wave", {}).get("number", -1))
+            self._item_claims[wave] = self._item_claims.get(wave, 0) + 1
         elif role == "buy":
             materials = int(state.get("counters", {}).get("materials", 0))
             self._attempted.add((str(action.get("id", "")), materials))
@@ -140,17 +155,21 @@ class AutoUiController:
                     for action in available_actions(state, "restart")
                 )
             )
-            upgrade_fallback_ready = (
+            repeatable_choice = (
                 pending_phase_change is not None
-                and pending_phase_change[1] == "upgrade_choice"
+                and pending_phase_change[1]
+                in {"upgrade_choice", "take_item", "recycle_item"}
+            )
+            choice_fallback_ready = (
+                repeatable_choice
                 and not result_ok
                 and no_action_states >= UPGRADE_FALLBACK_WAIT_STATES
-                and bool(available_actions(state, "upgrade_choice"))
+                and bool(available_actions(state, pending_phase_change[1]))
             )
             if pending_phase_change is not None and (
                 phase != pending_phase_change[0]
-                or (pending_phase_change[1] == "upgrade_choice" and result_changed)
-                or upgrade_fallback_ready
+                or (repeatable_choice and result_changed)
+                or choice_fallback_ready
                 or restart_stage_changed
             ):
                 print(
@@ -185,7 +204,13 @@ class AutoUiController:
                     f"[v3-ui] sent role={action.get('role')} "
                     f"name={action.get('name', '')} target={action.get('id')}"
                 )
-                if action.get("role") in {"upgrade_choice", "next_wave", "restart"}:
+                if action.get("role") in {
+                    "upgrade_choice",
+                    "take_item",
+                    "recycle_item",
+                    "next_wave",
+                    "restart",
+                }:
                     pending_phase_change = (
                         phase,
                         str(action.get("role")),

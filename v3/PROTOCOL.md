@@ -7,8 +7,8 @@ Every message contains `"protocol": 1` and a string `type`.
 Game to trainer:
 
 - `hello`: mod/game versions and capabilities.
-- `state`: tick, phase (`combat`, `wave_end`, `shop`, `upgrade`, `game_over`,
-  `victory` or `menu`), player, arena, wave, counters, enemies, projectiles,
+- `state`: tick, phase (`combat`, `wave_end`, `item_found`, `shop`, `upgrade`,
+  `game_over`, `victory` or `menu`), player, arena, wave, counters, enemies, projectiles,
   pickups, available structured UI actions, death and victory fields. `sequence` acknowledges the most recent
   action applied by the bridge, so queued old states are never used as a new
   training step.
