@@ -45,8 +45,3 @@ func _attach_bridge(root, bridge) -> void:
 	if bridge.get_parent() == null:
 		root.add_child(bridge)
 	ModLoaderLog.info("Bridge ready on 127.0.0.1:4242", MOD_LOG)
-
-
-func _exit_tree() -> void:
-	if is_instance_valid(_bridge):
-		_bridge.queue_free()

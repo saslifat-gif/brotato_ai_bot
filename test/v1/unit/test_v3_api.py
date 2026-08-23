@@ -136,6 +136,7 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "bridge_script.can_instance()" in mod_main
     assert "Bridge script failed to load" in mod_main
     assert 'call_deferred("_attach_bridge", root, _bridge)' in mod_main
+    assert "_bridge.queue_free()" not in mod_main
     movement_extension = (
         mod
         / "extensions"
