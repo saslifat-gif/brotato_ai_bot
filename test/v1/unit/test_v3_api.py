@@ -216,11 +216,12 @@ def test_ui_automation_advances_wave_end_shop_and_next_wave():
         ]
     }
     after_buy = dict(shop, tick=12, ui={"actions": shop["ui"]["actions"][1:]})
-    combat = dict(_state(wave=4), tick=13)
+    shop_closing = dict(after_buy, tick=13)
+    combat = dict(_state(wave=4), tick=14)
 
     class FakeServer:
         def __init__(self):
-            self.states = iter([shop, after_buy, combat])
+            self.states = iter([shop, after_buy, shop_closing, combat])
             self.sent = []
 
         def send(self, message, timeout_sec):

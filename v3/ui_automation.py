@@ -128,7 +128,11 @@ class AutoUiController:
                 pending_phase_change = None
             if phase == "victory" or (phase == "game_over" and not allow_restart):
                 break
-            action = self.choose(state)
+            # Once a transition action is sent, wait for the advertised phase
+            # to disappear.  Shop counters can change immediately after the Go
+            # button is pressed while the old controls remain visible for a
+            # frame; choosing again there can activate a stale shop button.
+            action = None if pending_phase_change is not None else self.choose(state)
             previous_tick = int(state.get("tick", -1))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
