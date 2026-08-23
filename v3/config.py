@@ -22,6 +22,8 @@ class V3Config:
     ui_build_profile: str
     ui_model_path: Optional[Path]
     ui_decision_log: Optional[Path]
+    safety_shield: bool
+    combat_decision_log: Optional[Path]
 
 
 def load_config() -> V3Config:
@@ -39,6 +41,12 @@ def load_config() -> V3Config:
         if ui_log_value.lower() in {"", "0", "off", "none"}
         else Path(ui_log_value).resolve()
     )
+    combat_log_value = os.environ.get("BROTATO_V3_COMBAT_DATASET", "").strip()
+    combat_decision_log = (
+        None
+        if combat_log_value.lower() in {"", "0", "off", "none"}
+        else Path(combat_log_value).resolve()
+    )
     return V3Config(
         host=os.environ.get("BROTATO_V3_HOST", DEFAULT_HOST),
         port=int(os.environ.get("BROTATO_V3_PORT", str(DEFAULT_PORT))),
@@ -55,4 +63,7 @@ def load_config() -> V3Config:
         .lower(),
         ui_model_path=ui_model_path,
         ui_decision_log=ui_decision_log,
+        safety_shield=os.environ.get("BROTATO_V3_SAFETY_SHIELD", "0").strip().lower()
+        in {"1", "true", "yes", "on"},
+        combat_decision_log=combat_decision_log,
     )

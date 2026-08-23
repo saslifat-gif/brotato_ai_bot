@@ -2,7 +2,7 @@
 
 import os
 
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 
 try:
@@ -12,6 +12,7 @@ except Exception:
 
 from v3.config import load_config
 from v3.env.brotato_api_env import BrotatoApiEnv
+from v3.runtime_callbacks import SaveBestRollingRewardCallback
 
 
 def main() -> int:
@@ -22,15 +23,28 @@ def main() -> int:
     checkpoints = cfg.output_dir / "checkpoints"
     checkpoints.mkdir(parents=True, exist_ok=True)
     env = Monitor(BrotatoApiEnv(cfg))
-    callback = CheckpointCallback(
-        save_freq=20_000,
-        save_path=str(checkpoints),
-        name_prefix="api_recurrent_ppo",
-    )
+    callback = CallbackList([
+        CheckpointCallback(
+            save_freq=20_000,
+            save_path=str(checkpoints),
+            name_prefix="api_recurrent_ppo",
+        ),
+        SaveBestRollingRewardCallback(cfg.output_dir / "best", min_episodes=10),
+    ])
     resume = os.environ.get("BROTATO_V3_RESUME_MODEL", "").strip()
     if resume:
         model = RecurrentPPO.load(resume, env=env, device=os.environ.get("BROTATO_V3_DEVICE", "auto"))
-        print(f"[v3-train] resumed={resume}")
+        resume_lr = float(os.environ.get("BROTATO_V3_RESUME_LR", "0.00005"))
+        resume_entropy = float(os.environ.get("BROTATO_V3_RESUME_ENT_COEF", "0.002"))
+        model.learning_rate = resume_lr
+        model.lr_schedule = lambda _remaining: resume_lr
+        model.ent_coef = resume_entropy
+        for group in model.policy.optimizer.param_groups:
+            group["lr"] = resume_lr
+        print(
+            f"[v3-train] resumed={resume} lr={resume_lr} "
+            f"ent_coef={resume_entropy} safety_shield={cfg.safety_shield}"
+        )
     else:
         model = RecurrentPPO(
             "MlpLstmPolicy",
@@ -42,7 +56,7 @@ def main() -> int:
             n_epochs=4,
             gamma=0.995,
             gae_lambda=0.95,
-            ent_coef=0.02,
+            ent_coef=0.01,
             tensorboard_log=str(cfg.output_dir / "logs"),
             device=os.environ.get("BROTATO_V3_DEVICE", "auto"),
             policy_kwargs={"lstm_hidden_size": 256, "n_lstm_layers": 1},

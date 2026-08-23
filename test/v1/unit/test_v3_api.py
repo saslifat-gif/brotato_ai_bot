@@ -11,6 +11,13 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 from v3.bridge_server import BridgeServer
+from v3.combat_policy import (
+    CombatHeuristicTeacher,
+    CombatPolicyBase,
+    CombatSafetyShield,
+    RICH_OBSERVATION_SIZE,
+    RichCombatVectorizer,
+)
 from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
 from v3.protocol import (
     BridgeProtocolError,
@@ -86,6 +93,60 @@ def test_vectorizer_has_fixed_finite_shape_and_nearest_enemy_first():
     assert observation.dtype == np.float32
     assert np.isfinite(observation).all()
     assert observation[16] == pytest.approx(0.05)
+
+
+def test_rich_combat_vectorizer_and_base_are_versioned_and_small():
+    state = _state()
+    state["combat"] = {
+        "weapon_count": 2,
+        "melee_count": 2,
+        "ranged_count": 0,
+        "weapon_range": 180,
+        "move_speed": 320,
+        "armor": 4,
+        "attack_speed": 15,
+    }
+    state["enemies"] = [{
+        "position": {"x": 550, "y": 300},
+        "velocity": {"x": -10, "y": 0},
+        "health": 8,
+        "max_health": 10,
+        "radius": 35,
+        "is_charging": True,
+    }]
+    observation = RichCombatVectorizer().build(state, previous_action=4)
+    assert observation.shape == (RICH_OBSERVATION_SIZE,)
+    assert np.isfinite(observation).all()
+    assert observation[16 + 4] == 1.0
+    model = CombatPolicyBase()
+    assert model.parameter_count < 100_000
+    assert model(torch.from_numpy(observation[None, :])).shape == (1, 9)
+
+
+def test_safety_shield_sidesteps_an_incoming_projectile():
+    state = _state()
+    state["projectiles"] = [{
+        "position": {"x": 700, "y": 300},
+        "velocity": {"x": -600, "y": 0},
+        "radius": 15,
+    }]
+    shield = CombatSafetyShield()
+    decision = shield.apply(state, requested_action=4)
+    assert decision.overridden
+    assert decision.applied_action in {1, 2, 5, 7}
+    assert decision.applied_risk < decision.requested_risk
+
+
+def test_combat_teacher_moves_toward_a_safe_distant_enemy():
+    state = _state()
+    state["combat"] = {"weapon_range": 120}
+    state["enemies"] = [{
+        "position": {"x": 850, "y": 300},
+        "velocity": {"x": 0, "y": 0},
+        "health": 1,
+        "max_health": 1,
+    }]
+    assert CombatHeuristicTeacher().select(state) in {4, 6, 8}
 
 
 def test_exact_state_reward_penalizes_damage_and_rewards_progress():
@@ -237,6 +298,11 @@ def test_bridge_advertises_language_independent_build_choices():
     assert '"affordable"' in bridge
     assert '"stat_melee_damage"' in bridge
     assert 'property_name = "upgrade_data"' in bridge
+    assert '"combat": combat_state' in bridge
+    assert '"combat_build_summary"' in bridge
+    assert '"threat_geometry"' in bridge
+    assert '"is_charging"' in bridge
+    assert '"radius": _collision_radius' in bridge
 
 
 def test_stick_melee_teacher_prioritizes_stick_and_melee_upgrade():
@@ -619,7 +685,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     workshop_host.mkdir(parents=True)
     (workshop_host / "Subscribed-Mod.zip").touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.1.1.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.2.0.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

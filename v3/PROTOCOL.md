@@ -11,8 +11,11 @@ Game to trainer:
   `game_over`, `victory` or `menu`), player, arena, wave, counters, enemies, projectiles,
   pickups, build metadata, available structured UI actions, death and victory fields. Shop,
   upgrade and found-item actions include a language-independent `choice` object with internal
-  IDs, category, tier, price, affordability, tags and numeric effects. Rich inventory/build
-  metadata is emitted only during UI phases so combat frames remain small. `sequence` acknowledges the most recent
+  IDs, category, tier, price, affordability, tags and numeric effects. Full inventory/build
+  metadata is emitted only during UI phases. Combat states contain a compact `combat` summary
+  with character, weapon counts/range, movement speed, armor and attack speed. Enemy and
+  projectile entries additionally advertise IDs, collision radius, attack type and available
+  charge/boss metadata for geometric safety and future rich policies. `sequence` acknowledges the most recent
   action applied by the bridge, so queued old states are never used as a new
   training step.
 - `event`: non-state notification such as `manual_reset_required`.

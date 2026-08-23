@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.1.1"
+const MOD_VERSION := "0.2.0"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -47,6 +47,8 @@ var _last_wave_number := -1
 var _reset_kills_on_combat := false
 var _observed_player = null
 var _logged_player_probe := false
+var _entity_static_cache := {}
+var _projectile_static_cache := {}
 
 
 func _ready() -> void:
@@ -293,6 +295,7 @@ func _build_state() -> Dictionary:
 	var run_data = root.get_node_or_null("RunData")
 	var run_player_data = _run_player_data(run_data, player)
 	var build_state := {}
+	var combat_state := {}
 	var zone_service = root.get_node_or_null("ZoneService")
 	var arena_size = _property(zone_service, "current_zone_max_position", Vector2(1920, 1080))
 	if typeof(arena_size) != TYPE_VECTOR2:
@@ -322,6 +325,8 @@ func _build_state() -> Dictionary:
 	if phase != "combat" and phase != "wave_end":
 		build_state = _build_state_for_policy(run_data, run_player_data)
 		_collect_ui_actions(get_tree().current_scene, ui_actions, phase)
+	elif phase == "combat":
+		combat_state = _combat_summary(player, run_data)
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
@@ -354,6 +359,7 @@ func _build_state() -> Dictionary:
 		"enemies": enemies,
 		"projectiles": projectiles,
 		"pickups": pickups,
+		"combat": combat_state,
 		"build": build_state,
 		"ui": {"actions": ui_actions},
 		"dead": dead,
@@ -566,6 +572,63 @@ func _build_state_for_policy(run_data, run_player_data) -> Dictionary:
 	}
 
 
+func _combat_summary(player, run_data) -> Dictionary:
+	if player == null:
+		return {}
+	var current_stats = _property(player, "current_stats", null)
+	var weapons = _property(player, "current_weapons", [])
+	var weapon_count := 0
+	var melee_count := 0
+	var ranged_count := 0
+	var weapon_range := 170.0
+	var range_seen := false
+	if typeof(weapons) == TYPE_ARRAY:
+		for weapon in weapons:
+			if weapon == null:
+				continue
+			if typeof(weapon) == TYPE_OBJECT and not is_instance_valid(weapon):
+				continue
+			weapon_count += 1
+			var weapon_stats = _property(weapon, "current_stats", null)
+			var current_range := float(_first_property(
+				weapon_stats,
+				["max_range", "range"],
+				170.0
+			))
+			if not range_seen or current_range < weapon_range:
+				weapon_range = current_range
+				range_seen = true
+			var weapon_token := _script_token(weapon) + " " + _script_token(weapon_stats)
+			if weapon_token.find("ranged") >= 0 or weapon_token.find("projectile") >= 0:
+				ranged_count += 1
+			else:
+				melee_count += 1
+	var armor := 0.0
+	var attack_speed := 0.0
+	var speed_stat := 0.0
+	if run_data != null and run_data.has_method("get_stat"):
+		armor = float(run_data.call("get_stat", "stat_armor"))
+		attack_speed = float(run_data.call("get_stat", "stat_attack_speed"))
+		speed_stat = float(run_data.call("get_stat", "stat_speed"))
+	var move_speed := float(_first_property(
+		player,
+		["current_speed", "movement_speed", "move_speed", "speed"],
+		300.0 * max(0.1, 1.0 + speed_stat / 100.0)
+	))
+	var character = _property(run_data, "current_character", null)
+	return {
+		"character_id": str(_property(character, "my_id", "")),
+		"weapon_count": weapon_count,
+		"melee_count": melee_count,
+		"ranged_count": ranged_count,
+		"weapon_range": weapon_range,
+		"move_speed": move_speed,
+		"armor": armor,
+		"attack_speed": attack_speed,
+		"dodge": float(_first_property(current_stats, ["dodge"], 0.0))
+	}
+
+
 func _detect_visible_ui_phase(node) -> String:
 	if node == null:
 		return ""
@@ -752,11 +815,30 @@ func _run_player_data(run_data, player):
 func _entity_state(entity) -> Dictionary:
 	var current_stats = _property(entity, "current_stats", null)
 	var max_stats = _property(entity, "max_stats", null)
+	var static_data := _entity_static_data(entity)
+	var attack_behavior = _first_property(
+		entity,
+		["_current_attack_behavior", "current_attack_behavior", "_attack_behavior"],
+		null
+	)
+	var attack_token := _script_token(attack_behavior)
+	var charge_direction = _first_property(
+		attack_behavior,
+		["_charge_direction", "charge_direction", "direction"],
+		Vector2.ZERO
+	)
 	return {
+		"id": static_data["id"],
 		"position": _vector_json(_property(entity, "position", Vector2.ZERO)),
 		"velocity": _vector_json(_property(entity, "linear_velocity", Vector2.ZERO)),
 		"health": float(_property(current_stats, "health", 1.0)),
-		"max_health": max(1.0, float(_property(max_stats, "health", 1.0)))
+		"max_health": max(1.0, float(_property(max_stats, "health", 1.0))),
+		"radius": static_data["radius"],
+		"is_boss": static_data["is_boss"],
+		"is_loot": static_data["is_loot"],
+		"is_charging": attack_token.find("charg") >= 0,
+		"charge_direction": _vector_json(charge_direction),
+		"attack_type": attack_token
 	}
 
 
@@ -766,12 +848,81 @@ func _append_children(container, output: Array, kind: String, maximum: int) -> v
 	for child in container.get_children():
 		if output.size() >= maximum:
 			break
+		var static_data := _projectile_static_data(child)
 		output.append({
+			"id": static_data["id"],
 			"position": _vector_json(_property(child, "position", Vector2.ZERO)),
 			"velocity": _vector_json(_property(child, "linear_velocity", Vector2.ZERO)),
 			"rotation": float(_property(child, "rotation", 0.0)),
+			"radius": static_data["radius"],
+			"damage": static_data["damage"],
+			"attack_type": static_data["attack_type"],
 			"kind": kind
 		})
+
+
+func _entity_static_data(entity) -> Dictionary:
+	if _entity_static_cache.size() > 4096:
+		_entity_static_cache.clear()
+	var cache_key := int(entity.get_instance_id())
+	if _entity_static_cache.has(cache_key):
+		return _entity_static_cache[cache_key]
+	var entity_data = _first_property(entity, ["enemy_data", "unit_data", "data"], null)
+	var entity_token := _script_token(entity) + " " + _script_token(entity_data)
+	var result := {
+		"id": str(_first_property(
+			entity_data,
+			["my_id", "id"],
+			_first_property(entity, ["my_id", "id"], str(entity.name))
+		)),
+		"radius": _collision_radius(entity),
+		"is_boss": bool(_property(entity, "is_boss", false)) or entity_token.find("boss") >= 0,
+		"is_loot": bool(_property(entity, "is_loot", false))
+	}
+	_entity_static_cache[cache_key] = result
+	return result
+
+
+func _projectile_static_data(projectile) -> Dictionary:
+	if _projectile_static_cache.size() > 4096:
+		_projectile_static_cache.clear()
+	var cache_key := int(projectile.get_instance_id())
+	if _projectile_static_cache.has(cache_key):
+		return _projectile_static_cache[cache_key]
+	var result := {
+		"id": str(_first_property(projectile, ["my_id", "id"], str(projectile.name))),
+		"radius": _collision_radius(projectile),
+		"damage": float(_first_property(projectile, ["damage", "current_damage"], 0.0)),
+		"attack_type": _script_token(projectile)
+	}
+	_projectile_static_cache[cache_key] = result
+	return result
+
+
+func _script_token(object) -> String:
+	if object == null:
+		return ""
+	var token := str(_first_property(object, ["name", "my_id", "id"], "")).to_lower()
+	if object is Object:
+		var script = object.get_script()
+		if script != null:
+			token += " " + str(script.resource_path).to_lower()
+	return token
+
+
+func _collision_radius(object) -> float:
+	var hitbox = _first_property(object, ["_hitbox", "hitbox", "_hurtbox", "hurtbox"], null)
+	var collision = _first_property(hitbox, ["_collision", "collision", "collision_shape"], null)
+	var shape = _property(collision, "shape", null)
+	if shape == null:
+		return 40.0
+	var radius = _property(shape, "radius", null)
+	if radius != null:
+		return max(1.0, float(radius))
+	var extents = _property(shape, "extents", null)
+	if typeof(extents) == TYPE_VECTOR2:
+		return max(1.0, max(float(extents.x), float(extents.y)))
+	return 40.0
 
 
 func _property(object, property_name: String, fallback):
@@ -808,7 +959,14 @@ func _send_hello() -> void:
 		"session": _session_id,
 		"mod_version": MOD_VERSION,
 		"game_version": str(ProjectSettings.get_setting("application/config/version")),
-		"capabilities": ["structured_state", "movement", "realtime_control", "ui_actions"]
+		"capabilities": [
+			"structured_state",
+			"movement",
+			"realtime_control",
+			"ui_actions",
+			"combat_build_summary",
+			"threat_geometry"
+		]
 	})
 
 

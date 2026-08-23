@@ -7,6 +7,7 @@ import numpy as np
 from gymnasium import spaces
 
 from v3.bridge_server import BridgeServer
+from v3.combat_policy import CombatDecisionLogger, CombatSafetyShield
 from v3.config import V3Config
 from v3.protocol import MoveAction, action_message, reset_message
 from v3.reward import ApiRewardEngine
@@ -34,6 +35,8 @@ class BrotatoApiEnv(gym.Env):
         self.sequence = 0
         self.previous_action = int(MoveAction.IDLE)
         self.last_state = None
+        self.safety_shield = CombatSafetyShield(enabled=cfg.safety_shield)
+        self.combat_logger = CombatDecisionLogger(cfg.combat_decision_log)
         self.ui_controller = AutoUiController(
             max_shop_buys=cfg.max_shop_buys,
             max_shop_rerolls=cfg.max_shop_rerolls,
@@ -88,7 +91,15 @@ class BrotatoApiEnv(gym.Env):
         }
 
     def step(self, action):
-        normalized = int(MoveAction(int(action)))
+        requested = int(MoveAction(int(action)))
+        decision = self.safety_shield.apply(self.last_state or {}, requested)
+        normalized = decision.applied_action
+        self.combat_logger.record(
+            self.last_state or {},
+            decision,
+            source="policy_with_safety" if decision.overridden else "policy",
+            previous_action=self.previous_action,
+        )
         self.sequence += 1
         self.server.send(action_message(normalized, self.sequence), timeout_sec=self.cfg.state_timeout_sec)
         previous_tick = int(self.last_state.get("tick", -1)) if self.last_state else None
@@ -125,6 +136,11 @@ class BrotatoApiEnv(gym.Env):
             "wave": state.get("wave", {}).get("number", 0),
             "ui_sent": ui_sent,
             "ui_confirmed": ui_confirmed,
+            "requested_action": requested,
+            "applied_action": normalized,
+            "safety_overridden": decision.overridden,
+            "requested_risk": decision.requested_risk,
+            "applied_risk": decision.applied_risk,
         }
         return observation, reward, terminated, truncated, info
 

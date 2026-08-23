@@ -88,6 +88,10 @@ disconnect the bridge; Brotato then unpauses and restores normal keyboard input.
 The observation is a fixed 256-value vector containing player status, wave and
 arena values, the nearest 24 enemies, 16 projectiles and 14 pickups. The policy
 has nine movement actions: idle, four cardinal directions and four diagonals.
+This legacy vector remains unchanged so existing RecurrentPPO checkpoints stay
+loadable. The next-generation behavior-cloning base uses a separate 384-value
+rich vector with combat build information, enemy threat state, projectile
+radius and time-to-impact.
 
 Protocol details are in `v3/PROTOCOL.md`.
 
@@ -105,6 +109,10 @@ Protocol details are in `v3/PROTOCOL.md`.
 - `BROTATO_V3_UI_BUILD_PROFILE` — structured UI teacher; defaults to `stick_melee`.
 - `BROTATO_V3_UI_DATASET` — JSONL decision log used to train the small UI Build Base.
 - `BROTATO_V3_UI_MODEL` — optional trained UI Build Base checkpoint; the rule teacher remains a fallback.
+- `BROTATO_V3_SAFETY_SHIELD` — imminent-collision override; defaults off during PPO training.
+- `BROTATO_V3_COMBAT_DATASET` — optional rich structured combat decision log.
+- `BROTATO_V3_RESUME_LR` — resumed PPO learning rate; defaults to `0.00005`.
+- `BROTATO_V3_RESUME_ENT_COEF` — resumed PPO entropy coefficient; defaults to `0.002`.
 
 The Stick/Melee profile ranks internal item IDs and numeric effects rather than
 localized screen text. It prioritizes Stick weapons plus melee/attack upgrades,
@@ -114,4 +122,34 @@ scorer only after collecting at least 200 valid item choices:
 
 ```powershell
 python -m v3.train_ui_build --dataset models/version_3/ui_decisions_stick_melee_v2.jsonl --output models/version_3/ui_build_base.pt
+```
+
+## Safe frozen collection and evaluation
+
+Do not continue updating a strong combat checkpoint merely to collect UI data.
+Run it deterministically with the geometric safety shield instead:
+
+```powershell
+.\collect_v3_safe.bat
+```
+
+This keeps the RecurrentPPO weights frozen, preserves LSTM state correctly,
+automates menus, records UI decisions and writes rich combat examples for the
+next combat base. For a bounded deterministic evaluation, run:
+
+```powershell
+python -m v3.run_frozen --model models/version_3/combat_peak_100883_agent.zip --episodes 10 --results models/version_3/eval_peak.json
+```
+
+The safety layer is intentionally disabled by default in `v3.train`: silently
+replacing PPO actions would make its on-policy updates mathematically invalid.
+Resumed PPO instead uses conservative defaults and saves the best rolling
+training checkpoint under `models/version_3/best`. Deterministic frozen
+evaluation remains the source of truth.
+
+After collecting at least 10,000 rich combat decisions, train the small
+behavior-cloning base:
+
+```powershell
+python -m v3.train_combat_bc --dataset models/version_3/combat_decisions_v1.jsonl --output models/version_3/combat_bc_base.pt
 ```
