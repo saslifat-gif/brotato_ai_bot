@@ -85,6 +85,9 @@ def test_mod_manifest_and_extension_are_packaged():
     assert (mod / "mod_main.gd").is_file()
     assert (mod / "bridge.gd").is_file()
     assert (mod / "extensions" / "main.gd").is_file()
+    main_extension = (mod / "extensions" / "main.gd").read_text(encoding="utf-8")
+    assert "func _on_enemy_died(enemy, death_data)" in main_extension
+    assert "._on_enemy_died(enemy, death_data)" in main_extension
     assert (
         mod
         / "extensions"
