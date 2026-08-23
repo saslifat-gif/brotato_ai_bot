@@ -111,7 +111,7 @@ class AutoUiController:
         sent_roles: list[str] = []
         confirmed_roles: list[str] = []
         no_action_states = 0
-        pending_phase_change: tuple[str, str, int] | None = None
+        pending_phase_change: tuple[str, str, int, str] | None = None
         while state.get("phase") != "combat":
             phase = str(state.get("phase", "menu"))
             ui = state.get("ui", {})
@@ -122,9 +122,19 @@ class AutoUiController:
                 and bool(last_result.get("ok"))
                 and bool(last_result.get("changed"))
             ) if pending_phase_change is not None else False
+            restart_stage_changed = (
+                pending_phase_change is not None
+                and pending_phase_change[1] == "restart"
+                and result_changed
+                and any(
+                    str(action.get("id", "")) != pending_phase_change[3]
+                    for action in available_actions(state, "restart")
+                )
+            )
             if pending_phase_change is not None and (
                 phase != pending_phase_change[0]
                 or (pending_phase_change[1] == "upgrade_choice" and result_changed)
+                or restart_stage_changed
             ):
                 print(
                     f"[v3-ui] confirmed role={pending_phase_change[1]} "
@@ -159,7 +169,12 @@ class AutoUiController:
                     f"name={action.get('name', '')} target={action.get('id')}"
                 )
                 if action.get("role") in {"upgrade_choice", "next_wave", "restart"}:
-                    pending_phase_change = (phase, str(action.get("role")), sequence)
+                    pending_phase_change = (
+                        phase,
+                        str(action.get("role")),
+                        sequence,
+                        str(action.get("id", "")),
+                    )
                 minimum_sequence = sequence
                 no_action_states = 0
             else:

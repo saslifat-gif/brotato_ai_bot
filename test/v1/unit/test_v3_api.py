@@ -249,12 +249,13 @@ def test_ui_automation_handles_multiple_upgrades_in_one_wave():
 
 
 def test_ui_automation_waits_for_slow_retry_scene_change():
-    restart_path = "/root/Main/UI/RetryWave/Menu/OkButton"
+    retry_ok_path = "/root/Main/UI/RetryWave/Menu/OkButton"
+    restart_path = "/root/EndRun/RestartButton"
     game_over = dict(_state(wave=3), phase="game_over", tick=10)
     game_over["ui"] = {
         "actions": [
             {
-                "id": restart_path,
+                "id": retry_ok_path,
                 "name": "OkButton",
                 "role": "restart",
                 "enabled": True,
@@ -262,19 +263,31 @@ def test_ui_automation_waits_for_slow_retry_scene_change():
         ],
         "last_result": {},
     }
+    end_run = dict(game_over, tick=11)
+    end_run["ui"] = {
+        "actions": [
+            {
+                "id": restart_path,
+                "name": "RestartButton",
+                "role": "restart",
+                "enabled": True,
+            }
+        ],
+        "last_result": {"sequence": 6, "ok": True, "changed": True},
+    }
     loading_states = []
-    for tick in range(11, 61):
+    for tick in range(12, 62):
         loading = dict(game_over, tick=tick)
         loading["ui"] = {
             "actions": [],
-            "last_result": {"sequence": 6, "ok": True, "changed": True},
+            "last_result": {"sequence": 7, "ok": True, "changed": True},
         }
         loading_states.append(loading)
-    combat = dict(_state(wave=3), tick=61)
+    combat = dict(_state(wave=3), tick=62)
 
     class FakeServer:
         def __init__(self):
-            self.states = iter([*loading_states, combat])
+            self.states = iter([end_run, *loading_states, combat])
             self.sent = []
 
         def send(self, message, timeout_sec):
@@ -291,9 +304,12 @@ def test_ui_automation_waits_for_slow_retry_scene_change():
         timeout_sec=30,
         allow_restart=True,
     )
-    assert [message["target"] for message in server.sent] == [restart_path]
+    assert [message["target"] for message in server.sent] == [
+        retry_ok_path,
+        restart_path,
+    ]
     assert result.state["phase"] == "combat"
-    assert result.confirmed_roles == ["restart"]
+    assert result.confirmed_roles == ["restart", "restart"]
 
 
 def test_ui_automation_advances_wave_end_shop_and_next_wave():
