@@ -35,7 +35,17 @@ func _ready() -> void:
 			return
 		_bridge = bridge_instance
 		_bridge.name = BRIDGE_NAME
-		root.add_child(_bridge)
+		call_deferred("_attach_bridge", root, _bridge)
+		return
+	ModLoaderLog.info("Bridge already ready on 127.0.0.1:4242", MOD_LOG)
+
+
+func _attach_bridge(root, bridge) -> void:
+	if not is_instance_valid(root) or not is_instance_valid(bridge):
+		ModLoaderLog.error("Bridge attachment target became invalid", MOD_LOG)
+		return
+	if bridge.get_parent() == null:
+		root.add_child(bridge)
 	ModLoaderLog.info("Bridge ready on 127.0.0.1:4242", MOD_LOG)
 
 

@@ -102,6 +102,7 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "var dead: bool =" in bridge
     assert "bridge_script.can_instance()" in mod_main
     assert "Bridge script failed to load" in mod_main
+    assert 'call_deferred("_attach_bridge", root, _bridge)' in mod_main
 
 
 def test_wait_for_state_accepts_low_tick_after_reconnect(monkeypatch):
