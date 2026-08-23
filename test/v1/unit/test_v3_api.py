@@ -248,6 +248,54 @@ def test_ui_automation_handles_multiple_upgrades_in_one_wave():
     ]
 
 
+def test_ui_automation_waits_for_slow_retry_scene_change():
+    restart_path = "/root/Main/UI/RetryWave/Menu/OkButton"
+    game_over = dict(_state(wave=3), phase="game_over", tick=10)
+    game_over["ui"] = {
+        "actions": [
+            {
+                "id": restart_path,
+                "name": "OkButton",
+                "role": "restart",
+                "enabled": True,
+            }
+        ],
+        "last_result": {},
+    }
+    loading_states = []
+    for tick in range(11, 61):
+        loading = dict(game_over, tick=tick)
+        loading["ui"] = {
+            "actions": [],
+            "last_result": {"sequence": 6, "ok": True, "changed": True},
+        }
+        loading_states.append(loading)
+    combat = dict(_state(wave=3), tick=61)
+
+    class FakeServer:
+        def __init__(self):
+            self.states = iter([*loading_states, combat])
+            self.sent = []
+
+        def send(self, message, timeout_sec):
+            self.sent.append(message)
+
+        def wait_for_state(self, **_kwargs):
+            return next(self.states)
+
+    server = FakeServer()
+    result = AutoUiController().advance(
+        server,
+        game_over,
+        sequence=5,
+        timeout_sec=30,
+        allow_restart=True,
+    )
+    assert [message["target"] for message in server.sent] == [restart_path]
+    assert result.state["phase"] == "combat"
+    assert result.confirmed_roles == ["restart"]
+
+
 def test_ui_automation_advances_wave_end_shop_and_next_wave():
     wave_end = dict(_state(wave=3), phase="wave_end", tick=10)
     shop = dict(_state(wave=3, materials=20), phase="shop", tick=11)

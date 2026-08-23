@@ -9,6 +9,9 @@ from typing import Any, Mapping
 from v3.bridge_server import BridgeServer
 from v3.protocol import ui_action_message
 
+MAX_NO_ACTION_STATES = 30
+MAX_TRANSITION_WAIT_STATES = 300
+
 
 def available_actions(state: Mapping[str, Any], role: str) -> list[dict[str, Any]]:
     ui = state.get("ui", {})
@@ -162,7 +165,19 @@ class AutoUiController:
             else:
                 minimum_sequence = None
                 no_action_states += 1
-                if phase not in {"wave_end", "menu"} and no_action_states >= 30:
+                if (
+                    pending_phase_change is not None
+                    and no_action_states >= MAX_TRANSITION_WAIT_STATES
+                ):
+                    raise RuntimeError(
+                        "UI transition did not complete "
+                        f"role={pending_phase_change[1]} phase={phase}"
+                    )
+                if (
+                    pending_phase_change is None
+                    and phase not in {"wave_end", "menu"}
+                    and no_action_states >= MAX_NO_ACTION_STATES
+                ):
                     raise RuntimeError(f"no safe UI action advertised for phase={phase}")
             state = server.wait_for_state(
                 timeout_sec=remaining,

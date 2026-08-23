@@ -61,6 +61,11 @@ def main() -> int:
         model.save(str(target))
         print(f"[v3-train] interrupted model saved={target}.zip")
         return 130
+    except Exception:
+        target = cfg.output_dir / "recovery_agent"
+        model.save(str(target))
+        print(f"[v3-train] error recovery model saved={target}.zip")
+        raise
     finally:
         env.close()
     target = cfg.output_dir / "final_agent"
