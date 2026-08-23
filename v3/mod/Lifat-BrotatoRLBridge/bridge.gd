@@ -221,7 +221,7 @@ func _build_state() -> Dictionary:
 	var run_won := bool(_property(main, "_is_run_won", false)) or bool(
 		_property(run_data, "run_won", false)
 	)
-	var dead := run_lost or (player != null and (
+	var dead: bool = run_lost or (player != null and (
 		bool(_property(player, "dead", false)) or health <= 0.0
 	))
 	var phase := _phase_for_scene(scene_name, player, main, dead, run_won)

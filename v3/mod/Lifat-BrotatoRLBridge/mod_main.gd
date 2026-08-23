@@ -22,10 +22,18 @@ func _ready() -> void:
 	var root := get_tree().get_root()
 	_bridge = root.get_node_or_null(BRIDGE_NAME)
 	if _bridge == null:
-		var bridge_script = load(
-			ModLoaderMod.get_unpacked_dir().plus_file(MOD_DIR_NAME).plus_file("bridge.gd")
-		)
-		_bridge = bridge_script.new()
+		var bridge_path = ModLoaderMod.get_unpacked_dir().plus_file(
+			MOD_DIR_NAME
+		).plus_file("bridge.gd")
+		var bridge_script = load(bridge_path)
+		if bridge_script == null or not bridge_script.can_instance():
+			ModLoaderLog.error("Bridge script failed to load: %s" % bridge_path, MOD_LOG)
+			return
+		var bridge_instance = bridge_script.new()
+		if bridge_instance == null or not (bridge_instance is Node):
+			ModLoaderLog.error("Bridge script did not create a Node", MOD_LOG)
+			return
+		_bridge = bridge_instance
 		_bridge.name = BRIDGE_NAME
 		root.add_child(_bridge)
 	ModLoaderLog.info("Bridge ready on 127.0.0.1:4242", MOD_LOG)

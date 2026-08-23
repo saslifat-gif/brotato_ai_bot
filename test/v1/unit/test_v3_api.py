@@ -95,6 +95,15 @@ def test_mod_manifest_and_extension_are_packaged():
     ).is_file()
 
 
+def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
+    mod = ROOT / "v3" / "mod" / MOD_DIR_NAME
+    bridge = (mod / "bridge.gd").read_text(encoding="utf-8")
+    mod_main = (mod / "mod_main.gd").read_text(encoding="utf-8")
+    assert "var dead: bool =" in bridge
+    assert "bridge_script.can_instance()" in mod_main
+    assert "Bridge script failed to load" in mod_main
+
+
 def test_wait_for_state_accepts_low_tick_after_reconnect(monkeypatch):
     server = BridgeServer()
     server._connection_generation = 1
