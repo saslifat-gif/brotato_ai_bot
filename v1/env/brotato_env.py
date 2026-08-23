@@ -365,9 +365,9 @@ class BrotatoEnv(gym.Env):
         self.state_score = 0.0
         self.runtime_phase = RuntimePhase.UNKNOWN
         self.phase_machine = RuntimeStateMachine(
-            non_battle_threshold=float(cfg.state_non_battle_min_score),
             hysteresis_sec=float(cfg.state_non_battle_hold_sec),
         )
+        self._last_state_trace_key = None
         self.raw_state = "unknown"
         self.raw_state_score = 0.0
         self.last_tpl_scores = {"go": 0.0, "choose": 0.0, "restart": 0.0}
@@ -905,13 +905,10 @@ class BrotatoEnv(gym.Env):
 
     def _script_menu_state(self, state_name: str, choose_tpl: float, restart_tpl: float) -> str:
         s = self._normalize_state_name(state_name)
-        # Non-shop/non-battle interfaces are script-driven.
+        # The RuntimeStateMachine has already required a visible anchor for
+        # every menu state. Do not re-open a classifier/template bypass here.
         if s in ("gameover", "item_pick", "upgrade"):
             return s
-        if restart_tpl >= 0.48:
-            return "gameover"
-        if choose_tpl >= 0.50:
-            return "upgrade"
         return ""
 
     def _infer_state_with_templates(self, frame: np.ndarray) -> Tuple[str, float, float, float, float]:
@@ -1699,6 +1696,18 @@ class BrotatoEnv(gym.Env):
             template_scores={"go": go_tpl, "choose": choose_tpl, "restart": restart_tpl},
         )
         self.runtime_phase = phase_obs.phase
+        # Use the gated phase as the single source of truth downstream. The
+        # raw classifier prediction remains available in raw_state for logs.
+        self.state_name = self.runtime_phase.value
+        trace_key = (str(self.raw_state), str(self.state_name), bool(phase_obs.anchor_confirmed))
+        if trace_key != self._last_state_trace_key:
+            self._last_state_trace_key = trace_key
+            print(
+                "[state] "
+                f"raw={self.raw_state}:{self.raw_state_score:.2f} "
+                f"phase={self.state_name} anchor={phase_obs.anchor_confirmed} "
+                f"go={go_tpl:.2f} choose={choose_tpl:.2f} restart={restart_tpl:.2f}"
+            )
         tpl_non_battle = max(go_tpl, choose_tpl, restart_tpl)
         if tpl_non_battle >= 0.62:
             self.non_battle_hold_until_ts = max(
@@ -1711,9 +1720,7 @@ class BrotatoEnv(gym.Env):
         # lower enter threshold and keep a short hold window to avoid
         # edge flicker where GO button is visible but state toggles.
         hard_non_shop = self.state_name in ("upgrade", "item_pick", "gameover", "restart", "game_over")
-        shop_signal = (go_tpl >= 0.48) or (
-            self.state_name == "shop" and float(self.state_score) >= min(0.52, float(self.cfg.state_shop_score))
-        )
+        shop_signal = self.runtime_phase == RuntimePhase.SHOP
         if hard_non_shop:
             self._shop_soft_until_ts = 0.0
             in_shop = False

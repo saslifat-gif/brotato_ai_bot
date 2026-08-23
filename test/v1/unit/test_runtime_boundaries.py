@@ -33,16 +33,26 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(seen, [(200, 230)])
 
     def test_phase_machine_prioritizes_menu_templates(self):
-        machine = RuntimeStateMachine(non_battle_threshold=0.62)
+        machine = RuntimeStateMachine(shop_anchor_threshold=0.62)
         obs = machine.observe("unknown", 0.1, {"go": 0.91, "choose": 0.2, "restart": 0.1})
         self.assertEqual(obs.phase, RuntimePhase.SHOP)
-        obs = machine.observe("restart", 0.8, {})
+        self.assertTrue(obs.anchor_confirmed)
+        obs = machine.observe("restart", 0.8, {"restart": 0.9})
         self.assertEqual(obs.phase, RuntimePhase.GAMEOVER)
+
+    def test_classifier_only_menu_prediction_is_not_clickable(self):
+        machine = RuntimeStateMachine()
+        obs = machine.observe("upgrade", 0.99, {"go": 0.1, "choose": 0.3, "restart": 0.2})
+        self.assertEqual(obs.phase, RuntimePhase.UNKNOWN)
+        self.assertFalse(obs.anchor_confirmed)
 
     def test_phase_machine_normalizes_battle_aliases(self):
         machine = RuntimeStateMachine()
         self.assertEqual(machine.observe("combat", 0.9).phase, RuntimePhase.BATTLE)
-        self.assertEqual(machine.observe("level-up", 0.9).phase, RuntimePhase.UPGRADE)
+        self.assertEqual(
+            machine.observe("level-up", 0.9, {"choose": 0.9}).phase,
+            RuntimePhase.UPGRADE,
+        )
 
 
 if __name__ == "__main__":

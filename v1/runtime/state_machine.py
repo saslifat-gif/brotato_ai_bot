@@ -27,6 +27,7 @@ class PhaseObservation:
     detector_state: str
     detector_score: float
     template_score: float
+    anchor_confirmed: bool
 
 
 class RuntimeStateMachine:
@@ -51,8 +52,16 @@ class RuntimeStateMachine:
         "defeat": RuntimePhase.GAMEOVER,
     }
 
-    def __init__(self, non_battle_threshold: float = 0.62, hysteresis_sec: float = 0.75):
-        self.non_battle_threshold = float(non_battle_threshold)
+    def __init__(
+        self,
+        shop_anchor_threshold: float = 0.72,
+        upgrade_anchor_threshold: float = 0.70,
+        gameover_anchor_threshold: float = 0.58,
+        hysteresis_sec: float = 0.75,
+    ):
+        self.shop_anchor_threshold = float(shop_anchor_threshold)
+        self.upgrade_anchor_threshold = float(upgrade_anchor_threshold)
+        self.gameover_anchor_threshold = float(gameover_anchor_threshold)
         self.hysteresis_sec = max(0.0, float(hysteresis_sec))
         self.phase = RuntimePhase.UNKNOWN
 
@@ -77,18 +86,33 @@ class RuntimeStateMachine:
     ) -> PhaseObservation:
         scores = template_scores or {}
         template_score = max((float(v) for v in scores.values()), default=0.0)
-        phase = self.normalize(detector_state)
-        if phase == RuntimePhase.UNKNOWN and template_score >= self.non_battle_threshold:
-            if float(scores.get("restart", 0.0)) >= self.non_battle_threshold:
-                phase = RuntimePhase.GAMEOVER
-            elif float(scores.get("choose", 0.0)) >= self.non_battle_threshold:
-                phase = RuntimePhase.UPGRADE
-            elif float(scores.get("go", 0.0)) >= self.non_battle_threshold:
-                phase = RuntimePhase.SHOP
+        detected = self.normalize(detector_state)
+        restart_hit = float(scores.get("restart", 0.0)) >= self.gameover_anchor_threshold
+        choose_hit = float(scores.get("choose", 0.0)) >= self.upgrade_anchor_threshold
+        go_hit = float(scores.get("go", 0.0)) >= self.shop_anchor_threshold
+
+        # Menu actions require their visible button anchor. A classifier-only
+        # menu prediction is unsafe because overlays and tooltips can resemble
+        # upgrade/shop screens while the player is actually dead.
+        anchor_confirmed = False
+        if restart_hit:
+            phase = RuntimePhase.GAMEOVER
+            anchor_confirmed = True
+        elif choose_hit:
+            phase = RuntimePhase.ITEM_PICK if detected == RuntimePhase.ITEM_PICK else RuntimePhase.UPGRADE
+            anchor_confirmed = True
+        elif go_hit:
+            phase = RuntimePhase.SHOP
+            anchor_confirmed = True
+        elif detected == RuntimePhase.BATTLE:
+            phase = RuntimePhase.BATTLE
+        else:
+            phase = RuntimePhase.UNKNOWN
         self.phase = phase
         return PhaseObservation(
             phase=phase,
             detector_state=str(detector_state or "unknown"),
             detector_score=float(detector_score),
             template_score=template_score,
+            anchor_confirmed=anchor_confirmed,
         )
