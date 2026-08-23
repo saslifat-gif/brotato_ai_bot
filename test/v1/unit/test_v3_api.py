@@ -124,6 +124,8 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '["gold", "materials"]' in bridge
     assert "func _collect_ui_actions(node, output: Array, phase: String)" in bridge
     assert "func _detect_visible_ui_phase(node)" in bridge
+    assert "func _ui_action_context(node)" in bridge
+    assert '"last_result": _last_ui_action_result' in bridge
     assert 'button_name == "choosebutton"' in bridge
     assert "visible_ui_phase" in bridge
     assert 'node.emit_signal("pressed")' in bridge
@@ -182,29 +184,68 @@ def test_ui_automation_only_uses_enabled_exact_targets():
     assert AutoUiController().choose(state)["id"] == "/root/Choice"
 
 
-def test_ui_automation_sends_only_one_upgrade_choice_until_phase_changes():
-    controller = AutoUiController()
-    state = dict(_state(wave=3), phase="upgrade")
-    state["ui"] = {
+def test_ui_automation_handles_multiple_upgrades_in_one_wave():
+    choice_path = "/root/Main/UI/UpgradesUI/UpgradeUI/ChooseButton"
+    go_path = "/root/Shop/GoButton"
+    upgrade = dict(_state(wave=3), phase="upgrade", tick=10)
+    upgrade["ui"] = {
         "actions": [
             {
-                "id": "/root/Main/UI/UpgradesUI/UpgradeUI/ChooseButton",
+                "id": choice_path,
                 "name": "ChooseButton",
                 "role": "upgrade_choice",
                 "enabled": True,
-            },
-            {
-                "id": "/root/Main/UI/UpgradesUI/UpgradeUI2/ChooseButton",
-                "name": "ChooseButton",
-                "role": "upgrade_choice",
-                "enabled": True,
-            },
-        ]
+            }
+        ],
+        "last_result": {},
     }
-    choice = controller.choose(state)
-    assert choice["id"].endswith("UpgradeUI/ChooseButton")
-    controller.mark_sent(state, choice)
-    assert controller.choose(state) is None
+    second_upgrade = dict(upgrade, tick=11)
+    second_upgrade["ui"] = {
+        **upgrade["ui"],
+        "last_result": {"sequence": 6, "ok": True, "changed": True},
+    }
+    shop = dict(_state(wave=3), phase="shop", tick=12)
+    shop["ui"] = {
+        "actions": [
+            {
+                "id": go_path,
+                "name": "GoButton",
+                "role": "next_wave",
+                "enabled": True,
+            }
+        ],
+        "last_result": {"sequence": 7, "ok": True, "changed": True},
+    }
+    combat = dict(_state(wave=4), tick=13)
+
+    class FakeServer:
+        def __init__(self):
+            self.states = iter([second_upgrade, shop, combat])
+            self.sent = []
+
+        def send(self, message, timeout_sec):
+            self.sent.append(message)
+
+        def wait_for_state(self, **_kwargs):
+            return next(self.states)
+
+    server = FakeServer()
+    result = AutoUiController(max_shop_buys=0, max_shop_rerolls=0).advance(
+        server,
+        upgrade,
+        sequence=5,
+        timeout_sec=5,
+    )
+    assert [message["target"] for message in server.sent] == [
+        choice_path,
+        choice_path,
+        go_path,
+    ]
+    assert result.confirmed_roles == [
+        "upgrade_choice",
+        "upgrade_choice",
+        "next_wave",
+    ]
 
 
 def test_ui_automation_advances_wave_end_shop_and_next_wave():

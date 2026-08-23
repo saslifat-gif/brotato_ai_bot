@@ -40,14 +40,12 @@ class AutoUiController:
         self._shop_buys = 0
         self._shop_rerolls = 0
         self._attempted: set[tuple[str, int]] = set()
-        self._upgrade_attempted_waves: set[int] = set()
 
     def reset_episode(self) -> None:
         self._shop_wave = None
         self._shop_buys = 0
         self._shop_rerolls = 0
         self._attempted.clear()
-        self._upgrade_attempted_waves.clear()
 
     def _enter_shop(self, state: Mapping[str, Any]) -> None:
         wave = state.get("wave", {})
@@ -63,9 +61,6 @@ class AutoUiController:
         phase = str(state.get("phase", "menu"))
         if phase == "upgrade":
             choices = available_actions(state, "upgrade_choice")
-            wave = int(state.get("wave", {}).get("number", -1))
-            if wave in self._upgrade_attempted_waves:
-                return None
             return choices[0] if choices else None
         if phase == "shop":
             self._enter_shop(state)
@@ -91,10 +86,7 @@ class AutoUiController:
 
     def mark_sent(self, state: Mapping[str, Any], action: Mapping[str, Any]) -> None:
         role = str(action.get("role", ""))
-        if role == "upgrade_choice":
-            wave = int(state.get("wave", {}).get("number", -1))
-            self._upgrade_attempted_waves.add(wave)
-        elif role == "buy":
+        if role == "buy":
             materials = int(state.get("counters", {}).get("materials", 0))
             self._attempted.add((str(action.get("id", "")), materials))
             self._shop_buys += 1
@@ -116,13 +108,25 @@ class AutoUiController:
         sent_roles: list[str] = []
         confirmed_roles: list[str] = []
         no_action_states = 0
-        pending_phase_change: tuple[str, str] | None = None
+        pending_phase_change: tuple[str, str, int] | None = None
         while state.get("phase") != "combat":
             phase = str(state.get("phase", "menu"))
-            if pending_phase_change is not None and phase != pending_phase_change[0]:
+            ui = state.get("ui", {})
+            last_result = ui.get("last_result", {}) if isinstance(ui, Mapping) else {}
+            result_changed = (
+                isinstance(last_result, Mapping)
+                and int(last_result.get("sequence", -1)) == pending_phase_change[2]
+                and bool(last_result.get("ok"))
+                and bool(last_result.get("changed"))
+            ) if pending_phase_change is not None else False
+            if pending_phase_change is not None and (
+                phase != pending_phase_change[0]
+                or (pending_phase_change[1] == "upgrade_choice" and result_changed)
+            ):
                 print(
                     f"[v3-ui] confirmed role={pending_phase_change[1]} "
-                    f"phase={pending_phase_change[0]}->{phase}"
+                    f"phase={pending_phase_change[0]}->{phase} "
+                    f"ui_changed={result_changed}"
                 )
                 confirmed_roles.append(pending_phase_change[1])
                 pending_phase_change = None
@@ -152,7 +156,7 @@ class AutoUiController:
                     f"name={action.get('name', '')} target={action.get('id')}"
                 )
                 if action.get("role") in {"upgrade_choice", "next_wave", "restart"}:
-                    pending_phase_change = (phase, str(action.get("role")))
+                    pending_phase_change = (phase, str(action.get("role")), sequence)
                 minimum_sequence = sequence
                 no_action_states = 0
             else:

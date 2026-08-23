@@ -28,6 +28,7 @@ var _last_wave_number := -1
 var _reset_kills_on_combat := false
 var _observed_player = null
 var _logged_player_probe := false
+var _last_ui_action_result := {}
 
 
 func _ready() -> void:
@@ -200,28 +201,43 @@ func _activate_ui_action(target: String, sequence: int) -> void:
 	var scene = get_tree().current_scene
 	var node = root.get_node_or_null(NodePath(target))
 	if node == null or not (node is BaseButton):
-		_send_ui_result(sequence, target, false, "target_not_button")
+		_send_ui_result(sequence, target, false, "target_not_button", false)
 		return
 	if scene == null or (node != scene and not scene.is_a_parent_of(node)):
-		_send_ui_result(sequence, target, false, "target_outside_scene")
+		_send_ui_result(sequence, target, false, "target_outside_scene", false)
 		return
 	if bool(_property(node, "disabled", false)) or not node.is_visible_in_tree():
-		_send_ui_result(sequence, target, false, "target_unavailable")
+		_send_ui_result(sequence, target, false, "target_unavailable", false)
 		return
+	var before_context := _ui_action_context(node)
 	node.emit_signal("pressed")
-	_send_ui_result(sequence, target, true, "")
+	var after_node = root.get_node_or_null(NodePath(target))
+	var changed := after_node == null or not is_instance_valid(after_node)
+	if not changed:
+		changed = not after_node.is_visible_in_tree()
+	if not changed and not before_context.empty():
+		changed = before_context != _ui_action_context(after_node)
+	_send_ui_result(sequence, target, true, "", changed)
 	_state_elapsed = STATE_INTERVAL_SEC
 
 
-func _send_ui_result(sequence: int, target: String, ok: bool, error: String) -> void:
-	_send({
+func _send_ui_result(
+	sequence: int,
+	target: String,
+	ok: bool,
+	error: String,
+	changed: bool
+) -> void:
+	_last_ui_action_result = {
 		"type": "event",
 		"event": "ui_action_result",
 		"sequence": sequence,
 		"target": target,
 		"ok": ok,
-		"error": error
-	})
+		"error": error,
+		"changed": changed
+	}
+	_send(_last_ui_action_result)
 
 
 func _publish_state() -> void:
@@ -333,7 +349,10 @@ func _build_state() -> Dictionary:
 		"enemies": enemies,
 		"projectiles": projectiles,
 		"pickups": pickups,
-		"ui": {"actions": ui_actions},
+		"ui": {
+			"actions": ui_actions,
+			"last_result": _last_ui_action_result
+		},
 		"dead": dead,
 		"victory": run_won
 	}
@@ -389,6 +408,32 @@ func _ui_role(node, phase: String, text: String) -> String:
 	if token.find("start") >= 0 or token.find("开始") >= 0:
 		return "start"
 	return "other"
+
+
+func _ui_action_context(node) -> String:
+	var cursor = node
+	var level_value = null
+	var upgrade_data = null
+	var depth := 0
+	while cursor != null and depth < 16:
+		if level_value == null:
+			level_value = _property(cursor, "_level", null)
+		if upgrade_data == null:
+			upgrade_data = _property(cursor, "upgrade_data", null)
+		cursor = cursor.get_parent()
+		depth += 1
+	if level_value == null and upgrade_data == null:
+		return ""
+	var upgrade_id := ""
+	var tier := -1
+	if upgrade_data != null:
+		upgrade_id = str(_first_property(
+			upgrade_data,
+			["my_id", "id", "name"],
+			_property(upgrade_data, "resource_path", "")
+		))
+		tier = int(_property(upgrade_data, "tier", -1))
+	return "%s|%s|%d" % [str(level_value), upgrade_id, tier]
 
 
 func _detect_visible_ui_phase(node) -> String:
