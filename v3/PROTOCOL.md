@@ -24,7 +24,7 @@ Trainer to game:
   restart action. It remains safe when no restart action is visible.
 
 Movement actions are idle, up, down, left, right, up-left, up-right,
-down-left and down-right. Combat runs in real time at up to 15 structured
+down-left and down-right. Combat runs in real time at up to 24 structured
 observations per second. An action expires after 1.5 seconds without a trainer
 update, and normal human input is restored immediately after expiry or a
 disconnect. The trainer resends its last action after a reconnect and accepts

@@ -14,7 +14,7 @@ the archived standalone Brotato-ModLoader package.
 The first adapter trains combat movement from exact player, enemy, projectile,
 pickup, wave and arena state. Normal keyboard control is restored whenever the
 trainer disconnects or stops sending actions for 1.5 seconds. Combat remains
-real-time at up to 15 structured observations per second; global scene pauses
+real-time at up to 24 structured observations per second; global scene pauses
 are deliberately avoided because they can interrupt Brotato's wave-cleanup
 signals.
 
