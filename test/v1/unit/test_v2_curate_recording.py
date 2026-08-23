@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 from v2.curate_recording import frame_change_score, next_distinct_index
+from v2.record_gameplay import visual_change_score
 
 
 def _write_frame(path: Path, value: int) -> None:
@@ -30,3 +31,11 @@ def test_next_distinct_index_skips_static_samples(tmp_path: Path):
 
     assert index == 2
     assert skipped == 1
+
+
+def test_visual_change_score_detects_motion():
+    first = np.zeros((36, 64, 3), dtype=np.uint8)
+    second = np.full((36, 64, 3), 255, dtype=np.uint8)
+
+    assert visual_change_score(first, first.copy()) == 0.0
+    assert visual_change_score(first, second) > 200.0

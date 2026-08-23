@@ -1,7 +1,6 @@
 """Live visual validation for custom v2 detector weights."""
 
 import argparse
-import ctypes
 import time
 
 import cv2
@@ -9,7 +8,7 @@ import cv2
 from v1.runtime.capture import create_camera
 from v2.config import load_config
 from v2.perception.yolo_detector import YoloDetector
-from v2.runtime.window import client_screen_rect, find_game_window
+from v2.runtime.window import client_screen_rect, find_game_window, monitor_for_region
 
 
 def main() -> int:
@@ -26,8 +25,15 @@ def main() -> int:
     )
     hwnd = find_game_window(cfg.window_title)
     region = client_screen_rect(hwnd)
-    camera = create_camera(cfg.capture_backend, region, target_fps=60)
-    print(f"[v2-validate] task={args.task} weights={weights}; press F8 or Esc to stop")
+    monitor_index, monitor_origin = monitor_for_region(region)
+    camera = create_camera(
+        cfg.capture_backend,
+        region,
+        monitor_index=monitor_index,
+        monitor_origin=monitor_origin,
+        target_fps=60,
+    )
+    print(f"[v2-validate] task={args.task} weights={weights}; focus preview and press Esc to stop")
     try:
         while True:
             started = time.perf_counter()
@@ -47,7 +53,7 @@ def main() -> int:
             cv2.putText(canvas, f"{args.task} {fps:.1f} FPS", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow("Brotato v2 Detector Validation", canvas)
             key = cv2.waitKey(1) & 0xFF
-            if key == 27 or bool(ctypes.windll.user32.GetAsyncKeyState(0x77) & 0x8000):
+            if key == 27:
                 break
     finally:
         camera.stop()
@@ -57,4 +63,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

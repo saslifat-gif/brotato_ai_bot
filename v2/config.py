@@ -37,7 +37,7 @@ def load_config() -> V2Config:
         ui_weights = (root / ui_weights).resolve()
     return V2Config(
         window_title=os.environ.get("BROTATO_WINDOW_TITLE", "Brotato"),
-        capture_backend=os.environ.get("BROTATO_CAPTURE_BACKEND", "mss").strip().lower(),
+        capture_backend=os.environ.get("BROTATO_CAPTURE_BACKEND", "windows-capture").strip().lower(),
         combat_weights=combat_weights,
         ui_weights=ui_weights,
         detector_device=os.environ.get("BROTATO_V2_DEVICE", "cpu"),

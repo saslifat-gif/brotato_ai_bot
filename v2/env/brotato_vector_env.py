@@ -12,7 +12,7 @@ from v2.config import V2Config
 from v2.perception.vectorizer import CombatStateVectorizer
 from v2.perception.yolo_detector import YoloDetector
 from v2.runtime.ui_controller import UiAction, UiController
-from v2.runtime.window import client_screen_rect, find_game_window
+from v2.runtime.window import client_screen_rect, find_game_window, monitor_for_region
 
 
 class BrotatoVectorEnv(gym.Env):
@@ -36,7 +36,14 @@ class BrotatoVectorEnv(gym.Env):
         self.cfg = cfg
         self.hwnd = find_game_window(cfg.window_title)
         self.region = client_screen_rect(self.hwnd)
-        self.camera = create_camera(cfg.capture_backend, self.region, target_fps=60)
+        monitor_index, monitor_origin = monitor_for_region(self.region)
+        self.camera = create_camera(
+            cfg.capture_backend,
+            self.region,
+            monitor_index=monitor_index,
+            monitor_origin=monitor_origin,
+            target_fps=60,
+        )
         self.input = InputDriver(self.hwnd, input_mode="physical_foreground", move_physical=True)
         self.combat_detector = YoloDetector(
             str(cfg.combat_weights),

@@ -26,6 +26,10 @@ frames per second plus the human WASD action under `datasets/v2/raw/session_*`.
 Start it while a battle is ready to play and play normally. To stop safely,
 Alt+Tab to the recorder console and press `Q` or `Enter`. There is no global
 stop hotkey, so the stop command cannot also trigger an action inside Brotato.
+V2 uses Windows Graphics Capture by default because it produces fresh frames
+for the game on the primary monitor. At the end, `visual_change_ratio` should
+be well above zero. If the recorder reports that capture appears frozen, do
+not label that session.
 
 Curate the recording before labeling:
 

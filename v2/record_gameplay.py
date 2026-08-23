@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 try:
     import msvcrt
@@ -18,7 +19,7 @@ except ImportError:  # pragma: no cover - the recorder itself is Windows-only
 from v1.runtime.capture import create_camera
 from v1.runtime.input_driver import InputDriver
 from v2.config import load_config
-from v2.runtime.window import client_screen_rect, find_game_window
+from v2.runtime.window import client_screen_rect, find_game_window, monitor_for_region
 
 
 VK = {"w": 0x57, "a": 0x41, "s": 0x53, "d": 0x44}
@@ -52,6 +53,15 @@ def console_stop_requested() -> bool:
     return key in {"q", "Q", "\r", "\n"}
 
 
+def visual_change_score(first: np.ndarray, second: np.ndarray) -> float:
+    """Measure frame-to-frame motion on a small grayscale preview."""
+    def preview(frame: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        return cv2.resize(gray, (64, 36), interpolation=cv2.INTER_AREA)
+
+    return float(np.mean(cv2.absdiff(preview(first), preview(second))))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record Brotato gameplay for v2 perception/imitation data")
     parser.add_argument("--fps", type=float, default=10.0)
@@ -63,7 +73,14 @@ def main() -> int:
     cfg = load_config()
     hwnd = find_game_window(cfg.window_title)
     region = client_screen_rect(hwnd)
-    camera = create_camera(cfg.capture_backend, region, target_fps=max(30, int(args.fps * 2)))
+    monitor_index, monitor_origin = monitor_for_region(region)
+    camera = create_camera(
+        cfg.capture_backend,
+        region,
+        monitor_index=monitor_index,
+        monitor_origin=monitor_origin,
+        target_fps=max(30, int(args.fps * 2)),
+    )
 
     root = Path(args.output).resolve() / datetime.now().strftime("session_%Y%m%d_%H%M%S")
     frames_dir = root / "frames"
@@ -73,7 +90,11 @@ def main() -> int:
     quality = int(max(50, min(100, args.jpeg_quality)))
 
     print(f"[record] output={root}")
-    print(f"[record] region={region} fps={args.fps:.1f}")
+    backend_name = str(getattr(camera, "backend_name", cfg.capture_backend))
+    print(
+        f"[record] region={region} monitor={monitor_index} "
+        f"backend={backend_name} fps={args.fps:.1f}"
+    )
     focused = InputDriver(hwnd, input_mode="physical_foreground").focus_game()
     print(f"[record] game focus={'ok' if focused else 'not confirmed'}")
     for remaining in range(max(0, int(args.countdown)), 0, -1):
@@ -82,6 +103,9 @@ def main() -> int:
     print("[record] recording; to stop, Alt+Tab here and press Q or Enter")
     started = time.time()
     frame_id = 0
+    previous_frame = None
+    compared_frames = 0
+    changed_frames = 0
     try:
         with actions_path.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(
@@ -93,6 +117,11 @@ def main() -> int:
                 tick = time.perf_counter()
                 frame = camera.get_latest_frame()
                 if frame is not None and frame.size > 0:
+                    if previous_frame is not None:
+                        compared_frames += 1
+                        if visual_change_score(previous_frame, frame) >= 0.5:
+                            changed_frames += 1
+                    previous_frame = frame
                     action, keys = current_action()
                     image_name = f"frame_{frame_id:08d}.jpg"
                     cv2.imwrite(
@@ -120,12 +149,18 @@ def main() -> int:
         metadata = {
             "window_title": cfg.window_title,
             "region": region,
+            "monitor_index": monitor_index,
+            "capture_backend": backend_name,
             "fps": float(args.fps),
             "frames": frame_id,
             "duration_sec": time.time() - started,
+            "visual_change_ratio": changed_frames / max(1, compared_frames),
         }
         (root / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    print(f"[record] saved frames={frame_id} actions={actions_path}")
+    change_ratio = changed_frames / max(1, compared_frames)
+    print(f"[record] saved frames={frame_id} visual_change_ratio={change_ratio:.3f} actions={actions_path}")
+    if compared_frames >= 20 and change_ratio < 0.02:
+        print("[record] WARNING: capture appears frozen; do not label this session")
     return 0
 
 

@@ -1,7 +1,7 @@
 """Minimal Win32 game-window discovery used by recording and training."""
 
 import ctypes
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from v1.runtime.input_driver import POINT, RECT, enable_process_dpi_awareness
 
@@ -54,3 +54,28 @@ def client_screen_rect(hwnd: int) -> Tuple[int, int, int, int]:
     if not ctypes.windll.user32.ClientToScreen(int(hwnd), ctypes.byref(bottom_right)):
         raise RuntimeError("ClientToScreen(bottom-right) failed")
     return int(top_left.x), int(top_left.y), int(bottom_right.x), int(bottom_right.y)
+
+
+def monitor_for_region(region: Tuple[int, int, int, int]) -> Tuple[int, Tuple[int, int]]:
+    """Resolve a screen rectangle to the monitor index/origin capture expects."""
+    monitors: List[RECT] = []
+
+    def visit(_hmonitor, _hdc, rect_ptr, _data):
+        monitors.append(rect_ptr.contents)
+        return True
+
+    enum_proc = ctypes.WINFUNCTYPE(
+        ctypes.c_bool,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(RECT),
+        ctypes.c_long,
+    )
+    ctypes.windll.user32.EnumDisplayMonitors(None, None, enum_proc(visit), 0)
+    left, top, right, bottom = region
+    center_x = (int(left) + int(right)) // 2
+    center_y = (int(top) + int(bottom)) // 2
+    for index, monitor in enumerate(monitors):
+        if monitor.left <= center_x < monitor.right and monitor.top <= center_y < monitor.bottom:
+            return index, (int(monitor.left), int(monitor.top))
+    return 0, (0, 0)
