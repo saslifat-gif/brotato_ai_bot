@@ -1,15 +1,20 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.2.1"
+const MOD_VERSION := "0.2.2"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
 const ACTION_STALE_MS := 1500
-const STATE_INTERVAL_SEC := 1.0 / 24.0
-const MAX_ENEMIES := 128
-const MAX_PROJECTILES := 128
-const MAX_PICKUPS := 64
+const EARLY_STATE_INTERVAL_SEC := 1.0 / 24.0
+const MID_STATE_INTERVAL_SEC := 1.0 / 16.0
+const LATE_STATE_INTERVAL_SEC := 1.0 / 12.0
+# The rich policy consumes at most 20 enemies, 20 projectiles and 8 pickups.
+# Keep generous headroom without reflecting and serializing hundreds of nodes
+# on Godot's main thread every frame in dense late waves.
+const MAX_ENEMIES := 64
+const MAX_PROJECTILES := 64
+const MAX_PICKUPS := 32
 const MAX_UI_ACTIONS := 64
 const MAX_BUILD_ITEMS := 128
 const BUILD_STAT_KEYS := [
@@ -65,9 +70,20 @@ func _process(delta: float) -> void:
 		return
 	_read_messages()
 	_state_elapsed += delta
-	if _state_elapsed >= STATE_INTERVAL_SEC:
+	if _state_elapsed >= _state_interval_sec():
 		_state_elapsed = 0.0
 		_publish_state()
+
+
+func _state_interval_sec() -> float:
+	# Combat actions remain active between observations. Human demonstrations are
+	# sampled at 8 Hz, so lowering only the structured state rate in dense waves
+	# preserves control while leaving substantially more time for the game.
+	if _last_wave_number >= 10:
+		return LATE_STATE_INTERVAL_SEC
+	if _last_wave_number >= 6:
+		return MID_STATE_INTERVAL_SEC
+	return EARLY_STATE_INTERVAL_SEC
 
 
 func _poll_connection() -> void:
@@ -235,7 +251,7 @@ func _activate_ui_action(target: String, sequence: int) -> void:
 		return
 	node.emit_signal("pressed")
 	_send_ui_result(sequence, target, true, "")
-	_state_elapsed = STATE_INTERVAL_SEC
+	_state_elapsed = _state_interval_sec()
 
 
 func _send_ui_result(sequence: int, target: String, ok: bool, error: String) -> void:

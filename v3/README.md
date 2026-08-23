@@ -14,9 +14,11 @@ the archived standalone Brotato-ModLoader package.
 The first adapter trains combat movement from exact player, enemy, projectile,
 pickup, wave and arena state. Normal keyboard control is restored whenever the
 trainer disconnects or stops sending actions for 1.5 seconds. Combat remains
-real-time at up to 24 structured observations per second; global scene pauses
-are deliberately avoided because they can interrupt Brotato's wave-cleanup
-signals.
+real-time at up to 24 structured observations per second. The bridge adapts to
+16 observations per second from wave 6 and 12 from wave 10, leaving the game
+more frame time when enemy and projectile counts become dense. Actions remain
+active between observations. Global scene pauses are deliberately avoided
+because they can interrupt Brotato's wave-cleanup signals.
 
 The adapter advertises visible, enabled game UI actions through the structured
 API. Training automatically chooses an upgrade, makes a bounded number of shop
@@ -36,7 +38,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.2.1.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.2.2.zip
 ```
 
 It also keeps an editable diagnostic copy under

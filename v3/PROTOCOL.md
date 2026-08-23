@@ -34,7 +34,9 @@ Trainer to game:
 
 Movement actions are idle, up, down, left, right, up-left, up-right,
 down-left and down-right. Combat runs in real time at up to 24 structured
-observations per second. An action expires after 1.5 seconds without a trainer
-update, and normal human input is restored immediately after expiry or a
-disconnect. The trainer resends its last action after a reconnect and accepts
-a new low tick value when Brotato itself has restarted.
+observations per second, adapting to 16 from wave 6 and 12 from wave 10 to
+protect late-wave game frame time. An action remains active between state
+updates and expires after 1.5 seconds without a trainer update. Normal human
+input is restored immediately after expiry or a disconnect. The trainer
+resends its last action after a reconnect and accepts a new low tick value when
+Brotato itself has restarted.

@@ -289,7 +289,13 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert 'node.emit_signal("pressed")' in bridge
     assert 'str(node.name).to_lower() == "gobutton"' in bridge
     assert '"realtime_control"' in bridge
-    assert "const STATE_INTERVAL_SEC := 1.0 / 24.0" in bridge
+    assert "const EARLY_STATE_INTERVAL_SEC := 1.0 / 24.0" in bridge
+    assert "const MID_STATE_INTERVAL_SEC := 1.0 / 16.0" in bridge
+    assert "const LATE_STATE_INTERVAL_SEC := 1.0 / 12.0" in bridge
+    assert "const MAX_ENEMIES := 64" in bridge
+    assert "const MAX_PROJECTILES := 64" in bridge
+    assert "const MAX_PICKUPS := 32" in bridge
+    assert "func _state_interval_sec() -> float:" in bridge
     assert "set_pause(true)" not in bridge
     assert 'if lower == "main":' in bridge
     assert "main_extension" not in mod_main
@@ -789,7 +795,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.2.1.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.2.2.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())
