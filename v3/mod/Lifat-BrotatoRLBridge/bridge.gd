@@ -26,6 +26,8 @@ var _session_id := "%d-%d" % [OS.get_unix_time(), OS.get_ticks_msec()]
 var _kills_this_wave := 0
 var _last_wave_number := -1
 var _reset_kills_on_combat := false
+var _observed_player = null
+var _logged_player_probe := false
 
 
 func _ready() -> void:
@@ -156,6 +158,22 @@ func get_movement() -> Vector2:
 			return Vector2.ZERO
 
 
+func observe_movement_behavior(behavior) -> void:
+	# This hook runs from the movement behavior owned by the live player. It is
+	# more reliable than version-specific Main/TempStats fields, especially in
+	# newer co-op-capable builds.
+	if behavior == null:
+		return
+	var candidate = _property(behavior, "player", null)
+	if candidate == null:
+		candidate = behavior.get_parent()
+	while candidate != null:
+		if _property(candidate, "current_stats", null) != null:
+			_observed_player = candidate
+			return
+		candidate = candidate.get_parent()
+
+
 func record_enemy_death() -> void:
 	_kills_this_wave += 1
 
@@ -191,6 +209,9 @@ func _build_state() -> Dictionary:
 	var player = _find_player(root, main)
 	if player != null and not is_instance_valid(player):
 		player = null
+	if player == null and scene_name.to_lower() == "main" and not _logged_player_probe:
+		_logged_player_probe = true
+		_log_player_probe(root, main)
 	var player_state := _player_state(player)
 	var enemies := []
 	var projectiles := []
@@ -288,18 +309,77 @@ func _phase_for_scene(
 
 
 func _find_player(root, main):
+	if _observed_player != null and is_instance_valid(_observed_player):
+		return _observed_player
 	# Brotato 1.1.x exposes the live player through the TempStats singleton.
 	# TempStats is an AutoLoad singleton, not a child named "TempStats" under
 	# the current scene root. Access it directly, as Brotato and Brotils do.
 	var player = TempStats.player
+	if player == null:
+		var temp_players = _first_property(TempStats, ["players", "player_nodes"], [])
+		if typeof(temp_players) == TYPE_ARRAY and not temp_players.empty():
+			player = temp_players[0]
 	# Keep the Main fallbacks for older game builds.
 	if player == null:
-		player = _property(main, "_player", null)
+		player = _first_property(main, ["_player", "player"], null)
 	if player == null:
-		player = _property(main, "player", null)
+		var main_players = _first_property(main, ["_players", "players"], [])
+		if typeof(main_players) == TYPE_ARRAY and not main_players.empty():
+			player = main_players[0]
 	if player == null and main != null:
 		player = main.get_node_or_null("Player")
+	if player == null:
+		for group_name in ["player", "players"]:
+			var grouped = get_tree().get_nodes_in_group(group_name)
+			if not grouped.empty():
+				player = grouped[0]
+				break
+	if player == null:
+		player = _find_player_descendant(main)
 	return player
+
+
+func _find_player_descendant(node):
+	if node == null:
+		return null
+	for child in node.get_children():
+		var script_path := ""
+		var script = child.get_script()
+		if script != null:
+			script_path = str(script.resource_path).to_lower()
+		var looks_like_player := str(child.name).to_lower().find("player") >= 0
+		looks_like_player = looks_like_player or script_path.find("/player/") >= 0
+		looks_like_player = looks_like_player or script_path.ends_with("/player.gd")
+		if looks_like_player and _property(child, "current_stats", null) != null:
+			return child
+		var nested = _find_player_descendant(child)
+		if nested != null:
+			return nested
+	return null
+
+
+func _log_player_probe(root, main) -> void:
+	var root_names := []
+	for child in root.get_children():
+		root_names.append(str(child.name))
+	print("[BrotatoRLBridge] player lookup pending; root_children=%s" % [root_names])
+	print("[BrotatoRLBridge] TempStats player fields=%s" % [
+		_matching_property_names(TempStats, "player")
+	])
+	print("[BrotatoRLBridge] Main player fields=%s" % [
+		_matching_property_names(main, "player")
+	])
+
+
+func _matching_property_names(object, needle: String) -> Array:
+	var matches := []
+	if object == null:
+		return matches
+	for descriptor in object.get_property_list():
+		var property_name := str(descriptor.get("name", ""))
+		if property_name.to_lower().find(needle) >= 0:
+			matches.append(property_name)
+	return matches
 
 
 func _player_state(player) -> Dictionary:
@@ -312,11 +392,19 @@ func _player_state(player) -> Dictionary:
 		}
 	var current_stats = _property(player, "current_stats", null)
 	var max_stats = _property(player, "max_stats", null)
+	var health = _first_property(current_stats, ["health", "current_health", "hp"], null)
+	if health == null:
+		health = _first_property(player, ["health", "current_health", "hp"], 0.0)
+	var max_health = _first_property(max_stats, ["health", "max_health", "hp"], null)
+	if max_health == null:
+		max_health = _first_property(current_stats, ["max_health", "health_max"], null)
+	if max_health == null:
+		max_health = _first_property(player, ["max_health", "health_max", "max_hp"], 1.0)
 	return {
 		"position": _vector_json(_property(player, "position", Vector2.ZERO)),
 		"velocity": _vector_json(_property(player, "linear_velocity", Vector2.ZERO)),
-		"health": float(_property(current_stats, "health", 0.0)),
-		"max_health": max(1.0, float(_property(max_stats, "health", 1.0)))
+		"health": float(health),
+		"max_health": max(1.0, float(max_health))
 	}
 
 

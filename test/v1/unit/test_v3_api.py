@@ -104,10 +104,21 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     mod_main = (mod / "mod_main.gd").read_text(encoding="utf-8")
     assert "var dead: bool =" in bridge
     assert "var player = TempStats.player" in bridge
+    assert "func observe_movement_behavior(behavior)" in bridge
+    assert "_find_player_descendant(main)" in bridge
     assert 'if lower == "main":' in bridge
     assert "bridge_script.can_instance()" in mod_main
     assert "Bridge script failed to load" in mod_main
     assert 'call_deferred("_attach_bridge", root, _bridge)' in mod_main
+    movement_extension = (
+        mod
+        / "extensions"
+        / "entities"
+        / "units"
+        / "movement_behaviors"
+        / "player_movement_behavior.gd"
+    ).read_text(encoding="utf-8")
+    assert "bridge.observe_movement_behavior(self)" in movement_extension
 
 
 def test_wait_for_state_accepts_low_tick_after_reconnect(monkeypatch):
