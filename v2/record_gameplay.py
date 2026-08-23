@@ -10,12 +10,18 @@ from pathlib import Path
 
 import cv2
 
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - the recorder itself is Windows-only
+    msvcrt = None
+
 from v1.runtime.capture import create_camera
+from v1.runtime.input_driver import InputDriver
 from v2.config import load_config
 from v2.runtime.window import client_screen_rect, find_game_window
 
 
-VK = {"w": 0x57, "a": 0x41, "s": 0x53, "d": 0x44, "stop": 0x77}
+VK = {"w": 0x57, "a": 0x41, "s": 0x53, "d": 0x44}
 ACTION_FOR_KEYS = {
     frozenset(): 0,
     frozenset({"w"}): 1,
@@ -38,11 +44,20 @@ def current_action() -> tuple[int, str]:
     return ACTION_FOR_KEYS.get(keys, 0), "+".join(sorted(keys))
 
 
+def console_stop_requested() -> bool:
+    """Stop only from the focused recorder console, never from inside the game."""
+    if msvcrt is None or not msvcrt.kbhit():
+        return False
+    key = msvcrt.getwch()
+    return key in {"q", "Q", "\r", "\n"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record Brotato gameplay for v2 perception/imitation data")
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--jpeg-quality", type=int, default=92)
     parser.add_argument("--output", default="datasets/v2/raw")
+    parser.add_argument("--countdown", type=int, default=3)
     args = parser.parse_args()
 
     cfg = load_config()
@@ -58,7 +73,13 @@ def main() -> int:
     quality = int(max(50, min(100, args.jpeg_quality)))
 
     print(f"[record] output={root}")
-    print(f"[record] region={region} fps={args.fps:.1f}; press F8 to stop")
+    print(f"[record] region={region} fps={args.fps:.1f}")
+    focused = InputDriver(hwnd, input_mode="physical_foreground").focus_game()
+    print(f"[record] game focus={'ok' if focused else 'not confirmed'}")
+    for remaining in range(max(0, int(args.countdown)), 0, -1):
+        print(f"[record] begins in {remaining}...")
+        time.sleep(1.0)
+    print("[record] recording; to stop, Alt+Tab here and press Q or Enter")
     started = time.time()
     frame_id = 0
     try:
@@ -68,7 +89,7 @@ def main() -> int:
                 fieldnames=("frame_id", "timestamp_sec", "image", "action", "keys"),
             )
             writer.writeheader()
-            while not _pressed(VK["stop"]):
+            while not console_stop_requested():
                 tick = time.perf_counter()
                 frame = camera.get_latest_frame()
                 if frame is not None and frame.size > 0:
@@ -110,4 +131,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

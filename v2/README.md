@@ -21,8 +21,11 @@ upgrades, item pickups and death screens. Then run:
 record_v2.bat
 ```
 
-The recorder saves 10 frames per second plus the human WASD action under
-`datasets/v2/raw/session_*`. Press F8 to stop recording.
+The recorder restores the Brotato window, waits three seconds, then saves 10
+frames per second plus the human WASD action under `datasets/v2/raw/session_*`.
+Start it while a battle is ready to play and play normally. To stop safely,
+Alt+Tab to the recorder console and press `Q` or `Enter`. There is no global
+stop hotkey, so the stop command cannot also trigger an action inside Brotato.
 
 Curate the recording before labeling:
 
@@ -30,9 +33,10 @@ Curate the recording before labeling:
 curate_v2.bat
 ```
 
-The visual curator samples every tenth frame. Press `C` for a combat frame,
-`U` for a shop/upgrade/item/death UI frame, or `S` to skip it. Use `N` and `P`
-to inspect adjacent frames. Selected images are copied into
+The visual curator samples every tenth frame and automatically jumps over
+near-identical samples. Press `C` for a combat frame, `U` for a
+shop/upgrade/item/death UI frame, or `S` to skip it. Use `N` and `P` to inspect
+adjacent raw frames. Selected images are copied into
 `datasets/v2/to_label/combat` and `datasets/v2/to_label/ui`.
 
 ## 2. Label two datasets
