@@ -274,14 +274,14 @@ def test_ui_automation_waits_for_slow_retry_scene_change():
                 "enabled": True,
             }
         ],
-        "last_result": {"sequence": 6, "ok": True, "changed": False},
+        "last_result": {},
     }
     loading_states = []
     for tick in range(12, 62):
         loading = dict(game_over, tick=tick)
         loading["ui"] = {
             "actions": [],
-            "last_result": {"sequence": 7, "ok": True, "changed": True},
+            "last_result": {},
         }
         loading_states.append(loading)
     combat = dict(_state(wave=3), tick=62)

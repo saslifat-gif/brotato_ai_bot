@@ -125,7 +125,6 @@ class AutoUiController:
             restart_stage_changed = (
                 pending_phase_change is not None
                 and pending_phase_change[1] == "restart"
-                and result_ok
                 and any(
                     str(action.get("id", "")) != pending_phase_change[3]
                     for action in available_actions(state, "restart")
