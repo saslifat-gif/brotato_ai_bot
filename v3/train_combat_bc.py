@@ -23,6 +23,9 @@ def load_records(path: Path) -> list[dict]:
             record = json.loads(line)
             features = record.get("features", [])
             action = int(record.get("action", -1))
+            input_age = int(record.get("human_input_age_ms", -1))
+            if record.get("source") == "human_wasd" and input_age > 250:
+                continue
             if len(features) == RICH_OBSERVATION_SIZE and 0 <= action < 9:
                 records.append(record)
     return records
@@ -33,11 +36,22 @@ def split_records_by_episode(
 ) -> tuple[list[dict], list[dict]]:
     """Keep complete demonstrations on one side of the validation split."""
 
-    groups: dict[tuple[str, int], list[dict]] = {}
+    episode_keys = {
+        (str(record.get("session", "")), int(record.get("episode", -1)))
+        for record in records
+        if record.get("session") and record.get("episode") is not None
+    }
+    use_wave_segments = 0 < len(episode_keys) < 5
+    groups: dict[tuple, list[dict]] = {}
     for index, record in enumerate(records):
         session = str(record.get("session", ""))
         episode = record.get("episode")
-        key = (session, int(episode)) if session and episode is not None else ("row", index)
+        if session and episode is not None:
+            key = (session, int(episode))
+            if use_wave_segments:
+                key += (int(record.get("wave", -1)),)
+        else:
+            key = ("row", index)
         groups.setdefault(key, []).append(record)
     keys = list(groups)
     random.Random(seed).shuffle(keys)
@@ -103,6 +117,8 @@ def main() -> int:
         "validation_records": len(validation),
         "training_episodes": len({(r.get("session"), r.get("episode")) for r in train}),
         "validation_episodes": len({(r.get("session"), r.get("episode")) for r in validation}),
+        "training_segments": len({(r.get("session"), r.get("episode"), r.get("wave")) for r in train}),
+        "validation_segments": len({(r.get("session"), r.get("episode"), r.get("wave")) for r in validation}),
         "validation_accuracy": accuracy,
     }, args.output)
     print(f"[combat-bc] saved={args.output} parameters={model.parameter_count}")

@@ -169,6 +169,18 @@ def test_combat_bc_validation_split_keeps_episodes_together():
     assert train_episodes.isdisjoint(validation_episodes)
 
 
+def test_combat_bc_falls_back_to_whole_wave_split_for_few_runs():
+    records = [
+        {"session": "s", "episode": 0, "wave": wave, "row": row}
+        for wave in range(1, 8)
+        for row in range(3)
+    ]
+    train, validation = split_records_by_episode(records, seed=7)
+    train_waves = {row["wave"] for row in train}
+    validation_waves = {row["wave"] for row in validation}
+    assert train_waves.isdisjoint(validation_waves)
+
+
 def test_safety_shield_sidesteps_an_incoming_projectile():
     state = _state()
     state["projectiles"] = [{
