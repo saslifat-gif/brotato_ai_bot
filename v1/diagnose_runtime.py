@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from config.runtime_config import load_runtime_config  # noqa: E402
 from env.brotato_env import force_game_window, hwnd_client_screen_rect, monitor_for_point  # noqa: E402
 from runtime.capture import create_camera  # noqa: E402
-from runtime.input_driver import InputDriver  # noqa: E402
+from runtime.input_driver import DPI_AWARENESS, InputDriver  # noqa: E402
 
 
 def main() -> int:
@@ -37,6 +37,7 @@ def main() -> int:
     monitor_index, monitor_origin = monitor_for_point(cx, cy)
     print(f"[diagnose] hwnd={hwnd} region={region} monitor_index={monitor_index} origin={monitor_origin}")
     print(f"[diagnose] capture={cfg.capture_backend} input={cfg.input_mode} control_panel={getattr(cfg, 'control_panel_enabled', False)}")
+    print(f"[diagnose] dpi_awareness={DPI_AWARENESS}")
 
     driver = InputDriver(hwnd, cfg.input_mode, cfg.input_physical_fallback, cfg.input_move_physical)
     if args.focus or args.move_test:

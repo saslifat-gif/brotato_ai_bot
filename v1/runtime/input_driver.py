@@ -7,14 +7,16 @@ the event.
 """
 
 import ctypes
-import random
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 try:
     import pydirectinput
+    _PYDIRECTINPUT_AVAILABLE = True
 except Exception:
+    _PYDIRECTINPUT_AVAILABLE = False
     class _NoDirectInput:
         FAILSAFE = False
         PAUSE = 0.0
@@ -38,11 +40,36 @@ except Exception:
     pydirectinput = _NoDirectInput()  # type: ignore[assignment]
 
 
+def enable_process_dpi_awareness() -> str:
+    """Keep Win32 client coordinates aligned with physical screen pixels."""
+    try:
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return "per_monitor_v2"
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return "per_monitor"
+    except Exception:
+        pass
+    try:
+        if ctypes.windll.user32.SetProcessDPIAware():
+            return "system"
+    except Exception:
+        pass
+    return "unavailable"
+
+
+DPI_AWARENESS = enable_process_dpi_awareness()
+
+
 @dataclass
 class ClickResult:
     ok: bool
     method: str
     error: str = ""
+    client_pos: Optional[Tuple[int, int]] = None
+    screen_pos: Optional[Tuple[int, int]] = None
 
 
 class POINT(ctypes.Structure):
@@ -87,6 +114,9 @@ class InputDriver:
         self.focus_timeout_sec = max(0.02, float(focus_timeout_sec))
         self.current_move_keys: set[str] = set()
         self.last_error = ""
+        self.trace_clicks = str(os.environ.get("BROTATO_INPUT_TRACE", "false")).strip().lower() in {
+            "1", "true", "yes", "on"
+        }
         try:
             pydirectinput.FAILSAFE = False
             pydirectinput.PAUSE = 0.0
@@ -170,7 +200,7 @@ class InputDriver:
 
     def _background_click(self, x: int, y: int) -> ClickResult:
         if not self._is_client_pos_valid((x, y)):
-            return ClickResult(False, "background", "invalid_client_point")
+            return ClickResult(False, "background", "invalid_client_point", (x, y))
         try:
             lparam = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
             user32 = ctypes.windll.user32
@@ -178,28 +208,54 @@ class InputDriver:
             time.sleep(0.025)
             up = bool(user32.PostMessageW(self.hwnd, 0x0202, 0x0000, lparam))
             if down and up:
-                return ClickResult(True, "background")
-            return ClickResult(False, "background", "post_message_rejected")
+                result = ClickResult(True, "background", client_pos=(x, y))
+            else:
+                result = ClickResult(False, "background", "post_message_rejected", (x, y))
         except Exception as exc:
-            return ClickResult(False, "background", f"post_message_exception:{exc}")
+            result = ClickResult(False, "background", f"post_message_exception:{exc}", (x, y))
+        self._trace_click(result)
+        return result
 
     def _physical_click(self, x: int, y: int) -> ClickResult:
+        if not _PYDIRECTINPUT_AVAILABLE:
+            return ClickResult(False, "physical_foreground", "pydirectinput_unavailable", (x, y))
         if not self.focus_game():
-            return ClickResult(False, "physical_foreground", self.last_error or "focus_rejected")
+            result = ClickResult(False, "physical_foreground", self.last_error or "focus_rejected", (x, y))
+            self._trace_click(result)
+            return result
         cursor = self._cursor_pos()
+        screen_pos: Optional[Tuple[int, int]] = None
         try:
-            sx, sy = self._client_to_screen((x, y))
+            screen_pos = self._client_to_screen((x, y))
+            sx, sy = screen_pos
             pydirectinput.click(sx, sy)
-            return ClickResult(True, "physical_foreground")
+            # Let Godot consume mouse-up before returning the cursor to the
+            # user's other monitor.
+            time.sleep(0.04)
+            result = ClickResult(True, "physical_foreground", client_pos=(x, y), screen_pos=screen_pos)
         except Exception as exc:
-            return ClickResult(False, "physical_foreground", str(exc))
+            result = ClickResult(False, "physical_foreground", str(exc), (x, y), screen_pos)
         finally:
             self._restore_cursor(cursor)
+        self._trace_click(result)
+        return result
+
+    def _trace_click(self, result: ClickResult) -> None:
+        if not self.trace_clicks:
+            return
+        print(
+            "[input] click "
+            f"ok={result.ok} method={result.method} "
+            f"client={result.client_pos} screen={result.screen_pos} "
+            f"dpi={DPI_AWARENESS} error={result.error or '-'}"
+        )
 
     def click_client_point(self, pos: Tuple[int, int]) -> ClickResult:
         x, y = int(pos[0]), int(pos[1])
         if not self._is_client_pos_valid((x, y)):
-            return ClickResult(False, self.input_mode, "invalid_client_point")
+            result = ClickResult(False, self.input_mode, "invalid_client_point", (x, y))
+            self._trace_click(result)
+            return result
         if self.input_mode == "background":
             return self._background_click(x, y)
         return self._physical_click(x, y)
@@ -208,8 +264,10 @@ class InputDriver:
         x1, y1, x2, y2 = [int(v) for v in rect]
         lx, rx = sorted((x1, x2))
         ty, by = sorted((y1, y2))
-        px = lx if rx <= lx else random.randint(lx, rx - 1)
-        py = ty if by <= ty else random.randint(ty, by - 1)
+        # Use a deterministic center point. Random edge clicks can land in
+        # transparent padding or on a neighboring control after UI scaling.
+        px = (lx + rx) // 2
+        py = (ty + by) // 2
         return self.click_client_point((px, py))
 
     def press_key(self, key: str) -> bool:

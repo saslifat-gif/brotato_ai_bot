@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "v1"))
 
-from runtime.input_driver import InputDriver, normalize_input_mode
+from runtime.input_driver import ClickResult, InputDriver, normalize_input_mode
 from runtime.state_machine import RuntimePhase, RuntimeStateMachine
 
 
@@ -18,6 +18,19 @@ class RuntimeBoundaryTests(unittest.TestCase):
     def test_driver_keeps_one_selected_backend(self):
         self.assertEqual(InputDriver(1, "safe_background").input_mode, "background")
         self.assertEqual(InputDriver(1, "physical").input_mode, "physical_foreground")
+
+    def test_rectangle_click_uses_deterministic_center(self):
+        driver = InputDriver(1, "physical")
+        seen = []
+
+        def record(pos):
+            seen.append(tuple(pos))
+            return ClickResult(True, "test", client_pos=tuple(pos))
+
+        driver.click_client_point = record
+        result = driver.click_client_rect((100, 200, 300, 260))
+        self.assertTrue(result.ok)
+        self.assertEqual(seen, [(200, 230)])
 
     def test_phase_machine_prioritizes_menu_templates(self):
         machine = RuntimeStateMachine(non_battle_threshold=0.62)
