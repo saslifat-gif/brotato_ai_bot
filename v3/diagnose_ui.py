@@ -41,6 +41,9 @@ def main() -> int:
                 f"scene={state.get('scene')} materials="
                 f"{state.get('counters', {}).get('materials')}"
             )
+            last_result = state.get("ui", {}).get("last_result", {})
+            if last_result:
+                print(f"  last_result={last_result}")
             for action in state.get("ui", {}).get("actions", []):
                 print(
                     "  "
