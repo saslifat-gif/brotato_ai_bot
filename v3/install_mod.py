@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 MOD_DIR_NAME = "Lifat-BrotatoRLBridge"
+BROTATO_STEAM_APP_ID = "1942280"
 
 
 def choose_game_directory() -> Path | None:
@@ -32,6 +33,23 @@ def resolve_game_directory(selected: Path) -> Path:
     if not (path / "Brotato.exe").is_file():
         raise RuntimeError(f"Brotato.exe was not found in {path}")
     return path
+
+
+def steam_workshop_target(game_directory: Path, package_name: str) -> Path | None:
+    steamapps = next(
+        (parent for parent in game_directory.parents if parent.name.lower() == "steamapps"),
+        None,
+    )
+    if steamapps is None:
+        return None
+    return (
+        steamapps
+        / "workshop"
+        / "content"
+        / BROTATO_STEAM_APP_ID
+        / f"{MOD_DIR_NAME}-local"
+        / package_name
+    )
 
 
 def install_mod(game_directory: Path, source: Path | None = None) -> Path:
@@ -60,6 +78,10 @@ def install_mod(game_directory: Path, source: Path | None = None) -> Path:
         for path in sorted(source.rglob("*")):
             if path.is_file():
                 archive.write(path, (archive_root / path.relative_to(source)).as_posix())
+    workshop_package = steam_workshop_target(game_directory, package.name)
+    if workshop_package is not None:
+        workshop_package.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(package, workshop_package)
     return package
 
 
@@ -77,6 +99,11 @@ def main() -> int:
         "[v3-install] editable_copy="
         f"{package.parent.parent / 'mods-unpacked' / MOD_DIR_NAME}"
     )
+    workshop_package = steam_workshop_target(package.parent.parent, package.name)
+    if workshop_package is not None:
+        print(f"[v3-install] steam_test_package={workshop_package}")
+    else:
+        print("[v3-install] non-Steam layout; no Steam workshop test copy created")
     print("[v3-install] enable BrotatoRLBridge in Brotato's Mods menu, then restart the game")
     return 0
 

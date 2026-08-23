@@ -42,6 +42,17 @@ It also keeps an editable diagnostic copy under
 `<Brotato>\mods-unpacked\Lifat-BrotatoRLBridge`. The ZIP contains the required
 `mods-unpacked\Lifat-BrotatoRLBridge\...` internal structure.
 
+For Steam installations, it additionally copies the ZIP to Brotato's official
+local Workshop test location:
+
+```text
+<Steam>\steamapps\workshop\content\1942280\Lifat-BrotatoRLBridge-local
+```
+
+In Steam, open **Brotato → Properties → General → Launch Options** and add
+`--enable-mods`. Launch the normal game, enable **BrotatoRLBridge** in its Mods
+menu, then restart Brotato once more.
+
 Open Brotato, enable **BrotatoRLBridge** in the Mods menu, close the game and
 launch it again. Do not publish this training bridge to Workshop.
 

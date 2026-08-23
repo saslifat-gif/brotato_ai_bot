@@ -115,8 +115,8 @@ def test_wait_for_state_skips_state_before_action_sequence(monkeypatch):
 
 
 def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
-    game = tmp_path / "Brotato"
-    game.mkdir()
+    game = tmp_path / "Steam" / "steamapps" / "common" / "Brotato"
+    game.mkdir(parents=True)
     (game / "Brotato.exe").touch()
     package = install_mod(game)
     assert package == game / "mods" / f"{MOD_DIR_NAME}-0.1.1.zip"
@@ -125,3 +125,14 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
         names = set(archive.namelist())
     assert f"mods-unpacked/{MOD_DIR_NAME}/manifest.json" in names
     assert f"mods-unpacked/{MOD_DIR_NAME}/mod_main.gd" in names
+    workshop_package = (
+        tmp_path
+        / "Steam"
+        / "steamapps"
+        / "workshop"
+        / "content"
+        / "1942280"
+        / f"{MOD_DIR_NAME}-local"
+        / package.name
+    )
+    assert workshop_package.read_bytes() == package.read_bytes()
