@@ -133,7 +133,9 @@ class StickMeleeTeacher:
         if self._is_stick(choice):
             score += 200.0
         elif category == "weapon":
-            score += 8.0 if int(_number(choice.get("weapon_type"), -1)) == 0 else -40.0
+            # This first curriculum is intentionally a pure Stick build.
+            # Other melee weapons consume one of the six synergy slots.
+            score += -20.0 if int(_number(choice.get("weapon_type"), -1)) == 0 else -40.0
         if base_id == "upgrade_melee_damage" or item_id.startswith("upgrade_melee_damage_"):
             score += 80.0
         elif base_id == "upgrade_attack_speed" or item_id.startswith("upgrade_attack_speed_"):

@@ -272,6 +272,21 @@ def test_stick_melee_teacher_prioritizes_stick_and_melee_upgrade():
         },
     }
     assert teacher.select(shop, [ranged, stick]).action["id"] == stick["id"]
+    spear = dict(
+        ranged,
+        id="/root/Shop/Spear/BuyButton",
+        choice={
+            "id": "weapon_spear_1",
+            "base_id": "weapon_spear",
+            "category": "weapon",
+            "weapon_type": 0,
+            "price": 10,
+            "affordable": True,
+            "tier": 0,
+            "effects": [],
+        },
+    )
+    assert teacher.select(shop, [spear]) is None
 
     upgrade = dict(_state(wave=4), phase="upgrade")
     melee = dict(
