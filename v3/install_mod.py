@@ -3,6 +3,7 @@
 import argparse
 import json
 import shutil
+import zipfile
 from pathlib import Path
 
 
@@ -26,7 +27,7 @@ def choose_game_directory() -> Path | None:
 
 def resolve_game_directory(selected: Path) -> Path:
     path = selected.resolve()
-    if path.name.lower() == "mods-unpacked":
+    if path.name.lower() in {"mods", "mods-unpacked"}:
         path = path.parent
     if not (path / "Brotato.exe").is_file():
         raise RuntimeError(f"Brotato.exe was not found in {path}")
@@ -43,10 +44,23 @@ def install_mod(game_directory: Path, source: Path | None = None) -> Path:
     expected = f"{metadata.get('namespace')}-{metadata.get('name')}"
     if expected != MOD_DIR_NAME:
         raise RuntimeError(f"manifest id mismatch: expected {MOD_DIR_NAME}, found {expected}")
-    destination = game_directory / "mods-unpacked" / MOD_DIR_NAME
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, destination, dirs_exist_ok=True)
-    return destination
+    version = str(metadata.get("version_number", "")).strip()
+    if not version:
+        raise RuntimeError("bridge manifest has no version_number")
+
+    unpacked = game_directory / "mods-unpacked" / MOD_DIR_NAME
+    unpacked.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, unpacked, dirs_exist_ok=True)
+
+    mods = game_directory / "mods"
+    mods.mkdir(parents=True, exist_ok=True)
+    package = mods / f"{MOD_DIR_NAME}-{version}.zip"
+    archive_root = Path("mods-unpacked") / MOD_DIR_NAME
+    with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(source.rglob("*")):
+            if path.is_file():
+                archive.write(path, (archive_root / path.relative_to(source)).as_posix())
+    return package
 
 
 def main() -> int:
@@ -57,8 +71,12 @@ def main() -> int:
     if selected is None:
         print("[v3-install] cancelled")
         return 1
-    destination = install_mod(selected)
-    print(f"[v3-install] installed={destination}")
+    package = install_mod(selected)
+    print(f"[v3-install] package={package}")
+    print(
+        "[v3-install] editable_copy="
+        f"{package.parent.parent / 'mods-unpacked' / MOD_DIR_NAME}"
+    )
     print("[v3-install] enable BrotatoRLBridge in Brotato's Mods menu, then restart the game")
     return 0
 

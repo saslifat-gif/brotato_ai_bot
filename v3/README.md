@@ -31,12 +31,16 @@ Run:
 install_v3_mod.bat
 ```
 
-Select the folder containing `Brotato.exe`. The installer copies only the
-bridge into:
+Select the folder containing `Brotato.exe`. The installer creates the runtime
+package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods-unpacked\Lifat-BrotatoRLBridge
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.1.1.zip
 ```
+
+It also keeps an editable diagnostic copy under
+`<Brotato>\mods-unpacked\Lifat-BrotatoRLBridge`. The ZIP contains the required
+`mods-unpacked\Lifat-BrotatoRLBridge\...` internal structure.
 
 Open Brotato, enable **BrotatoRLBridge** in the Mods menu, close the game and
 launch it again. Do not publish this training bridge to Workshop.
