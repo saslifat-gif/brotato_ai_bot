@@ -20,9 +20,8 @@ Trainer to game:
 - `action`: sequence and discrete movement action `0..8`.
 - `ui_action`: activates one currently visible and enabled game button by the
   exact node identifier advertised in the latest state.
-- `reset`: asks the adapter to reset. The initial adapter reports
-  `manual_reset_required` until the installed Brotato version's menu hooks are
-  verified.
+- `reset`: releases movement control before the trainer uses an advertised
+  restart action. It remains safe when no restart action is visible.
 
 Movement actions are idle, up, down, left, right, up-left, up-right,
 down-left and down-right. In combat, the bridge pauses the scene after sending

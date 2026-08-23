@@ -20,6 +20,7 @@ from v3.protocol import (
 )
 from v3.reward import ApiRewardEngine
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
+from v3.ui_automation import AutoUiController, available_actions
 
 
 def _state(*, hp=10, max_hp=10, wave=1, materials=0, kills=0):
@@ -40,6 +41,7 @@ def _state(*, hp=10, max_hp=10, wave=1, materials=0, kills=0):
         "enemies": [],
         "projectiles": [],
         "pickups": [],
+        "ui": {"actions": []},
         "dead": False,
         "victory": False,
     }
@@ -122,6 +124,7 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '["gold", "materials"]' in bridge
     assert "func _collect_ui_actions(node, output: Array, phase: String)" in bridge
     assert 'node.emit_signal("pressed")' in bridge
+    assert 'str(node.name).to_lower() == "gobutton"' in bridge
     assert 'if lower == "main":' in bridge
     assert "main_extension" not in mod_main
     assert "vanilla death/drop logic preserved" in mod_main
@@ -137,6 +140,78 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
         / "player_movement_behavior.gd"
     ).read_text(encoding="utf-8")
     assert "bridge.observe_movement_behavior(self)" in movement_extension
+
+
+def test_ui_automation_buys_then_rerolls_then_starts_wave():
+    controller = AutoUiController(max_shop_buys=1, max_shop_rerolls=1)
+    state = dict(_state(materials=20), phase="shop")
+    state["ui"] = {
+        "actions": [
+            {"id": "/root/Shop/Buy", "role": "buy", "enabled": True},
+            {"id": "/root/Shop/Reroll", "role": "reroll", "enabled": True},
+            {"id": "/root/Shop/Go", "role": "next_wave", "enabled": True},
+        ]
+    }
+    buy = controller.choose(state)
+    assert buy["role"] == "buy"
+    controller.mark_sent(state, buy)
+    reroll = controller.choose(state)
+    assert reroll["role"] == "reroll"
+    controller.mark_sent(state, reroll)
+    assert controller.choose(state)["role"] == "next_wave"
+
+
+def test_ui_automation_only_uses_enabled_exact_targets():
+    state = dict(_state(), phase="upgrade")
+    state["ui"] = {
+        "actions": [
+            {"id": "relative", "role": "upgrade_choice", "enabled": True},
+            {"id": "/root/Disabled", "role": "upgrade_choice", "enabled": False},
+            {"id": "/root/Choice", "role": "upgrade_choice", "enabled": True},
+        ]
+    }
+    assert available_actions(state, "upgrade_choice") == [
+        {"id": "/root/Choice", "role": "upgrade_choice", "enabled": True}
+    ]
+    assert AutoUiController().choose(state)["id"] == "/root/Choice"
+
+
+def test_ui_automation_advances_wave_end_shop_and_next_wave():
+    wave_end = dict(_state(wave=3), phase="wave_end", tick=10)
+    shop = dict(_state(wave=3, materials=20), phase="shop", tick=11)
+    shop["ui"] = {
+        "actions": [
+            {"id": "/root/Shop/Buy", "role": "buy", "enabled": True},
+            {"id": "/root/Shop/Go", "role": "next_wave", "enabled": True},
+        ]
+    }
+    after_buy = dict(shop, tick=12, ui={"actions": shop["ui"]["actions"][1:]})
+    combat = dict(_state(wave=4), tick=13)
+
+    class FakeServer:
+        def __init__(self):
+            self.states = iter([shop, after_buy, combat])
+            self.sent = []
+
+        def send(self, message, timeout_sec):
+            self.sent.append(message)
+
+        def wait_for_state(self, **_kwargs):
+            return next(self.states)
+
+    server = FakeServer()
+    result = AutoUiController(max_shop_buys=1, max_shop_rerolls=0).advance(
+        server,
+        wave_end,
+        sequence=5,
+        timeout_sec=5,
+    )
+    assert result.state["phase"] == "combat"
+    assert [message["target"] for message in server.sent] == [
+        "/root/Shop/Buy",
+        "/root/Shop/Go",
+    ]
+    assert result.sequence == 7
 
 
 def test_wait_for_state_accepts_low_tick_after_reconnect(monkeypatch):

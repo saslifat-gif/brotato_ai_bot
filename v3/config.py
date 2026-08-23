@@ -15,6 +15,9 @@ class V3Config:
     reset_timeout_sec: float
     output_dir: Path
     total_timesteps: int
+    automate_menus: bool
+    max_shop_buys: int
+    max_shop_rerolls: int
 
 
 def load_config() -> V3Config:
@@ -29,4 +32,8 @@ def load_config() -> V3Config:
         reset_timeout_sec=max(10.0, float(os.environ.get("BROTATO_V3_RESET_TIMEOUT", "600"))),
         output_dir=output,
         total_timesteps=max(1, int(os.environ.get("BROTATO_V3_TIMESTEPS", "1000000"))),
+        automate_menus=os.environ.get("BROTATO_V3_AUTOMATE_MENUS", "1").strip().lower()
+        not in {"0", "false", "no", "off"},
+        max_shop_buys=max(0, int(os.environ.get("BROTATO_V3_MAX_SHOP_BUYS", "4"))),
+        max_shop_rerolls=max(0, int(os.environ.get("BROTATO_V3_MAX_SHOP_REROLLS", "1"))),
     )

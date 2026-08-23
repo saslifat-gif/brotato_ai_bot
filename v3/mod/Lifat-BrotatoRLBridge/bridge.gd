@@ -370,6 +370,8 @@ func _ui_role(node, phase: String, text: String) -> String:
 		return "reroll"
 	if token.find("next_wave") >= 0 or token.find("next wave") >= 0 or token.find("下一波") >= 0:
 		return "next_wave"
+	if phase == "shop" and str(node.name).to_lower() == "gobutton":
+		return "next_wave"
 	if token.find("restart") >= 0 or token.find("retry") >= 0 or token.find("重新开始") >= 0:
 		return "restart"
 	if token.find("lock") >= 0 or token.find("锁") >= 0:

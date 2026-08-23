@@ -18,10 +18,11 @@ after each observation and resumes when the policy returns its next action.
 This prevents PPO updates from leaving the character idle while the real-time
 game continues.
 
-Automatic shop, upgrade and run-reset API hooks are intentionally not guessed.
-The initial adapter reports menu phases and waits while you handle them
-manually. Once `diagnose_v3.bat` reports your installed game version and scene
-state correctly, those version-specific hooks can be added safely.
+The adapter advertises visible, enabled game UI actions through the structured
+API. Training automatically chooses an upgrade, makes a bounded number of shop
+purchases/rerolls, starts the next wave, and activates the verified retry-wave
+control after death. It emits the game buttons' own signals, so Brotato still
+enforces affordability, disabled states, purchase logic, and saves.
 
 ## 1. Install the local bridge mod
 
@@ -75,9 +76,8 @@ diagnose_v3.bat output
 
 ## 3. Train movement
 
-Run `train_v3.bat`, launch Brotato and enter a wave. During this first adapter
-stage, manually handle shops, upgrades, next-wave screens and restarting after
-death. Training pauses safely until combat resumes.
+Run `train_v3.bat`, launch Brotato and enter the first wave. After that, the
+verified shop, upgrade, next-wave and retry-wave screens are automated.
 
 Models and TensorBoard logs are written under `models/version_3`.
 Press `Ctrl+C` in the training console to save the interrupted model and
@@ -99,3 +99,6 @@ Protocol details are in `v3/PROTOCOL.md`.
 - `BROTATO_V3_DEVICE` — SB3 device, default `auto`.
 - `BROTATO_V3_RESUME_MODEL` — optional checkpoint path.
 - `BROTATO_V3_RESET_TIMEOUT` — how long training waits for manual combat resume.
+- `BROTATO_V3_AUTOMATE_MENUS` — defaults to `1`; set `0` for manual menus.
+- `BROTATO_V3_MAX_SHOP_BUYS` — maximum purchases per shop, default `4`.
+- `BROTATO_V3_MAX_SHOP_REROLLS` — maximum rerolls per shop, default `1`.

@@ -10,6 +10,7 @@ from v3.bridge_server import BridgeServer
 from v3.config import V3Config
 from v3.protocol import MoveAction, action_message, reset_message
 from v3.reward import ApiRewardEngine
+from v3.ui_automation import AutoUiController
 from v3.vectorizer import ApiStateVectorizer
 
 
@@ -33,6 +34,10 @@ class BrotatoApiEnv(gym.Env):
         self.sequence = 0
         self.previous_action = int(MoveAction.IDLE)
         self.last_state = None
+        self.ui_controller = AutoUiController(
+            max_shop_buys=cfg.max_shop_buys,
+            max_shop_rerolls=cfg.max_shop_rerolls,
+        )
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -42,11 +47,27 @@ class BrotatoApiEnv(gym.Env):
                 self.server.send(reset_message(self.sequence))
             except Exception as exc:
                 print(f"[v3-env] reset request not delivered: {exc}")
-        print("[v3-env] waiting for a combat state; start/resume a wave in Brotato")
+        self.ui_controller.reset_episode()
+        print("[v3-env] waiting for combat; structured menu automation is active")
         state = self.server.wait_for_state(
             timeout_sec=self.cfg.reset_timeout_sec,
-            combat_only=True,
         )
+        if self.cfg.automate_menus and state.get("phase") != "combat":
+            result = self.ui_controller.advance(
+                self.server,
+                state,
+                self.sequence,
+                self.cfg.reset_timeout_sec,
+                allow_restart=True,
+            )
+            state = result.state
+            self.sequence = result.sequence
+        elif state.get("phase") != "combat":
+            state = self.server.wait_for_state(
+                timeout_sec=self.cfg.reset_timeout_sec,
+                after_tick=int(state.get("tick", -1)),
+                combat_only=True,
+            )
         self.last_state = state
         self.previous_action = int(MoveAction.IDLE)
         self.reward_engine.reset(state)
@@ -65,6 +86,18 @@ class BrotatoApiEnv(gym.Env):
         )
         reward = self.reward_engine.step(state)
         terminated = bool(state.get("dead") or state.get("victory"))
+        if self.cfg.automate_menus and not terminated and state.get("phase") != "combat":
+            result = self.ui_controller.advance(
+                self.server,
+                state,
+                self.sequence,
+                self.cfg.reset_timeout_sec,
+            )
+            self.sequence = result.sequence
+            for menu_state in result.states:
+                reward += self.reward_engine.step(menu_state)
+            state = result.state
+            terminated = bool(state.get("dead") or state.get("victory"))
         truncated = not terminated and state.get("phase") != "combat"
         self.last_state = state
         self.previous_action = normalized
