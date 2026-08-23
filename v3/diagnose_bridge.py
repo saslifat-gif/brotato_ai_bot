@@ -23,10 +23,14 @@ def main() -> int:
             previous_tick = int(state.get("tick", -1))
             player = state.get("player", {})
             wave = state.get("wave", {})
+            counters = state.get("counters", {})
+            position = player.get("position", {})
             print(
                 "[v3-state] "
                 f"tick={previous_tick} phase={state.get('phase')} scene={state.get('scene')} "
                 f"wave={wave.get('number')} hp={player.get('health')}/{player.get('max_health')} "
+                f"pos=({position.get('x')},{position.get('y')}) "
+                f"materials={counters.get('materials')} kills={counters.get('kills')} "
                 f"enemies={len(state.get('enemies', []))} "
                 f"projectiles={len(state.get('projectiles', []))} "
                 f"pickups={len(state.get('pickups', []))}"

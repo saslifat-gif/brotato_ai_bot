@@ -270,10 +270,14 @@ func _phase_for_scene(
 	if dead:
 		return "game_over"
 	var lower := scene_name.to_lower()
-	if player != null or lower == "main":
+	if player != null:
 		if bool(_property(main, "_cleaning_up", false)):
 			return "wave_end"
 		return "combat"
+	if lower == "main":
+		# Main also remains active while a wave is being cleaned up. Without a
+		# live TempStats.player, do not report a trainable combat observation.
+		return "wave_end"
 	if lower.find("shop") >= 0:
 		return "shop"
 	if lower.find("upgrade") >= 0:
@@ -285,9 +289,10 @@ func _phase_for_scene(
 
 func _find_player(root, main):
 	# Brotato 1.1.x exposes the live player through the TempStats singleton.
+	# TempStats is an AutoLoad singleton, not a child named "TempStats" under
+	# the current scene root. Access it directly, as Brotato and Brotils do.
+	var player = TempStats.player
 	# Keep the Main fallbacks for older game builds.
-	var temp_stats = root.get_node_or_null("TempStats")
-	var player = _property(temp_stats, "player", null)
 	if player == null:
 		player = _property(main, "_player", null)
 	if player == null:
