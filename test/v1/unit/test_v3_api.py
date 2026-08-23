@@ -32,7 +32,7 @@ from v3.reward import ApiRewardEngine
 from v3.train_ui_build import load_records
 from v3.train_combat_bc import split_records_by_episode
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
-from v3.ui_automation import AutoUiController, available_actions
+from v3.ui_automation import AutoUiController, available_actions, shop_budget_limits
 from v3.ui_build_policy import (
     CHOICE_SIZE,
     CONTEXT_SIZE,
@@ -181,6 +181,15 @@ def test_combat_bc_falls_back_to_whole_wave_split_for_few_runs():
     assert train_waves.isdisjoint(validation_waves)
 
 
+def test_trainers_save_the_best_validation_epoch():
+    combat_trainer = (ROOT / "v3" / "train_combat_bc.py").read_text(encoding="utf-8")
+    ui_trainer = (ROOT / "v3" / "train_ui_build.py").read_text(encoding="utf-8")
+    for source in (combat_trainer, ui_trainer):
+        assert "best_accuracy = -1.0" in source
+        assert '"best_epoch": best_epoch' in source
+        assert "model.load_state_dict(best_state)" in source
+
+
 def test_safety_shield_sidesteps_an_incoming_projectile():
     state = _state()
     state["projectiles"] = [{
@@ -299,6 +308,16 @@ def test_ui_automation_buys_then_rerolls_then_starts_wave():
     assert reroll["role"] == "reroll"
     controller.mark_sent(state, reroll)
     assert controller.choose(state)["role"] == "next_wave"
+
+
+def test_late_rich_shop_spends_instead_of_hoarding():
+    buys, rerolls, reserve = shop_budget_limits(
+        9, 1000, base_buys=4, base_rerolls=1
+    )
+    assert buys >= 20
+    assert rerolls >= 8
+    assert reserve < 200
+    assert shop_budget_limits(9, 1000, base_buys=0, base_rerolls=0)[:2] == (0, 0)
 
 
 def test_ui_automation_only_uses_enabled_exact_targets():

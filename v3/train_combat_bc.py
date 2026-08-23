@@ -90,6 +90,9 @@ def main() -> int:
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
     generator = torch.Generator().manual_seed(args.seed)
     batch_size = max(16, int(args.batch_size))
+    best_accuracy = -1.0
+    best_epoch = 0
+    best_state = None
     for epoch in range(max(1, int(args.epochs))):
         model.train()
         permutation = torch.randperm(len(train), generator=generator)
@@ -104,10 +107,19 @@ def main() -> int:
         model.eval()
         with torch.no_grad():
             accuracy = float((model(x_valid).argmax(dim=1) == y_valid).float().mean().item())
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            best_epoch = epoch + 1
+            best_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
         print(
             f"[combat-bc] epoch={epoch + 1} loss={total_loss / len(train):.5f} "
             f"validation_accuracy={accuracy:.3f}"
         )
+    assert best_state is not None
+    model.load_state_dict(best_state)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
         "format": "brotato_combat_base_v1",
@@ -119,7 +131,8 @@ def main() -> int:
         "validation_episodes": len({(r.get("session"), r.get("episode")) for r in validation}),
         "training_segments": len({(r.get("session"), r.get("episode"), r.get("wave")) for r in train}),
         "validation_segments": len({(r.get("session"), r.get("episode"), r.get("wave")) for r in validation}),
-        "validation_accuracy": accuracy,
+        "validation_accuracy": best_accuracy,
+        "best_epoch": best_epoch,
     }, args.output)
     print(f"[combat-bc] saved={args.output} parameters={model.parameter_count}")
     return 0

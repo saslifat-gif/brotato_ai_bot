@@ -23,6 +23,28 @@ MAX_ITEM_CLAIMS_PER_WAVE = 32
 UPGRADE_FALLBACK_WAIT_STATES = 4
 
 
+def shop_budget_limits(
+    wave: int,
+    materials: int,
+    *,
+    base_buys: int,
+    base_rerolls: int,
+) -> tuple[int, int, int]:
+    """Scale bounded shop work so rich late runs do not hoard materials."""
+
+    wave = max(0, int(wave))
+    materials = max(0, int(materials))
+    buys = max(0, int(base_buys))
+    rerolls = max(0, int(base_rerolls))
+    late_or_rich = wave >= 8 or materials >= 300
+    if late_or_rich and buys > 0:
+        buys = max(buys, min(24, 6 + materials // 60))
+    if late_or_rich and rerolls > 0:
+        rerolls = max(rerolls, min(10, 2 + materials // 120))
+    reserve = max(40, min(150, 220 - wave * 12)) if late_or_rich else 0
+    return buys, rerolls, reserve
+
+
 def available_actions(state: Mapping[str, Any], role: str) -> list[dict[str, Any]]:
     ui = state.get("ui", {})
     actions = ui.get("actions", []) if isinstance(ui, Mapping) else []
@@ -60,6 +82,9 @@ class AutoUiController:
         self._shop_wave = None
         self._shop_buys = 0
         self._shop_rerolls = 0
+        self._shop_buy_limit = self.max_shop_buys
+        self._shop_reroll_limit = self.max_shop_rerolls
+        self._shop_reserve = 0
         self._attempted: set[tuple[str, int]] = set()
         self._upgrade_clicks: dict[int, int] = {}
         self._item_claims: dict[int, int] = {}
@@ -88,6 +113,9 @@ class AutoUiController:
         self._shop_wave = None
         self._shop_buys = 0
         self._shop_rerolls = 0
+        self._shop_buy_limit = self.max_shop_buys
+        self._shop_reroll_limit = self.max_shop_rerolls
+        self._shop_reserve = 0
         self._attempted.clear()
         self._upgrade_clicks.clear()
         self._item_claims.clear()
@@ -101,6 +129,21 @@ class AutoUiController:
         self._shop_buys = 0
         self._shop_rerolls = 0
         self._attempted.clear()
+        materials = int(state.get("counters", {}).get("materials", 0))
+        self._shop_buy_limit, self._shop_reroll_limit, self._shop_reserve = (
+            shop_budget_limits(
+                int(wave_number or 0),
+                materials,
+                base_buys=self.max_shop_buys,
+                base_rerolls=self.max_shop_rerolls,
+            )
+        )
+        if self._shop_buy_limit > self.max_shop_buys or self._shop_reroll_limit > self.max_shop_rerolls:
+            print(
+                f"[v3-ui] rich-shop materials={materials} wave={wave_number} "
+                f"buy_limit={self._shop_buy_limit} reroll_limit={self._shop_reroll_limit} "
+                f"reserve={self._shop_reserve}"
+            )
 
     def choose(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
         phase = str(state.get("phase", "menu"))
@@ -125,7 +168,7 @@ class AutoUiController:
         if phase == "shop":
             self._enter_shop(state)
             materials = int(state.get("counters", {}).get("materials", 0))
-            if self._shop_buys < self.max_shop_buys:
+            if self._shop_buys < self._shop_buy_limit:
                 buy_candidates = []
                 for action in available_actions(state, "buy"):
                     key = (str(action["id"]), materials)
@@ -138,7 +181,10 @@ class AutoUiController:
                 # the verified first-affordable fallback during upgrades.
                 if buy_candidates and not any(action.get("choice") for action in buy_candidates):
                     return buy_candidates[0]
-            if self._shop_rerolls < self.max_shop_rerolls:
+            if (
+                self._shop_rerolls < self._shop_reroll_limit
+                and materials > self._shop_reserve
+            ):
                 rerolls = available_actions(state, "reroll")
                 if rerolls:
                     return rerolls[0]

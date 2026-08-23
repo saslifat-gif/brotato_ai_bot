@@ -84,6 +84,9 @@ def main() -> int:
     model = UiBuildBase()
     vectorizer = UiChoiceVectorizer()
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
+    best_accuracy = -1.0
+    best_epoch = 0
+    best_state = None
     for epoch in range(max(1, args.epochs)):
         model.train()
         random.shuffle(train_records)
@@ -98,10 +101,19 @@ def main() -> int:
         with torch.no_grad():
             correct = sum(record_loss(model, vectorizer, record)[1] for record in validation_records)
         accuracy = correct / len(validation_records)
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            best_epoch = epoch + 1
+            best_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
         print(
             f"[ui-build] epoch={epoch + 1} loss={total_loss / len(train_records):.5f} "
             f"validation_accuracy={accuracy:.3f}"
         )
+    assert best_state is not None
+    model.load_state_dict(best_state)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -109,7 +121,8 @@ def main() -> int:
             "state_dict": model.state_dict(),
             "parameters": model.parameter_count,
             "training_records": len(train_records),
-            "validation_accuracy": accuracy,
+            "validation_accuracy": best_accuracy,
+            "best_epoch": best_epoch,
         },
         args.output,
     )
