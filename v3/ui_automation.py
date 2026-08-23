@@ -116,16 +116,16 @@ class AutoUiController:
             phase = str(state.get("phase", "menu"))
             ui = state.get("ui", {})
             last_result = ui.get("last_result", {}) if isinstance(ui, Mapping) else {}
-            result_changed = (
+            result_ok = (
                 isinstance(last_result, Mapping)
                 and int(last_result.get("sequence", -1)) == pending_phase_change[2]
                 and bool(last_result.get("ok"))
-                and bool(last_result.get("changed"))
             ) if pending_phase_change is not None else False
+            result_changed = result_ok and bool(last_result.get("changed"))
             restart_stage_changed = (
                 pending_phase_change is not None
                 and pending_phase_change[1] == "restart"
-                and result_changed
+                and result_ok
                 and any(
                     str(action.get("id", "")) != pending_phase_change[3]
                     for action in available_actions(state, "restart")

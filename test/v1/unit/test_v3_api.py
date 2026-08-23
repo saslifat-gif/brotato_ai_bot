@@ -274,7 +274,7 @@ def test_ui_automation_waits_for_slow_retry_scene_change():
                 "enabled": True,
             }
         ],
-        "last_result": {"sequence": 6, "ok": True, "changed": True},
+        "last_result": {"sequence": 6, "ok": True, "changed": False},
     }
     loading_states = []
     for tick in range(12, 62):
