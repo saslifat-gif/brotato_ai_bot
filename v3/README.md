@@ -161,6 +161,13 @@ next combat base. For a bounded deterministic evaluation, run:
 python -m v3.run_frozen --model models/version_3/combat_peak_100883_agent.zip --episodes 10 --results models/version_3/eval_peak.json
 ```
 
+Evaluate a behavior-cloned human combat base with the same UI automation and
+per-episode safety metrics:
+
+```powershell
+python -m v3.run_frozen --policy bc --model models/version_3/human_combat_base_candidate.pt --episodes 10 --results models/version_3/eval_human_bc.json
+```
+
 The safety layer is intentionally disabled by default in `v3.train`: silently
 replacing PPO actions would make its on-policy updates mathematically invalid.
 Resumed PPO instead uses conservative defaults and saves the best rolling

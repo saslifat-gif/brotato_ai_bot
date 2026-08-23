@@ -29,6 +29,7 @@ from v3.protocol import (
     ui_action_message,
 )
 from v3.reward import ApiRewardEngine
+from v3.run_frozen import load_combat_bc
 from v3.train_ui_build import load_records
 from v3.train_combat_bc import split_records_by_episode
 from v3.vectorizer import ApiStateVectorizer, OBSERVATION_SIZE
@@ -124,6 +125,24 @@ def test_rich_combat_vectorizer_and_base_are_versioned_and_small():
     model = CombatPolicyBase()
     assert model.parameter_count < 100_000
     assert model(torch.from_numpy(observation[None, :])).shape == (1, 9)
+
+
+def test_frozen_runner_loads_combat_bc_checkpoint(tmp_path):
+    path = tmp_path / "combat.pt"
+    source = CombatPolicyBase()
+    torch.save(
+        {
+            "format": "brotato_combat_base_v1",
+            "state_dict": source.state_dict(),
+            "validation_accuracy": 0.625,
+            "best_epoch": 14,
+        },
+        path,
+    )
+    loaded, metadata = load_combat_bc(path)
+    assert metadata["validation_accuracy"] == 0.625
+    observation = torch.zeros((1, RICH_OBSERVATION_SIZE))
+    assert loaded(observation).shape == (1, 9)
 
 
 def test_human_combat_logger_writes_bc_record(tmp_path):

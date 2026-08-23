@@ -8,31 +8,51 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import torch
 
 try:
     from sb3_contrib import RecurrentPPO
 except Exception:
     RecurrentPPO = None
 
-from v3.combat_policy import CombatHeuristicTeacher
+from v3.combat_policy import (
+    CombatHeuristicTeacher,
+    CombatPolicyBase,
+    RichCombatVectorizer,
+)
 from v3.config import load_config
-from v3.env.brotato_api_env import BrotatoApiEnv
+
+
+def load_combat_bc(path: Path) -> tuple[CombatPolicyBase, dict]:
+    resolved = path.resolve()
+    try:
+        checkpoint = torch.load(resolved, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(resolved, map_location="cpu")
+    if not isinstance(checkpoint, dict) or checkpoint.get("format") != "brotato_combat_base_v1":
+        raise RuntimeError(f"unsupported combat BC checkpoint: {resolved}")
+    model = CombatPolicyBase()
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return model, checkpoint
 
 
 def main() -> int:
+    from v3.env.brotato_api_env import BrotatoApiEnv
+
     parser = argparse.ArgumentParser(
         description="Frozen Brotato policy runner for evaluation and safe data collection"
     )
     parser.add_argument("--model", type=Path)
-    parser.add_argument("--policy", choices=("model", "teacher"), default="model")
+    parser.add_argument("--policy", choices=("model", "bc", "teacher"), default="model")
     parser.add_argument("--timesteps", type=int, default=1_000_000)
     parser.add_argument("--episodes", type=int, default=0)
     parser.add_argument("--results", type=Path)
     parser.add_argument("--combat-dataset", type=Path)
     parser.add_argument("--no-safety", action="store_true")
     args = parser.parse_args()
-    if args.policy == "model" and args.model is None:
-        parser.error("--model is required with --policy model")
+    if args.policy in {"model", "bc"} and args.model is None:
+        parser.error(f"--model is required with --policy {args.policy}")
     if args.policy == "model" and RecurrentPPO is None:
         raise RuntimeError("sb3-contrib is required: pip install sb3-contrib")
 
@@ -44,11 +64,21 @@ def main() -> int:
     )
     env = BrotatoApiEnv(cfg)
     model = None
+    bc_model = None
+    bc_vectorizer = None
     teacher = None
     source = args.policy
     if args.policy == "model":
         model = RecurrentPPO.load(str(args.model.resolve()), device="auto")
         print(f"[v3-frozen] model={args.model.resolve()} deterministic=True")
+    elif args.policy == "bc":
+        bc_model, metadata = load_combat_bc(args.model)
+        bc_vectorizer = RichCombatVectorizer()
+        print(
+            f"[v3-frozen] combat_bc={args.model.resolve()} deterministic=True "
+            f"validation_accuracy={metadata.get('validation_accuracy')} "
+            f"best_epoch={metadata.get('best_epoch')}"
+        )
     else:
         teacher = CombatHeuristicTeacher()
         print("[v3-frozen] policy=structured_teacher")
@@ -62,6 +92,8 @@ def main() -> int:
     episode_start = np.ones((1,), dtype=bool)
     episode_reward = 0.0
     episode_steps = 0
+    episode_shield_overrides = 0
+    episode_action_counts = [0] * 9
     completed = 0
     results = []
     try:
@@ -74,11 +106,19 @@ def main() -> int:
                     deterministic=True,
                 )
                 selected = int(np.asarray(action).reshape(-1)[0])
+            elif bc_model is not None:
+                rich = bc_vectorizer.build(env.last_state or {}, env.previous_action)
+                with torch.no_grad():
+                    selected = int(
+                        bc_model(torch.from_numpy(rich).unsqueeze(0)).argmax(dim=1).item()
+                    )
             else:
                 selected = int(teacher.select(env.last_state or {}))
             observation, reward, terminated, truncated, info = env.step(selected)
             episode_reward += float(reward)
             episode_steps += 1
+            episode_action_counts[selected] += 1
+            episode_shield_overrides += int(bool(info.get("safety_overridden")))
             done = bool(terminated or truncated)
             episode_start = np.asarray([done], dtype=bool)
             if not done:
@@ -90,6 +130,9 @@ def main() -> int:
                 "wave": int(info.get("wave", 0)),
                 "policy": source,
                 "safety": cfg.safety_shield,
+                "shield_overrides": episode_shield_overrides,
+                "shield_rate": episode_shield_overrides / max(1, episode_steps),
+                "requested_action_counts": episode_action_counts,
             }
             results.append(summary)
             completed += 1
@@ -107,6 +150,8 @@ def main() -> int:
             episode_start[:] = True
             episode_reward = 0.0
             episode_steps = 0
+            episode_shield_overrides = 0
+            episode_action_counts = [0] * 9
     except KeyboardInterrupt:
         print("[v3-frozen] stopped")
         return 130
