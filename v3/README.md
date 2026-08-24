@@ -38,7 +38,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.2.2.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.0.zip
 ```
 
 It also keeps an editable diagnostic copy under
@@ -94,16 +94,26 @@ wave and restart controls while you play the waves.
 
 Human movement is sampled at 8 Hz, immediate direction changes are retained,
 and repeated idle input is limited to 2 Hz. Records are written to
-`models/version_3/human_combat_v1.jsonl` with a bridge session and episode ID.
+`models/version_3/human_semantic_combat_v2.jsonl` with a bridge session and episode ID.
 This is structured state/action data, not screen video. Train/validation splits
 keep complete episodes together to prevent adjacent-frame leakage.
 
-After collecting several complete runs and at least 10,000 records, train the
-compact behavior-cloning base:
+Bridge 0.3.0 records an 832-value API-only semantic observation. It preserves
+the prior 384 rich inputs and adds stable enemy identity and collision size,
+pickup category/healing/value, per-weapon cooldown/reload/ammo readiness, and
+visible attack-warning geometry. No screen capture or CV is used.
+
+After collecting several complete runs and at least 1,000 new semantic records,
+warm-start the compact semantic base from the existing human combat base:
 
 ```powershell
-python -m v3.train_combat_bc --dataset models/version_3/human_combat_v1.jsonl --output models/version_3/human_combat_base.pt
+python -m v3.train_semantic_combat_bc --dataset models/version_3/human_semantic_combat_v2.jsonl --base-model models/version_3/human_combat_base_candidate.pt --output models/version_3/semantic_combat_base_candidate.pt
 ```
+
+The semantic residual is initialized to zero, so before semantic training its
+actions exactly match the old human base. The saved model remains small (under
+100,000 parameters), and its loss/validation curves are written to
+`models/version_3/logs/SemanticCombatBC` for TensorBoard.
 
 Fine-tune that human base online without discarding its behavior:
 
@@ -119,7 +129,7 @@ standard reward and optimization metrics.
 
 ## API observation and actions
 
-The observation is a fixed 256-value vector containing player status, wave and
+The legacy PPO observation is a fixed 256-value vector containing player status, wave and
 arena values, the nearest 24 enemies, 16 projectiles and 14 pickups. The policy
 has nine movement actions: idle, four cardinal directions and four diagonals.
 This legacy vector remains unchanged so existing RecurrentPPO checkpoints stay

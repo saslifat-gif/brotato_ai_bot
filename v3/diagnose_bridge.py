@@ -1,6 +1,7 @@
 """Receive and summarize live structured states from the Brotato mod."""
 
 import argparse
+import json
 
 from v3.bridge_server import BridgeServer
 from v3.config import load_config
@@ -9,6 +10,11 @@ from v3.config import load_config
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose the v3 Brotato bridge")
     parser.add_argument("--states", type=int, default=10)
+    parser.add_argument(
+        "--details",
+        action="store_true",
+        help="print one enemy, pickup, weapon and attack-indicator sample",
+    )
     args = parser.parse_args()
     cfg = load_config()
     print("[v3-diagnose] start/restart Brotato with BrotatoRLBridge enabled")
@@ -33,8 +39,18 @@ def main() -> int:
                 f"materials={counters.get('materials')} kills={counters.get('kills')} "
                 f"enemies={len(state.get('enemies', []))} "
                 f"projectiles={len(state.get('projectiles', []))} "
-                f"pickups={len(state.get('pickups', []))}"
+                f"pickups={len(state.get('pickups', []))} "
+                f"indicators={len(state.get('attack_indicators', []))}"
             )
+            if args.details:
+                combat = state.get("combat", {})
+                samples = {
+                    "enemy": (state.get("enemies") or [None])[0],
+                    "pickup": (state.get("pickups") or [None])[0],
+                    "weapon": (combat.get("weapons") or [None])[0],
+                    "attack_indicator": (state.get("attack_indicators") or [None])[0],
+                }
+                print("[v3-semantics] " + json.dumps(samples, ensure_ascii=False))
     print("[v3-diagnose] bridge state stream is healthy")
     return 0
 

@@ -19,6 +19,8 @@ from v3.combat_policy import (
     CombatHeuristicTeacher,
     CombatPolicyBase,
     RichCombatVectorizer,
+    SemanticCombatVectorizer,
+    load_semantic_combat_base,
     load_combat_base,
 )
 from v3.config import load_config
@@ -37,14 +39,18 @@ def main() -> int:
         description="Frozen Brotato policy runner for evaluation and safe data collection"
     )
     parser.add_argument("--model", type=Path)
-    parser.add_argument("--policy", choices=("model", "bc", "teacher"), default="model")
+    parser.add_argument(
+        "--policy",
+        choices=("model", "bc", "semantic", "teacher"),
+        default="model",
+    )
     parser.add_argument("--timesteps", type=int, default=1_000_000)
     parser.add_argument("--episodes", type=int, default=0)
     parser.add_argument("--results", type=Path)
     parser.add_argument("--combat-dataset", type=Path)
     parser.add_argument("--no-safety", action="store_true")
     args = parser.parse_args()
-    if args.policy in {"model", "bc"} and args.model is None:
+    if args.policy in {"model", "bc", "semantic"} and args.model is None:
         parser.error(f"--model is required with --policy {args.policy}")
     if args.policy == "model" and RecurrentPPO is None:
         raise RuntimeError("sb3-contrib is required: pip install sb3-contrib")
@@ -59,6 +65,8 @@ def main() -> int:
     model = None
     bc_model = None
     bc_vectorizer = None
+    semantic_model = None
+    semantic_vectorizer = None
     teacher = None
     source = args.policy
     if args.policy == "model":
@@ -69,6 +77,14 @@ def main() -> int:
         bc_vectorizer = RichCombatVectorizer()
         print(
             f"[v3-frozen] combat_bc={args.model.resolve()} deterministic=True "
+            f"validation_accuracy={metadata.get('validation_accuracy')} "
+            f"best_epoch={metadata.get('best_epoch')}"
+        )
+    elif args.policy == "semantic":
+        semantic_model, metadata = load_semantic_combat_base(args.model)
+        semantic_vectorizer = SemanticCombatVectorizer()
+        print(
+            f"[v3-frozen] semantic_base={args.model.resolve()} deterministic=True "
             f"validation_accuracy={metadata.get('validation_accuracy')} "
             f"best_epoch={metadata.get('best_epoch')}"
         )
@@ -104,6 +120,14 @@ def main() -> int:
                 with torch.no_grad():
                     selected = int(
                         bc_model(torch.from_numpy(rich).unsqueeze(0)).argmax(dim=1).item()
+                    )
+            elif semantic_model is not None:
+                semantic = semantic_vectorizer.build(env.last_state or {}, env.previous_action)
+                with torch.no_grad():
+                    selected = int(
+                        semantic_model(torch.from_numpy(semantic).unsqueeze(0))
+                        .argmax(dim=1)
+                        .item()
                     )
             else:
                 selected = int(teacher.select(env.last_state or {}))

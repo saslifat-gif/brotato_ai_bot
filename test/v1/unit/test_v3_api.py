@@ -16,8 +16,12 @@ from v3.combat_policy import (
     CombatPolicyBase,
     CombatSafetyShield,
     HumanCombatDecisionLogger,
+    SemanticHumanCombatDecisionLogger,
     RICH_OBSERVATION_SIZE,
     RichCombatVectorizer,
+    SEMANTIC_OBSERVATION_SIZE,
+    SemanticCombatPolicyBase,
+    SemanticCombatVectorizer,
 )
 from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
 from v3.record_human import require_human_input_capability, should_record
@@ -160,6 +164,88 @@ def test_human_combat_logger_writes_bc_record(tmp_path):
     assert len(record["features"]) == RICH_OBSERVATION_SIZE
 
 
+def test_semantic_vector_and_model_preserve_old_actor_with_new_api_fields(tmp_path):
+    state = _state()
+    state["enemies"] = [{
+        "position": {"x": 700, "y": 330},
+        "velocity": {"x": -40, "y": 0},
+        "health": 30,
+        "max_health": 30,
+        "radius": 70,
+        "id": "enemy_charger",
+        "type": "charger",
+        "width": 140,
+        "height": 90,
+        "contact_damage": 12,
+        "attack_cooldown_remaining": 0.3,
+        "is_attacking": True,
+        "is_elite": True,
+        "attack_type": "charge",
+        "movement_type": "follow_player",
+    }]
+    state["pickups"] = [{
+        "id": "fruit",
+        "type": "healing_fruit",
+        "category": "healing",
+        "position": {"x": 520, "y": 320},
+        "healing": 4,
+        "material_value": 0,
+        "crate_value": 0,
+        "width": 30,
+        "height": 30,
+    }]
+    state["combat"] = {"weapons": [{
+        "id": "weapon_stick_1",
+        "attack_type": "melee",
+        "range": 180,
+        "cooldown_remaining": 0.2,
+        "cooldown_duration": 1.0,
+        "reload_remaining": 0,
+        "ammo": -1,
+        "ammo_capacity": -1,
+        "ready": False,
+        "is_attacking": True,
+        "is_reloading": False,
+    }]}
+    state["attack_indicators"] = [{
+        "id": "boss_warning",
+        "type": "aoe_warning",
+        "position": {"x": 600, "y": 300},
+        "direction": {"x": -1, "y": 0},
+        "width": 200,
+        "height": 100,
+        "time_to_activate": 0.5,
+        "damage": 15,
+        "active": False,
+    }]
+    vectorizer = SemanticCombatVectorizer()
+    features = vectorizer.build(state, previous_action=4)
+    assert features.shape == (SEMANTIC_OBSERVATION_SIZE,)
+    assert np.isfinite(features).all()
+    assert np.count_nonzero(features[RICH_OBSERVATION_SIZE:]) > 20
+    old = CombatPolicyBase()
+    semantic = SemanticCombatPolicyBase(old)
+    assert semantic.parameter_count < 100_000
+    batch = torch.from_numpy(features[None, :])
+    with torch.no_grad():
+        assert torch.allclose(semantic(batch), old(batch[:, :RICH_OBSERVATION_SIZE]))
+
+    path = tmp_path / "semantic.jsonl"
+    SemanticHumanCombatDecisionLogger(path).record(
+        state, 4, previous_action=3, episode=1
+    )
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["dataset"] == "human_semantic_combat_v2"
+    assert record["schema"] == 2
+    assert len(record["features"]) == SEMANTIC_OBSERVATION_SIZE
+    assert record["counts"] == {
+        "enemies": 1,
+        "pickups": 1,
+        "indicators": 1,
+        "weapons": 1,
+    }
+
+
 def test_human_recorder_samples_transitions_and_throttles_idle():
     assert should_record(4, 3, 0.01, sample_hz=8, idle_hz=2)
     assert not should_record(4, 4, 0.05, sample_hz=8, idle_hz=2)
@@ -169,8 +255,10 @@ def test_human_recorder_samples_transitions_and_throttles_idle():
 
 
 def test_human_recorder_rejects_old_bridge():
-    require_human_input_capability({"capabilities": ["structured_state", "human_input_observation"]})
-    with pytest.raises(RuntimeError, match="Bridge 0.2.1"):
+    require_human_input_capability({
+        "capabilities": ["human_input_observation", "semantic_entities_v2"]
+    })
+    with pytest.raises(RuntimeError, match="Bridge 0.3.0"):
         require_human_input_capability({"capabilities": ["structured_state"]})
 
 
@@ -296,6 +384,12 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "const MAX_PROJECTILES := 64" in bridge
     assert "const MAX_PICKUPS := 32" in bridge
     assert "func _state_interval_sec() -> float:" in bridge
+    assert '"semantic_entities_v2"' in bridge
+    assert '"pickup_semantics"' in bridge
+    assert '"weapon_readiness"' in bridge
+    assert '"attack_indicators"' in bridge
+    assert '"width": static_data["width"]' in bridge
+    assert '"healing": static_data["healing"]' in bridge
     assert "set_pause(true)" not in bridge
     assert 'if lower == "main":' in bridge
     assert "main_extension" not in mod_main
@@ -407,7 +501,7 @@ def test_bridge_advertises_language_independent_build_choices():
     assert '"combat_build_summary"' in bridge
     assert '"threat_geometry"' in bridge
     assert '"is_charging"' in bridge
-    assert '"radius": _collision_radius' in bridge
+    assert 'func _collision_shape_data(object) -> Dictionary:' in bridge
 
 
 def test_stick_melee_teacher_prioritizes_stick_and_melee_upgrade():
@@ -795,7 +889,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.2.2.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.0.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

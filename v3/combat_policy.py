@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -20,6 +21,9 @@ RICH_OBSERVATION_SIZE = 384
 RICH_MAX_ENEMIES = 20
 RICH_MAX_PROJECTILES = 20
 RICH_MAX_PICKUPS = 8
+SEMANTIC_OBSERVATION_SIZE = 832
+SEMANTIC_MAX_INDICATORS = 10
+SEMANTIC_MAX_WEAPONS = 6
 
 ACTION_VECTORS = {
     MoveAction.IDLE: (0.0, 0.0),
@@ -307,6 +311,140 @@ class RichCombatVectorizer:
         return output
 
 
+def _hash_pair(*values: Any) -> tuple[float, float]:
+    token = "|".join(str(value).lower() for value in values if value)
+    digest = zlib.crc32(token.encode("utf-8")) & 0xFFFFFFFF
+    return (
+        (float(digest & 0xFFFF) / 32767.5) - 1.0,
+        (float((digest >> 16) & 0xFFFF) / 32767.5) - 1.0,
+    )
+
+
+class SemanticCombatVectorizer:
+    """V2 observation preserving v1 while adding API-only entity semantics."""
+
+    observation_size = SEMANTIC_OBSERVATION_SIZE
+
+    def __init__(self):
+        self.base = RichCombatVectorizer()
+
+    def build(self, state: Mapping[str, Any], previous_action: int = 0) -> np.ndarray:
+        output = np.zeros(SEMANTIC_OBSERVATION_SIZE, dtype=np.float32)
+        output[:RICH_OBSERVATION_SIZE] = self.base.build(state, previous_action)
+        arena = _mapping(state.get("arena"))
+        width = max(1.0, _number(arena.get("width"), 1920.0))
+        height = max(1.0, _number(arena.get("height"), 1080.0))
+        player = _mapping(state.get("player"))
+        px, py = _xy(player.get("position"))
+        max_health = max(1.0, _number(player.get("max_health"), 1.0))
+        cursor = RICH_OBSERVATION_SIZE
+
+        for enemy in _nearest(_items(state.get("enemies")), px, py)[:RICH_MAX_ENEMIES]:
+            identity = _hash_pair(enemy.get("id"), enemy.get("type"))
+            attack_hash = _hash_pair(enemy.get("attack_type"))[0]
+            movement_hash = _hash_pair(enemy.get("movement_type"))[0]
+            output[cursor:cursor + 10] = (
+                identity[0], identity[1],
+                np.clip(_number(enemy.get("width"), 80.0) / width, 0.0, 1.0),
+                np.clip(_number(enemy.get("height"), 80.0) / height, 0.0, 1.0),
+                np.clip(_number(enemy.get("contact_damage")) / max_health, 0.0, 4.0) / 4.0,
+                np.clip(_number(enemy.get("attack_cooldown_remaining")) / 5.0, 0.0, 1.0),
+                1.0 if enemy.get("is_attacking") else 0.0,
+                1.0 if enemy.get("is_elite") else 0.0,
+                attack_hash,
+                movement_hash,
+            )
+            cursor += 10
+
+        cursor = RICH_OBSERVATION_SIZE + RICH_MAX_ENEMIES * 10
+        categories = ("healing", "crate", "material", "consumable")
+        for pickup in _nearest(_items(state.get("pickups")), px, py)[:RICH_MAX_PICKUPS]:
+            identity = _hash_pair(pickup.get("id"), pickup.get("type"))
+            category = str(pickup.get("category", ""))
+            one_hot = [1.0 if category == value else 0.0 for value in categories]
+            output[cursor:cursor + 11] = (
+                *one_hot,
+                identity[0], identity[1],
+                np.clip(_number(pickup.get("healing")) / max_health, 0.0, 1.0),
+                np.clip(_number(pickup.get("material_value")) / 100.0, 0.0, 1.0),
+                np.clip(_number(pickup.get("crate_value")), 0.0, 1.0),
+                np.clip(_number(pickup.get("width"), 40.0) / width, 0.0, 1.0),
+                np.clip(_number(pickup.get("height"), 40.0) / height, 0.0, 1.0),
+            )
+            cursor += 11
+
+        cursor = RICH_OBSERVATION_SIZE + RICH_MAX_ENEMIES * 10 + RICH_MAX_PICKUPS * 11
+        combat = _mapping(state.get("combat"))
+        for weapon in _items(combat.get("weapons"))[:SEMANTIC_MAX_WEAPONS]:
+            identity = _hash_pair(weapon.get("id"))
+            attack_hash = _hash_pair(weapon.get("attack_type"))[0]
+            cooldown_duration = max(1e-6, _number(weapon.get("cooldown_duration"), 1.0))
+            ammo = _number(weapon.get("ammo"), -1.0)
+            capacity = _number(weapon.get("ammo_capacity"), -1.0)
+            output[cursor:cursor + 10] = (
+                identity[0], identity[1], attack_hash,
+                np.clip(_number(weapon.get("range")) / 1000.0, 0.0, 1.0),
+                np.clip(_number(weapon.get("cooldown_remaining")) / cooldown_duration, 0.0, 1.0),
+                np.clip(_number(weapon.get("reload_remaining")) / 5.0, 0.0, 1.0),
+                np.clip(ammo / max(1.0, capacity), 0.0, 1.0) if ammo >= 0.0 else -1.0,
+                1.0 if weapon.get("ready") else 0.0,
+                1.0 if weapon.get("is_attacking") else 0.0,
+                1.0 if weapon.get("is_reloading") else 0.0,
+            )
+            cursor += 10
+
+        cursor = (
+            RICH_OBSERVATION_SIZE
+            + RICH_MAX_ENEMIES * 10
+            + RICH_MAX_PICKUPS * 11
+            + SEMANTIC_MAX_WEAPONS * 10
+        )
+        indicators = _nearest(_items(state.get("attack_indicators")), px, py)
+        for indicator in indicators[:SEMANTIC_MAX_INDICATORS]:
+            token_hash = _hash_pair(indicator.get("id"), indicator.get("type"))[0]
+            dx, dy = _relative(indicator, px, py)
+            direction_x, direction_y = _xy(indicator.get("direction"))
+            output[cursor:cursor + 10] = (
+                token_hash,
+                np.clip(dx / width, -1.0, 1.0),
+                np.clip(dy / height, -1.0, 1.0),
+                np.clip(direction_x, -1.0, 1.0),
+                np.clip(direction_y, -1.0, 1.0),
+                np.clip(_number(indicator.get("width"), 80.0) / width, 0.0, 1.0),
+                np.clip(_number(indicator.get("height"), 80.0) / height, 0.0, 1.0),
+                np.clip(_number(indicator.get("time_to_activate")) / 5.0, 0.0, 1.0),
+                np.clip(_number(indicator.get("damage")) / max_health, 0.0, 1.0),
+                1.0 if indicator.get("active") else 0.0,
+            )
+            cursor += 10
+        return output
+
+
+class SemanticCombatPolicyBase(nn.Module):
+    """Small v2 actor that preserves v1 behavior and learns semantic residuals."""
+
+    def __init__(self, base: CombatPolicyBase | None = None):
+        super().__init__()
+        self.base = base or CombatPolicyBase()
+        semantic_size = SEMANTIC_OBSERVATION_SIZE - RICH_OBSERVATION_SIZE
+        self.semantic = nn.Sequential(
+            nn.LayerNorm(semantic_size),
+            nn.Linear(semantic_size, 64), nn.Tanh(),
+            nn.Linear(64, len(MoveAction)),
+        )
+        nn.init.zeros_(self.semantic[-1].weight)
+        nn.init.zeros_(self.semantic[-1].bias)
+
+    def forward(self, observation: torch.Tensor) -> torch.Tensor:
+        old_logits = self.base(observation[..., :RICH_OBSERVATION_SIZE])
+        semantic = observation[..., RICH_OBSERVATION_SIZE:]
+        return old_logits + self.semantic(semantic)
+
+    @property
+    def parameter_count(self) -> int:
+        return sum(parameter.numel() for parameter in self.parameters())
+
+
 class CombatPolicyBase(nn.Module):
     """Small behavior-cloning base for future combat fine-tuning."""
 
@@ -338,6 +476,20 @@ def load_combat_base(path: Path) -> tuple[CombatPolicyBase, dict]:
     if not isinstance(checkpoint, dict) or checkpoint.get("format") != "brotato_combat_base_v1":
         raise RuntimeError(f"unsupported combat BC checkpoint: {resolved}")
     model = CombatPolicyBase()
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return model, checkpoint
+
+
+def load_semantic_combat_base(path: Path) -> tuple[SemanticCombatPolicyBase, dict]:
+    resolved = Path(path).resolve()
+    try:
+        checkpoint = torch.load(resolved, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(resolved, map_location="cpu")
+    if not isinstance(checkpoint, dict) or checkpoint.get("format") != "brotato_semantic_combat_base_v2":
+        raise RuntimeError(f"unsupported semantic combat checkpoint: {resolved}")
+    model = SemanticCombatPolicyBase()
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
     return model, checkpoint
@@ -406,6 +558,48 @@ class HumanCombatDecisionLogger:
             "action": normalized,
             "human_input_age_ms": int(_number(state.get("human_input_age_ms"), -1)),
             "source": "human_wasd",
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+
+class SemanticHumanCombatDecisionLogger:
+    """Record API-semantic v2 observations with human movement labels."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.vectorizer = SemanticCombatVectorizer()
+
+    def record(
+        self,
+        state: Mapping[str, Any],
+        action: int,
+        *,
+        previous_action: int,
+        episode: int,
+    ) -> None:
+        normalized = int(MoveAction(int(action)))
+        features = self.vectorizer.build(state, previous_action)
+        record = {
+            "schema": 2,
+            "dataset": "human_semantic_combat_v2",
+            "timestamp": time.time(),
+            "session": str(state.get("session", "")),
+            "episode": int(episode),
+            "tick": int(_number(state.get("tick"), -1)),
+            "wave": int(_number(_mapping(state.get("wave")).get("number"))),
+            "features": [round(float(value), 6) for value in features],
+            "previous_action": int(MoveAction(int(previous_action))),
+            "action": normalized,
+            "human_input_age_ms": int(_number(state.get("human_input_age_ms"), -1)),
+            "source": "human_wasd_semantic_api",
+            "counts": {
+                "enemies": len(_items(state.get("enemies"))),
+                "pickups": len(_items(state.get("pickups"))),
+                "indicators": len(_items(state.get("attack_indicators"))),
+                "weapons": len(_items(_mapping(state.get("combat")).get("weapons"))),
+            },
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:

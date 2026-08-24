@@ -7,21 +7,25 @@ import time
 from pathlib import Path
 
 from v3.bridge_server import BridgeServer
-from v3.combat_policy import HumanCombatDecisionLogger
+from v3.combat_policy import SemanticHumanCombatDecisionLogger
 from v3.config import load_config
 from v3.protocol import MoveAction
 from v3.ui_automation import AutoUiController
 
 
 HUMAN_INPUT_CAPABILITY = "human_input_observation"
+SEMANTIC_CAPABILITY = "semantic_entities_v2"
 
 
 def require_human_input_capability(hello: object) -> None:
     payload = hello if isinstance(hello, dict) else {}
     capabilities = payload.get("capabilities", [])
-    if HUMAN_INPUT_CAPABILITY not in capabilities:
+    if (
+        HUMAN_INPUT_CAPABILITY not in capabilities
+        or SEMANTIC_CAPABILITY not in capabilities
+    ):
         raise RuntimeError(
-            "Bridge 0.2.1+ with human_input_observation is required; "
+            "Bridge 0.3.0+ with human input and semantic entities is required; "
             "reinstall the v3 mod and restart Brotato"
         )
 
@@ -48,7 +52,7 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=cfg.output_dir / "human_combat_v1.jsonl",
+        default=cfg.output_dir / "human_semantic_combat_v2.jsonl",
     )
     parser.add_argument("--sample-hz", type=float, default=8.0)
     parser.add_argument("--idle-hz", type=float, default=2.0)
@@ -58,7 +62,7 @@ def main() -> int:
         parser.error("sample frequencies must be positive")
 
     output = args.output.resolve()
-    logger = HumanCombatDecisionLogger(output)
+    logger = SemanticHumanCombatDecisionLogger(output)
     server = BridgeServer(cfg.host, cfg.port)
     controller = AutoUiController(
         max_shop_buys=cfg.max_shop_buys,

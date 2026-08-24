@@ -13,9 +13,15 @@ Game to trainer:
   upgrade and found-item actions include a language-independent `choice` object with internal
   IDs, category, tier, price, affordability, tags and numeric effects. Full inventory/build
   metadata is emitted only during UI phases. Combat states contain a compact `combat` summary
-  with character, weapon counts/range, movement speed, armor and attack speed. Enemy and
-  projectile entries additionally advertise IDs, collision radius, attack type and available
-  charge/boss metadata for geometric safety and future rich policies. Bridge 0.2.1 also emits
+  with character, weapon counts/range, movement speed, armor and attack speed. Bridge 0.3.0
+  adds per-weapon IDs, range, cooldown/reload timers, ammo capacity, readiness and attack state.
+  Enemy entries advertise stable IDs/types, exact collision width/height when available,
+  contact damage, attack/movement type, cooldown, charging/attacking and boss/elite flags.
+  Pickup entries advertise stable identity, collision size, and a `category` of `healing`,
+  `crate`, `material`, or `consumable`, plus healing/material values where the game exposes
+  them. `attack_indicators` contains visible API-discovered warning geometry, direction,
+  activation time and damage. Projectile entries include ID, collision geometry, damage,
+  lifetime and attack type. Bridge 0.2.1+ also emits
   `human_action`, the nine-way action returned by Brotato's vanilla movement behavior, plus
   `human_input_age_ms`. Observation-only recorders can capture keyboard demonstrations without
   sending combat actions. `sequence` acknowledges the most recent

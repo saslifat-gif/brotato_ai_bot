@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.2.2"
+const MOD_VERSION := "0.3.0"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -15,6 +15,9 @@ const LATE_STATE_INTERVAL_SEC := 1.0 / 12.0
 const MAX_ENEMIES := 64
 const MAX_PROJECTILES := 64
 const MAX_PICKUPS := 32
+const MAX_ATTACK_INDICATORS := 32
+const MAX_COMBAT_WEAPONS := 6
+const MAX_INDICATOR_SCAN_NODES := 1200
 const MAX_UI_ACTIONS := 64
 const MAX_BUILD_ITEMS := 128
 const BUILD_STAT_KEYS := [
@@ -54,8 +57,12 @@ var _observed_player = null
 var _logged_player_probe := false
 var _entity_static_cache := {}
 var _projectile_static_cache := {}
+var _pickup_static_cache := {}
 var _latest_human_action := 0
 var _last_human_input_ms := 0
+var _last_attack_indicators := []
+var _indicator_scan_nodes := 0
+var _indicator_scan_seen := {}
 
 
 func _ready() -> void:
@@ -295,6 +302,7 @@ func _build_state() -> Dictionary:
 	var enemies := []
 	var projectiles := []
 	var pickups := []
+	var attack_indicators := []
 	var ui_actions := []
 
 	if main != null:
@@ -307,9 +315,9 @@ func _build_state() -> Dictionary:
 				if is_instance_valid(enemy):
 					_observe_enemy_death(enemy)
 					enemies.append(_entity_state(enemy))
-		_append_children(main.get_node_or_null("Projectiles"), projectiles, "projectile", MAX_PROJECTILES)
-		_append_children(main.get_node_or_null("Items"), pickups, "item", MAX_PICKUPS)
-		_append_children(main.get_node_or_null("Consumables"), pickups, "consumable", MAX_PICKUPS)
+		_append_projectiles(main.get_node_or_null("Projectiles"), projectiles, MAX_PROJECTILES)
+		_append_pickups(main.get_node_or_null("Items"), pickups, "item", MAX_PICKUPS)
+		_append_pickups(main.get_node_or_null("Consumables"), pickups, "consumable", MAX_PICKUPS)
 
 	var timer = _property(main, "_wave_timer", null)
 	var run_data = root.get_node_or_null("RunData")
@@ -347,6 +355,12 @@ func _build_state() -> Dictionary:
 		_collect_ui_actions(get_tree().current_scene, ui_actions, phase)
 	elif phase == "combat":
 		combat_state = _combat_summary(player, run_data)
+		# Warning-node discovery is more expensive than the normal entity export.
+		# Four scans/second at early-wave rate is responsive without worsening the
+		# late-wave frame drops that motivated the adaptive state interval.
+		if _tick % 6 == 0 or _last_attack_indicators.empty():
+			_last_attack_indicators = _collect_attack_indicators(main)
+		attack_indicators = _last_attack_indicators.duplicate(true)
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
@@ -379,6 +393,7 @@ func _build_state() -> Dictionary:
 		"enemies": enemies,
 		"projectiles": projectiles,
 		"pickups": pickups,
+		"attack_indicators": attack_indicators,
 		"combat": combat_state,
 		"human_action": _latest_human_action,
 		"human_input_age_ms": max(0, OS.get_ticks_msec() - _last_human_input_ms),
@@ -604,6 +619,7 @@ func _combat_summary(player, run_data) -> Dictionary:
 	var ranged_count := 0
 	var weapon_range := 170.0
 	var range_seen := false
+	var weapon_states := []
 	if typeof(weapons) == TYPE_ARRAY:
 		for weapon in weapons:
 			if weapon == null:
@@ -625,6 +641,8 @@ func _combat_summary(player, run_data) -> Dictionary:
 				ranged_count += 1
 			else:
 				melee_count += 1
+			if weapon_states.size() < MAX_COMBAT_WEAPONS:
+				weapon_states.append(_combat_weapon_state(weapon, weapon_stats))
 	var armor := 0.0
 	var attack_speed := 0.0
 	var speed_stat := 0.0
@@ -647,8 +665,88 @@ func _combat_summary(player, run_data) -> Dictionary:
 		"move_speed": move_speed,
 		"armor": armor,
 		"attack_speed": attack_speed,
-		"dodge": float(_first_property(current_stats, ["dodge"], 0.0))
+		"dodge": float(_first_property(current_stats, ["dodge"], 0.0)),
+		"weapons": weapon_states
 	}
+
+
+func _combat_weapon_state(weapon, weapon_stats) -> Dictionary:
+	var weapon_data = _first_property(weapon, ["weapon_data", "item_data", "data"], null)
+	var token := _script_token(weapon) + " " + _script_token(weapon_data)
+	var cooldown_timer = _first_property(
+		weapon,
+		["_cooldown_timer", "cooldown_timer", "_attack_timer", "attack_timer"],
+		null
+	)
+	var reload_timer = _first_property(
+		weapon,
+		["_reload_timer", "reload_timer"],
+		null
+	)
+	if cooldown_timer == null:
+		cooldown_timer = _find_named_timer(weapon, ["cooldown", "attack"])
+	if reload_timer == null:
+		reload_timer = _find_named_timer(weapon, ["reload"])
+	var cooldown_remaining := float(_first_property(
+		cooldown_timer,
+		["time_left"],
+		_first_property(weapon, ["cooldown_remaining", "attack_cooldown", "_cooldown"], 0.0)
+	))
+	var cooldown_duration := float(_first_property(
+		cooldown_timer,
+		["wait_time"],
+		_first_property(weapon_stats, ["cooldown", "attack_cooldown", "cooldown_duration"], 0.0)
+	))
+	var reload_remaining := float(_first_property(reload_timer, ["time_left"], 0.0))
+	var ammo := int(_first_property(
+		weapon,
+		["current_ammo", "ammo", "ammo_count", "shots_remaining"],
+		_first_property(weapon_stats, ["current_ammo", "ammo", "ammo_count"], -1)
+	))
+	var ammo_capacity := int(_first_property(
+		weapon,
+		["max_ammo", "ammo_capacity", "magazine_size"],
+		_first_property(weapon_stats, ["max_ammo", "ammo_capacity", "magazine_size"], -1)
+	))
+	var reloading := reload_remaining > 0.001 or bool(_first_property(
+		weapon,
+		["is_reloading", "reloading", "_is_reloading"],
+		false
+	))
+	return {
+		"id": str(_first_property(
+			weapon_data,
+			["weapon_id", "my_id", "id"],
+			_first_property(weapon, ["weapon_id", "my_id", "id"], str(weapon.name))
+		)),
+		"attack_type": token,
+		"range": float(_first_property(weapon_stats, ["max_range", "range"], 170.0)),
+		"cooldown_remaining": max(0.0, cooldown_remaining),
+		"cooldown_duration": max(0.0, cooldown_duration),
+		"reload_remaining": max(0.0, reload_remaining),
+		"ammo": ammo,
+		"ammo_capacity": ammo_capacity,
+		"is_reloading": reloading,
+		"is_attacking": bool(_first_property(
+			weapon,
+			["is_attacking", "attacking", "_is_attacking"],
+			false
+		)),
+		"ready": cooldown_remaining <= 0.001 and not reloading and ammo != 0,
+		"rotation": float(_property(weapon, "global_rotation", _property(weapon, "rotation", 0.0)))
+	}
+
+
+func _find_named_timer(node, terms: Array):
+	if node == null:
+		return null
+	for child in node.get_children():
+		if child is Timer:
+			var token := str(child.name).to_lower()
+			for term in terms:
+				if token.find(str(term)) >= 0:
+					return child
+	return null
 
 
 func _detect_visible_ui_phase(node) -> String:
@@ -844,41 +942,107 @@ func _entity_state(entity) -> Dictionary:
 		null
 	)
 	var attack_token := _script_token(attack_behavior)
+	var movement_behavior = _first_property(
+		entity,
+		["_current_movement_behavior", "current_movement_behavior", "_movement_behavior"],
+		null
+	)
 	var charge_direction = _first_property(
 		attack_behavior,
 		["_charge_direction", "charge_direction", "direction"],
 		Vector2.ZERO
 	)
+	var target_position = _first_property(
+		attack_behavior,
+		["target_position", "_target_position", "attack_position", "_attack_position"],
+		Vector2.ZERO
+	)
+	var cooldown_remaining := float(_first_property(
+		attack_behavior,
+		["cooldown_remaining", "time_left", "_cooldown", "attack_cooldown"],
+		0.0
+	))
 	return {
 		"id": static_data["id"],
+		"type": static_data["type"],
 		"position": _vector_json(_property(entity, "position", Vector2.ZERO)),
 		"velocity": _vector_json(_property(entity, "linear_velocity", Vector2.ZERO)),
 		"health": float(_property(current_stats, "health", 1.0)),
 		"max_health": max(1.0, float(_property(max_stats, "health", 1.0))),
 		"radius": static_data["radius"],
+		"width": static_data["width"],
+		"height": static_data["height"],
+		"shape": static_data["shape"],
+		"size_known": static_data["size_known"],
 		"is_boss": static_data["is_boss"],
+		"is_elite": static_data["is_elite"],
 		"is_loot": static_data["is_loot"],
+		"contact_damage": float(_first_property(
+			current_stats,
+			["damage", "contact_damage", "touch_damage"],
+			_first_property(entity, ["damage", "contact_damage", "touch_damage"], 0.0)
+		)),
 		"is_charging": attack_token.find("charg") >= 0,
+		"is_attacking": bool(_first_property(
+			attack_behavior,
+			["is_attacking", "attacking", "_is_attacking", "active"],
+			false
+		)),
 		"charge_direction": _vector_json(charge_direction),
-		"attack_type": attack_token
+		"attack_target": _vector_json(target_position),
+		"attack_cooldown_remaining": max(0.0, cooldown_remaining),
+		"attack_type": attack_token,
+		"movement_type": _script_token(movement_behavior)
 	}
 
 
-func _append_children(container, output: Array, kind: String, maximum: int) -> void:
+func _append_projectiles(container, output: Array, maximum: int) -> void:
 	if container == null:
 		return
 	for child in container.get_children():
 		if output.size() >= maximum:
 			break
 		var static_data := _projectile_static_data(child)
+		var shape_data := _collision_shape_data(child)
 		output.append({
 			"id": static_data["id"],
 			"position": _vector_json(_property(child, "position", Vector2.ZERO)),
 			"velocity": _vector_json(_property(child, "linear_velocity", Vector2.ZERO)),
 			"rotation": float(_property(child, "rotation", 0.0)),
 			"radius": static_data["radius"],
+			"width": shape_data["width"],
+			"height": shape_data["height"],
+			"shape": shape_data["shape"],
 			"damage": static_data["damage"],
 			"attack_type": static_data["attack_type"],
+			"time_to_live": float(_first_property(
+				child,
+				["time_to_live", "lifetime_remaining", "duration_remaining"],
+				-1.0
+			)),
+			"kind": "projectile"
+		})
+
+
+func _append_pickups(container, output: Array, kind: String, maximum: int) -> void:
+	if container == null:
+		return
+	for child in container.get_children():
+		if output.size() >= maximum:
+			break
+		var static_data := _pickup_static_data(child, kind)
+		output.append({
+			"id": static_data["id"],
+			"type": static_data["type"],
+			"category": static_data["category"],
+			"position": _vector_json(_property(child, "position", Vector2.ZERO)),
+			"velocity": _vector_json(_property(child, "linear_velocity", Vector2.ZERO)),
+			"radius": static_data["radius"],
+			"width": static_data["width"],
+			"height": static_data["height"],
+			"healing": static_data["healing"],
+			"material_value": static_data["material_value"],
+			"crate_value": static_data["crate_value"],
 			"kind": kind
 		})
 
@@ -891,17 +1055,73 @@ func _entity_static_data(entity) -> Dictionary:
 		return _entity_static_cache[cache_key]
 	var entity_data = _first_property(entity, ["enemy_data", "unit_data", "data"], null)
 	var entity_token := _script_token(entity) + " " + _script_token(entity_data)
+	var shape_data := _collision_shape_data(entity)
 	var result := {
 		"id": str(_first_property(
 			entity_data,
 			["my_id", "id"],
 			_first_property(entity, ["my_id", "id"], str(entity.name))
 		)),
-		"radius": _collision_radius(entity),
+		"type": entity_token,
+		"radius": shape_data["radius"],
+		"width": shape_data["width"],
+		"height": shape_data["height"],
+		"shape": shape_data["shape"],
+		"size_known": shape_data["known"],
 		"is_boss": bool(_property(entity, "is_boss", false)) or entity_token.find("boss") >= 0,
+		"is_elite": bool(_first_property(entity, ["is_elite", "elite"], false)) or entity_token.find("elite") >= 0,
 		"is_loot": bool(_property(entity, "is_loot", false))
 	}
 	_entity_static_cache[cache_key] = result
+	return result
+
+
+func _pickup_static_data(pickup, kind: String) -> Dictionary:
+	if _pickup_static_cache.size() > 4096:
+		_pickup_static_cache.clear()
+	var cache_key := int(pickup.get_instance_id())
+	if _pickup_static_cache.has(cache_key):
+		return _pickup_static_cache[cache_key]
+	var data = _first_property(
+		pickup,
+		["consumable_data", "pickup_data", "item_data", "data"],
+		null
+	)
+	var token := _script_token(pickup) + " " + _script_token(data)
+	var category := kind
+	if token.find("fruit") >= 0 or token.find("heal") >= 0 or token.find("food") >= 0:
+		category = "healing"
+	elif token.find("crate") >= 0 or token.find("box") >= 0 or token.find("loot") >= 0:
+		category = "crate"
+	elif token.find("material") >= 0 or token.find("currency") >= 0 or token.find("gold") >= 0:
+		category = "material"
+	elif kind == "consumable":
+		category = "consumable"
+	var shape_data := _collision_shape_data(pickup)
+	var result := {
+		"id": str(_first_property(
+			data,
+			["my_id", "id", "item_id", "consumable_id"],
+			_first_property(pickup, ["my_id", "id"], str(pickup.name))
+		)),
+		"type": token,
+		"category": category,
+		"radius": shape_data["radius"],
+		"width": shape_data["width"],
+		"height": shape_data["height"],
+		"healing": float(_first_property(
+			pickup,
+			["healing", "heal_amount", "hp_restored", "health_restored"],
+			_first_property(data, ["healing", "heal_amount", "hp_restored", "health_restored"], 0.0)
+		)),
+		"material_value": float(_first_property(
+			pickup,
+			["material_value", "materials", "currency_value", "value"],
+			_first_property(data, ["material_value", "materials", "currency_value"], 0.0)
+		)),
+		"crate_value": 1.0 if category == "crate" else 0.0
+	}
+	_pickup_static_cache[cache_key] = result
 	return result
 
 
@@ -911,14 +1131,120 @@ func _projectile_static_data(projectile) -> Dictionary:
 	var cache_key := int(projectile.get_instance_id())
 	if _projectile_static_cache.has(cache_key):
 		return _projectile_static_cache[cache_key]
+	var shape_data := _collision_shape_data(projectile)
 	var result := {
 		"id": str(_first_property(projectile, ["my_id", "id"], str(projectile.name))),
-		"radius": _collision_radius(projectile),
+		"radius": shape_data["radius"],
 		"damage": float(_first_property(projectile, ["damage", "current_damage"], 0.0)),
 		"attack_type": _script_token(projectile)
 	}
 	_projectile_static_cache[cache_key] = result
 	return result
+
+
+func _collect_attack_indicators(main) -> Array:
+	var output := []
+	_indicator_scan_nodes = 0
+	_indicator_scan_seen = {}
+	for group_name in ["attack_indicators", "warning_areas", "danger_zones", "telegraphs"]:
+		for node in get_tree().get_nodes_in_group(group_name):
+			_append_attack_indicator(node, output)
+	_collect_attack_indicators_recursive(main, output)
+	return output
+
+
+func _collect_attack_indicators_recursive(node, output: Array) -> void:
+	if node == null or output.size() >= MAX_ATTACK_INDICATORS:
+		return
+	if _indicator_scan_nodes >= MAX_INDICATOR_SCAN_NODES:
+		return
+	_indicator_scan_nodes += 1
+	if node is Control:
+		return
+	if node is CanvasItem and not node.is_visible_in_tree():
+		return
+	var token := _script_token(node)
+	if _looks_like_attack_indicator(token):
+		_append_attack_indicator(node, output)
+	for child in node.get_children():
+		if output.size() >= MAX_ATTACK_INDICATORS:
+			break
+		_collect_attack_indicators_recursive(child, output)
+
+
+func _looks_like_attack_indicator(token: String) -> bool:
+	for term in [
+		"attack_indicator",
+		"attackindicator",
+		"warning_area",
+		"warningarea",
+		"danger_zone",
+		"dangerzone",
+		"telegraph",
+		"target_indicator",
+		"targetindicator",
+		"aim_line",
+		"aimline",
+		"laser_warning",
+		"aoe_warning"
+	]:
+		if token.find(term) >= 0:
+			return true
+	return false
+
+
+func _append_attack_indicator(node, output: Array) -> void:
+	if node == null or output.size() >= MAX_ATTACK_INDICATORS:
+		return
+	if typeof(node) == TYPE_OBJECT and not is_instance_valid(node):
+		return
+	var instance_id := int(node.get_instance_id())
+	if _indicator_scan_seen.has(instance_id):
+		return
+	_indicator_scan_seen[instance_id] = true
+	var token := _script_token(node)
+	var shape_data := _collision_shape_data(node)
+	var timer = _first_property(
+		node,
+		["_activation_timer", "activation_timer", "_attack_timer", "attack_timer", "timer"],
+		null
+	)
+	if timer == null:
+		timer = _find_named_timer(node, ["activation", "warning", "attack"])
+	var direction = _first_property(
+		node,
+		["direction", "attack_direction", "aim_direction", "_direction"],
+		Vector2.ZERO
+	)
+	var owner_node = _first_property(node, ["source", "attacker", "owner_unit", "enemy"], null)
+	output.append({
+		"id": str(_first_property(node, ["my_id", "id"], str(node.name))),
+		"type": token,
+		"owner_id": str(_first_property(owner_node, ["my_id", "id"], "")),
+		"position": _vector_json(_first_property(
+			node,
+			["global_position", "position"],
+			Vector2.ZERO
+		)),
+		"direction": _vector_json(direction),
+		"rotation": float(_property(node, "global_rotation", _property(node, "rotation", 0.0))),
+		"radius": shape_data["radius"],
+		"width": shape_data["width"],
+		"height": shape_data["height"],
+		"shape": shape_data["shape"],
+		"time_to_activate": max(0.0, float(_first_property(
+			timer,
+			["time_left"],
+			_first_property(node, ["time_to_activate", "warning_time", "delay"], 0.0)
+		))),
+		"duration": max(0.0, float(_first_property(
+			timer,
+			["wait_time"],
+			_first_property(node, ["duration", "active_duration"], 0.0)
+		))),
+		"damage": float(_first_property(node, ["damage", "current_damage"], 0.0)),
+		"active": bool(_first_property(node, ["active", "is_active", "damaging"], false))
+	})
 
 
 func _script_token(object) -> String:
@@ -933,18 +1259,51 @@ func _script_token(object) -> String:
 
 
 func _collision_radius(object) -> float:
+	return float(_collision_shape_data(object)["radius"])
+
+
+func _collision_shape_data(object) -> Dictionary:
 	var hitbox = _first_property(object, ["_hitbox", "hitbox", "_hurtbox", "hurtbox"], null)
 	var collision = _first_property(hitbox, ["_collision", "collision", "collision_shape"], null)
+	if collision == null:
+		collision = _first_property(object, ["_collision", "collision", "collision_shape"], null)
 	var shape = _property(collision, "shape", null)
 	if shape == null:
-		return 40.0
+		return {
+			"radius": 40.0,
+			"width": 80.0,
+			"height": 80.0,
+			"shape": "unknown",
+			"known": false
+		}
 	var radius = _property(shape, "radius", null)
 	if radius != null:
-		return max(1.0, float(radius))
+		var diameter := max(2.0, float(radius) * 2.0)
+		return {
+			"radius": diameter / 2.0,
+			"width": diameter,
+			"height": diameter,
+			"shape": "circle",
+			"known": true
+		}
 	var extents = _property(shape, "extents", null)
 	if typeof(extents) == TYPE_VECTOR2:
-		return max(1.0, max(float(extents.x), float(extents.y)))
-	return 40.0
+		var width := max(2.0, float(extents.x) * 2.0)
+		var height := max(2.0, float(extents.y) * 2.0)
+		return {
+			"radius": max(width, height) / 2.0,
+			"width": width,
+			"height": height,
+			"shape": "rectangle",
+			"known": true
+		}
+	return {
+		"radius": 40.0,
+		"width": 80.0,
+		"height": 80.0,
+		"shape": "unknown",
+		"known": false
+	}
 
 
 func _property(object, property_name: String, fallback):
@@ -1020,6 +1379,10 @@ func _send_hello() -> void:
 			"ui_actions",
 			"combat_build_summary",
 			"threat_geometry",
+			"semantic_entities_v2",
+			"pickup_semantics",
+			"weapon_readiness",
+			"attack_indicators",
 			"human_input_observation"
 		]
 	})
