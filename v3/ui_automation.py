@@ -17,6 +17,7 @@ from v3.ui_build_policy import (
 )
 
 MAX_NO_ACTION_STATES = 30
+MAX_SHOP_NO_ACTION_STATES = 240
 MAX_TRANSITION_WAIT_STATES = 300
 MAX_UPGRADE_CLICKS_PER_WAVE = 32
 MAX_ITEM_CLAIMS_PER_WAVE = 32
@@ -369,7 +370,11 @@ class AutoUiController:
                 if (
                     pending_phase_change is None
                     and phase not in {"wave_end", "menu"}
-                    and no_action_states >= MAX_NO_ACTION_STATES
+                    and no_action_states >= (
+                        MAX_SHOP_NO_ACTION_STATES
+                        if phase == "shop"
+                        else MAX_NO_ACTION_STATES
+                    )
                 ):
                     raise RuntimeError(f"no safe UI action advertised for phase={phase}")
             state = server.wait_for_state(
