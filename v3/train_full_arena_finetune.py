@@ -125,12 +125,32 @@ def initialize_full_arena_from_semantic_ppo(
     )
     source.policy.to(model.device)
     with torch.no_grad():
+        source_features = source_extractor(old_probe)
+        source_latent = source.policy.mlp_extractor.forward_actor(source_features)
+        source_logits = source.policy.action_net(source_latent)
+        legacy_logits = target_extractor.legacy_actor(old_probe)
+        residual_logits = target_extractor.full_arena_residual(
+            new_probe[:, SEMANTIC_OBSERVATION_SIZE:]
+        )
+        target_features = target_extractor(new_probe)
+        target_latent = model.policy.mlp_extractor.forward_actor(target_features)
+        target_logits = model.policy.action_net(target_latent)
         difference = float(
-            (actor_logits(model.policy, new_probe) - actor_logits(source.policy, old_probe))
+            (target_logits - source_logits)
             .abs()
             .max()
             .item()
         )
+        legacy_difference = float((legacy_logits - source_logits).abs().max().item())
+        residual_magnitude = float(residual_logits.abs().max().item())
+        actor_helper_difference = float(
+            (actor_logits(model.policy, new_probe) - target_logits).abs().max().item()
+        )
+    print(
+        "[full-arena-ppo] transfer diagnostics "
+        f"legacy_diff={legacy_difference:.8g} residual={residual_magnitude:.8g} "
+        f"helper_diff={actor_helper_difference:.8g} final_diff={difference:.8g}"
+    )
     if difference > 1e-5:
         raise RuntimeError(f"full-arena actor transfer failed: max_abs_diff={difference}")
     return difference
