@@ -38,7 +38,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.10.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.11.zip
 ```
 
 It also keeps an editable diagnostic copy under

@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.10"
+const MOD_VERSION := "0.3.11"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -523,7 +523,7 @@ func _capture_wave_restart_state(wave_number: int) -> void:
 	# Loading it here changes only ProgressData; the live shop remains in RunData.
 	ProgressData.load_game_file()
 	var current_state = ProgressData.current_run_state
-	if current_state == null or not bool(_property(current_state, "has_run_state", false)):
+	if current_state == null:
 		print("[BrotatoRLBridge] no saved run state before wave %d" % next_wave)
 		return
 	_wave_restart_state = current_state.duplicate(true)
