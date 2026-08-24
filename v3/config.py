@@ -32,7 +32,13 @@ def load_config() -> V3Config:
     if not output.is_absolute():
         output = (root / output).resolve()
     ui_model_value = os.environ.get("BROTATO_V3_UI_MODEL", "").strip()
-    ui_model_path = Path(ui_model_value).resolve() if ui_model_value else None
+    if ui_model_value:
+        ui_model_path = Path(ui_model_value).resolve()
+    else:
+        trained_ui_candidate = output / "ui_build_base_v3_candidate.pt"
+        ui_model_path = (
+            trained_ui_candidate.resolve() if trained_ui_candidate.exists() else None
+        )
     ui_log_value = os.environ.get(
         "BROTATO_V3_UI_DATASET", str(output / "ui_decisions_stick_melee_v3.jsonl")
     ).strip()
