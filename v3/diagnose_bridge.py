@@ -44,11 +44,21 @@ def main() -> int:
             )
             if args.details:
                 combat = state.get("combat", {})
+                ui_actions = state.get("ui", {}).get("actions", [])
                 samples = {
                     "enemy": (state.get("enemies") or [None])[0],
                     "pickup": (state.get("pickups") or [None])[0],
                     "weapon": (combat.get("weapons") or [None])[0],
                     "attack_indicator": (state.get("attack_indicators") or [None])[0],
+                    "ui_actions": [
+                        {
+                            "role": action.get("role"),
+                            "name": action.get("name"),
+                            "text": action.get("text"),
+                            "enabled": action.get("enabled"),
+                        }
+                        for action in ui_actions
+                    ],
                 }
                 print("[v3-semantics] " + json.dumps(samples, ensure_ascii=False))
     print("[v3-diagnose] bridge state stream is healthy")
