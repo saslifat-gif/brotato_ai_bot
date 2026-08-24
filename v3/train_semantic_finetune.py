@@ -150,6 +150,10 @@ def main() -> int:
     model.bc_coefficient = max(0.0, float(args.bc_coefficient))
     model.bc_batches = max(0, int(args.bc_batches))
     model.set_human_anchor(features, actions)
+    if not args.resume:
+        bootstrap = cfg.output_dir / "semantic_base_ppo_bootstrap"
+        model.save(str(bootstrap))
+        print(f"[semantic-ppo] bootstrap model saved={bootstrap}.zip")
     print(
         f"[semantic-ppo] base={args.base_model.resolve()} records={len(records)} "
         f"validation_accuracy={base_metadata.get('validation_accuracy')} "
