@@ -446,6 +446,28 @@ def test_late_rich_shop_spends_instead_of_hoarding():
     assert shop_budget_limits(9, 1000, base_buys=0, base_rerolls=0)[:2] == (0, 0)
 
 
+def test_rich_shop_accepts_positive_low_score_item():
+    state = _state(wave=8, materials=570)
+    onion = {
+        "id": "/root/Shop/Onion/BuyButton",
+        "role": "buy",
+        "enabled": True,
+        "choice": {
+            "id": "item_terrified_onion",
+            "category": "item",
+            "price": 32,
+            "affordable": True,
+            "effects": [
+                {"key": "stat_speed", "value": 4},
+                {"key": "stat_luck", "value": -5},
+            ],
+        },
+    }
+    selected = StickMeleeTeacher().select(state, [onion])
+    assert selected is not None
+    assert selected.action["choice"]["id"] == "item_terrified_onion"
+
+
 def test_ui_automation_only_uses_enabled_exact_targets():
     state = dict(_state(), phase="upgrade")
     state["ui"] = {

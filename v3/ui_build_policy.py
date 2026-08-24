@@ -50,7 +50,7 @@ ROLE_NAMES = (
 CATEGORY_NAMES = ("item", "weapon", "upgrade")
 ID_BUCKETS = 1024
 ID_EMBEDDING_SIZE = 8
-STICK_MELEE_TEACHER_VERSION = 2
+STICK_MELEE_TEACHER_VERSION = 3
 CONTEXT_SIZE = 4 + len(STAT_KEYS) + 4
 CHOICE_SIZE = 5 + len(CATEGORY_NAMES) + 3 + len(ROLE_NAMES) + len(STAT_KEYS)
 
@@ -164,6 +164,7 @@ class StickMeleeTeacher:
             return None
         wave = int(_number(_mapping(state.get("wave")).get("number"), 0))
         materials = _number(_mapping(state.get("counters")).get("materials"), 0)
+        rich_shop = wave >= 8 or materials >= 300
         ranked: list[tuple[float, dict[str, Any]]] = []
         for action in candidates:
             role = str(action.get("role", ""))
@@ -175,7 +176,11 @@ class StickMeleeTeacher:
                     continue
                 # Price matters, but never overwhelms the explicit Stick bonus.
                 score = base_score - (price / max(20.0, materials)) * 8.0
-                if score < 4.0:
+                # Early shops stay selective. Once the run is rich, buying a
+                # positively useful item is better than carrying hundreds of
+                # unspent materials into harder waves.
+                minimum_buy_score = 0.0 if rich_shop else 4.0
+                if score < minimum_buy_score:
                     continue
             elif role == "take_item":
                 score = base_score + 4.0

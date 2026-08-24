@@ -34,7 +34,7 @@ def load_config() -> V3Config:
     ui_model_value = os.environ.get("BROTATO_V3_UI_MODEL", "").strip()
     ui_model_path = Path(ui_model_value).resolve() if ui_model_value else None
     ui_log_value = os.environ.get(
-        "BROTATO_V3_UI_DATASET", str(output / "ui_decisions_stick_melee_v2.jsonl")
+        "BROTATO_V3_UI_DATASET", str(output / "ui_decisions_stick_melee_v3.jsonl")
     ).strip()
     ui_decision_log = (
         None
