@@ -98,9 +98,11 @@ class AutoUiController:
         self,
         state: Mapping[str, Any],
         actions: list[dict[str, Any]],
+        *,
+        allow_learned: bool = True,
     ) -> dict[str, Any] | None:
         ranked: RankedUiAction | None = None
-        if self._learned is not None:
+        if allow_learned and self._learned is not None:
             ranked = self._learned.select(state, actions)
         if ranked is None and self._teacher is not None:
             ranked = self._teacher.select(state, actions)
@@ -176,14 +178,18 @@ class AutoUiController:
             wave = int(state.get("wave", {}).get("number", -1))
             if self._upgrade_clicks.get(wave, 0) >= MAX_UPGRADE_CLICKS_PER_WAVE:
                 return None
-            return self._rank_structured(state, choices) or (choices[0] if choices else None)
+            return self._rank_structured(
+                state, choices, allow_learned=False
+            ) or (choices[0] if choices else None)
         if phase == "item_found":
             wave = int(state.get("wave", {}).get("number", -1))
             if self._item_claims.get(wave, 0) >= MAX_ITEM_CLAIMS_PER_WAVE:
                 return None
             take = available_actions(state, "take_item")
             recycle = available_actions(state, "recycle_item")
-            ranked = self._rank_structured(state, [*take, *recycle])
+            ranked = self._rank_structured(
+                state, [*take, *recycle], allow_learned=False
+            )
             if ranked is not None:
                 return ranked
             if take:
