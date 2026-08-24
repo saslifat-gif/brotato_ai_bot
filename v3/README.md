@@ -38,7 +38,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.7.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.8.zip
 ```
 
 It also keeps an editable diagnostic copy under
@@ -131,7 +131,7 @@ action would invalidate PPO's on-policy update.
 inputs contain a 10 by 6 whole-arena map for enemy density/danger/motion,
 projectile density/damage/motion, healing pickups and material/crate pickups,
 plus exact charge direction and attack-target geometry for the nearest 20
-enemies. Bridge 0.3.7 computes the enemy map over every live enemy before the
+enemies. Bridge 0.3.8 computes the enemy map over every live enemy before the
 detailed API list is capped, so dense late waves remain visible without the
 cost of serializing every enemy object.
 
@@ -160,7 +160,7 @@ under `full_arena_finetune_best`, and TensorBoard curves under `FullArenaPPO`.
 
 `train_v3_bullet_hell_rl.bat` migrates a trained full-arena PPO actor to a
 3,941-value observation without changing its initial action logits. Bridge
-0.3.7 computes a player-centered 20 by 12 danger map from every live hostile
+0.3.8 computes a player-centered 20 by 12 danger map from every live hostile
 projectile before the detailed projectile list is capped. The map includes
 occupancy at now, 0.25, 0.5, 0.75 and 1.0 seconds; swept projectile radius;
 separate horizontal/vertical direction lanes; and damage weighting.
@@ -181,6 +181,11 @@ python -m v3.train_bullet_hell_finetune --source-model models/version_3/full_are
 Then run `train_v3_bullet_hell_rl.bat`, or resume
 `bullet_hell_ppo_bootstrap.zip`. TensorBoard writes the new generation under
 `BulletHellPPO`.
+
+During each PPO gradient update, bridge 0.3.8 pauses the Godot scene and stops
+publishing states. It resumes immediately after the update. This prevents the
+1.5-second action timeout from handing control back to an idle human input while
+enemies continue moving, and keeps unrecorded movement out of the rollout.
 
 Fine-tune that human base online without discarding its behavior:
 

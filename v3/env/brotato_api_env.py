@@ -9,7 +9,13 @@ from gymnasium import spaces
 from v3.bridge_server import BridgeServer
 from v3.combat_policy import CombatDecisionLogger, CombatSafetyShield
 from v3.config import V3Config
-from v3.protocol import MoveAction, action_message, configure_message, reset_message
+from v3.protocol import (
+    MoveAction,
+    action_message,
+    configure_message,
+    reset_message,
+    training_pause_message,
+)
 from v3.reward import ApiRewardEngine
 from v3.ui_automation import AutoUiController
 from v3.vectorizer import ApiStateVectorizer
@@ -52,6 +58,19 @@ class BrotatoApiEnv(gym.Env):
             ui_model_path=cfg.ui_model_path,
             decision_log_path=cfg.ui_decision_log,
         )
+        self.training_paused = False
+
+    def set_training_paused(self, paused: bool) -> None:
+        """Freeze game simulation while PPO updates its network weights."""
+
+        normalized = bool(paused)
+        if normalized == self.training_paused:
+            return
+        self.server.send(
+            training_pause_message(normalized),
+            timeout_sec=self.cfg.state_timeout_sec,
+        )
+        self.training_paused = normalized
 
     def _configure_state_rate(self, state) -> None:
         if self.state_hz is None:
@@ -255,5 +274,10 @@ class BrotatoApiEnv(gym.Env):
         return observation, reward, terminated, truncated, info
 
     def close(self):
+        if self.training_paused:
+            try:
+                self.set_training_paused(False)
+            except Exception:
+                pass
         self.server.close()
         super().close()

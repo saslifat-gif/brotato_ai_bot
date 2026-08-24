@@ -38,6 +38,7 @@ from v3.protocol import (
     configure_message,
     decode_message,
     encode_message,
+    training_pause_message,
     ui_action_message,
 )
 from v3.reward import ApiRewardEngine
@@ -97,6 +98,8 @@ def test_protocol_round_trip_and_action_validation():
     with pytest.raises(BridgeProtocolError):
         ui_action_message("relative/path", sequence=1)
     assert configure_message(state_hz=8) == {"type": "configure", "state_hz": 8.0}
+    assert training_pause_message(True) == {"type": "training_pause", "paused": True}
+    assert training_pause_message(False) == {"type": "training_pause", "paused": False}
     with pytest.raises(BridgeProtocolError):
         configure_message(state_hz=30)
 
@@ -681,7 +684,11 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "var _property_name_cache := {}" in bridge
     assert '"width": static_data["width"]' in bridge
     assert '"healing": static_data["healing"]' in bridge
-    assert "set_pause(true)" not in bridge
+    assert 'elif message_type == "training_pause":' in bridge
+    assert '"training_pause_v1"' in bridge
+    assert "if _training_paused:" in bridge
+    assert "get_tree().set_pause(true)" in bridge
+    assert "_training_paused = false\n\t\t\t_resume_game()" in bridge
     assert 'if lower == "main":' in bridge
     assert "main_extension" not in mod_main
     assert "vanilla death/drop logic preserved" in mod_main
@@ -1301,7 +1308,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.7.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.8.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

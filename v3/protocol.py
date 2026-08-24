@@ -83,3 +83,7 @@ def configure_message(*, state_hz: float) -> dict[str, Any]:
     if not 4.0 <= normalized <= 24.0:
         raise BridgeProtocolError(f"state_hz must be between 4 and 24: {state_hz!r}")
     return {"type": "configure", "state_hz": normalized}
+
+
+def training_pause_message(paused: bool) -> dict[str, Any]:
+    return {"type": "training_pause", "paused": bool(paused)}

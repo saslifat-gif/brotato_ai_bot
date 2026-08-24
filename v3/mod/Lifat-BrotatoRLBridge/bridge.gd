@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.7"
+const MOD_VERSION := "0.3.8"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -86,6 +86,7 @@ var _logged_semantic_probes := {}
 var _last_indicator_scan_tick := -999999
 var _requested_state_hz := 24.0
 var _property_name_cache := {}
+var _training_paused := false
 
 
 func _ready() -> void:
@@ -99,6 +100,8 @@ func _process(delta: float) -> void:
 	if not _connected:
 		return
 	_read_messages()
+	if _training_paused:
+		return
 	_state_elapsed += delta
 	if _state_elapsed >= _state_interval_sec():
 		_state_elapsed = 0.0
@@ -131,6 +134,7 @@ func _poll_connection() -> void:
 			if _connected:
 				print("[BrotatoRLBridge] trainer disconnected; human control restored")
 			_connected = false
+			_training_paused = false
 			_resume_game()
 
 	if _connected or status == _stream.STATUS_CONNECTING:
@@ -182,6 +186,7 @@ func _handle_message(line: String) -> void:
 			_send_error("invalid_action")
 			return
 		_latest_action = action
+		_training_paused = false
 		_last_sequence = int(message.get("sequence", -1))
 		_last_action_ms = OS.get_ticks_msec()
 		_state_elapsed = 0.0
@@ -207,6 +212,20 @@ func _handle_message(line: String) -> void:
 			"type": "event",
 			"event": "configured",
 			"state_hz": _requested_state_hz
+		})
+	elif message_type == "training_pause":
+		_training_paused = bool(message.get("paused", false))
+		if _training_paused:
+			get_tree().set_pause(true)
+		else:
+			# Give the next inference step a full stale-action window. An action
+			# message also clears this pause as a fail-safe.
+			_last_action_ms = OS.get_ticks_msec()
+			_resume_game()
+		_send({
+			"type": "event",
+			"event": "training_pause",
+			"paused": _training_paused
 		})
 	else:
 		_send_error("unknown_message_type")
@@ -1888,6 +1907,7 @@ func _send_hello() -> void:
 			"attack_indicators",
 			"full_arena_grid_v1",
 			"projectile_path_grid_v1",
+			"training_pause_v1",
 			"configurable_state_rate",
 			"human_input_observation"
 		]

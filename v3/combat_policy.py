@@ -564,7 +564,7 @@ class FullArenaCombatVectorizer:
 class BulletHellCombatVectorizer:
     """V4 observation with all-projectile future paths and action risks.
 
-    The first 1,512 values are exactly the full-arena generation. Bridge 0.3.7
+    The first 1,512 values are exactly the full-arena generation. Bridge 0.3.8
     appends a player-centered 20x12 map with five time horizons, four separate
     direction lanes, damage weighting, and collision risk for every action.
     """

@@ -101,6 +101,24 @@ class HumanAnchoredPPO(PPO):
         self._bc_actions = torch.as_tensor(actions, dtype=torch.long, device=self.device)
 
     def train(self) -> None:
+        """Pause the live simulator so gradient updates cannot cause deaths."""
+
+        env = self.get_env()
+        paused = False
+        if env is not None:
+            try:
+                env.env_method("set_training_paused", True)
+                paused = True
+            except AttributeError:
+                # Offline/bootstrap-only environments have no live game.
+                pass
+        try:
+            self._train_while_game_paused()
+        finally:
+            if paused:
+                env.env_method("set_training_paused", False)
+
+    def _train_while_game_paused(self) -> None:
         super().train()
         if self._bc_features is None or self.bc_batches <= 0 or self.bc_coefficient <= 0.0:
             return
