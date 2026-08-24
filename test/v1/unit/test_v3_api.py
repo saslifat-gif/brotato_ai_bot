@@ -927,6 +927,58 @@ def test_ui_automation_advances_wave_end_shop_and_next_wave():
     assert result.confirmed_roles == ["next_wave"]
 
 
+def test_ui_automation_waits_for_reroll_refresh_before_deciding_again():
+    reroll_path = "/root/Shop/Reroll"
+    go_path = "/root/Shop/Go"
+
+    def shop_state(tick, *, sequence=-1, changed=False, reroll_enabled=True):
+        state = dict(_state(wave=1, materials=50), phase="shop", tick=tick)
+        state["ui"] = {
+            "actions": [
+                {"id": reroll_path, "role": "reroll", "enabled": reroll_enabled},
+                {"id": go_path, "role": "next_wave", "enabled": True},
+            ],
+            "last_result": {
+                "sequence": sequence,
+                "ok": sequence >= 0,
+                "changed": changed,
+            },
+        }
+        return state
+
+    states = iter([
+        shop_state(11, sequence=6, reroll_enabled=False),
+        shop_state(12, sequence=6, changed=True),
+        shop_state(13, sequence=7, reroll_enabled=False),
+        shop_state(14, sequence=7, changed=True),
+        dict(_state(wave=2), tick=15),
+    ])
+
+    class FakeServer:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, message, timeout_sec):
+            self.sent.append(message)
+
+        def wait_for_state(self, **_kwargs):
+            return next(states)
+
+    server = FakeServer()
+    result = AutoUiController(max_shop_buys=0, max_shop_rerolls=2).advance(
+        server,
+        shop_state(10),
+        sequence=5,
+        timeout_sec=5,
+    )
+    assert [message["target"] for message in server.sent] == [
+        reroll_path,
+        reroll_path,
+        go_path,
+    ]
+    assert result.confirmed_roles == ["reroll", "reroll", "next_wave"]
+
+
 def test_wait_for_state_accepts_low_tick_after_reconnect(monkeypatch):
     server = BridgeServer()
     server._connection_generation = 1

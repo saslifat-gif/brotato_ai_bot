@@ -290,7 +290,7 @@ class AutoUiController:
             repeatable_choice = (
                 pending_phase_change is not None
                 and pending_phase_change[1]
-                in {"upgrade_choice", "take_item", "recycle_item"}
+                in {"upgrade_choice", "take_item", "recycle_item", "reroll"}
             )
             choice_fallback_ready = (
                 repeatable_choice
@@ -343,6 +343,7 @@ class AutoUiController:
                     "upgrade_choice",
                     "take_item",
                     "recycle_item",
+                    "reroll",
                     "next_wave",
                     "restart",
                 }:
