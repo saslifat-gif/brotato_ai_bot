@@ -40,6 +40,8 @@ class CombatLayerNormExtractor(BaseFeaturesExtractor):
 
 def actor_logits(policy, observations: torch.Tensor) -> torch.Tensor:
     features = policy.extract_features(observations)
+    if isinstance(features, tuple):
+        features = features[0]
     latent = policy.mlp_extractor.forward_actor(features)
     return policy.action_net(latent)
 

@@ -9,7 +9,7 @@ from gymnasium import spaces
 from v3.bridge_server import BridgeServer
 from v3.combat_policy import CombatDecisionLogger, CombatSafetyShield
 from v3.config import V3Config
-from v3.protocol import MoveAction, action_message, reset_message
+from v3.protocol import MoveAction, action_message, configure_message, reset_message
 from v3.reward import ApiRewardEngine
 from v3.ui_automation import AutoUiController
 from v3.vectorizer import ApiStateVectorizer
@@ -23,12 +23,15 @@ class BrotatoApiEnv(gym.Env):
         cfg: V3Config,
         server: Optional[BridgeServer] = None,
         vectorizer=None,
+        state_hz: Optional[float] = None,
     ):
         super().__init__()
         self.cfg = cfg
         self.server = server or BridgeServer(cfg.host, cfg.port)
         self.server.start()
         self.vectorizer = vectorizer or ApiStateVectorizer()
+        self.state_hz = float(state_hz) if state_hz is not None else None
+        self._configured_session = ""
         self.reward_engine = ApiRewardEngine()
         self.action_space = spaces.Discrete(len(MoveAction))
         self.observation_space = spaces.Box(
@@ -50,6 +53,19 @@ class BrotatoApiEnv(gym.Env):
             decision_log_path=cfg.ui_decision_log,
         )
 
+    def _configure_state_rate(self, state) -> None:
+        if self.state_hz is None:
+            return
+        session = str(state.get("session", ""))
+        if session == self._configured_session:
+            return
+        hello = self.server.last_hello or {}
+        if "configurable_state_rate" not in hello.get("capabilities", []):
+            raise RuntimeError("Bridge 0.3.3+ is required for configured PPO state rate")
+        self.server.send(configure_message(state_hz=self.state_hz))
+        self._configured_session = session
+        print(f"[v3-env] bridge state rate configured={self.state_hz:g} Hz")
+
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self.sequence += 1
@@ -63,6 +79,7 @@ class BrotatoApiEnv(gym.Env):
         state = self.server.wait_for_state(
             timeout_sec=self.cfg.reset_timeout_sec,
         )
+        self._configure_state_rate(state)
         ui_sent = []
         ui_confirmed = []
         if self.cfg.automate_menus and state.get("phase") != "combat":

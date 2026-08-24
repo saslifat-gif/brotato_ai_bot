@@ -250,6 +250,55 @@ def test_semantic_vector_and_model_preserve_old_actor_with_new_api_fields(tmp_pa
     }
 
 
+def test_semantic_ppo_actor_initialization_is_exact():
+    gym = pytest.importorskip("gymnasium")
+    pytest.importorskip("stable_baselines3")
+    from gymnasium import spaces
+    from v3.train_combat_finetune import HumanAnchoredPPO
+    from v3.train_semantic_finetune import (
+        SemanticActorExtractor,
+        initialize_actor_from_semantic_base,
+    )
+
+    class DummySemanticEnv(gym.Env):
+        action_space = spaces.Discrete(9)
+        observation_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(SEMANTIC_OBSERVATION_SIZE,),
+            dtype=np.float32,
+        )
+
+        def reset(self, *, seed=None, options=None):
+            super().reset(seed=seed)
+            return np.zeros(SEMANTIC_OBSERVATION_SIZE, dtype=np.float32), {}
+
+        def step(self, _action):
+            return (
+                np.zeros(SEMANTIC_OBSERVATION_SIZE, dtype=np.float32),
+                0.0,
+                False,
+                False,
+                {},
+            )
+
+    base = SemanticCombatPolicyBase()
+    model = HumanAnchoredPPO(
+        "MlpPolicy",
+        DummySemanticEnv(),
+        n_steps=8,
+        batch_size=4,
+        n_epochs=1,
+        policy_kwargs={
+            "features_extractor_class": SemanticActorExtractor,
+            "net_arch": {"pi": [], "vf": [16]},
+            "activation_fn": torch.nn.Tanh,
+            "share_features_extractor": False,
+        },
+    )
+    assert initialize_actor_from_semantic_base(model, base) <= 1e-5
+
+
 def test_human_recorder_samples_transitions_and_throttles_idle():
     assert should_record(4, 3, 0.01, sample_hz=8, idle_hz=2)
     assert not should_record(4, 4, 0.05, sample_hz=8, idle_hz=2)

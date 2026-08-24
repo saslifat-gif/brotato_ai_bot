@@ -115,6 +115,15 @@ actions exactly match the old human base. The saved model remains small (under
 100,000 parameters), and its loss/validation curves are written to
 `models/version_3/logs/SemanticCombatBC` for TensorBoard.
 
+After validating that base, run `train_v3_semantic_rl.bat` for live PPO
+fine-tuning. PPO starts with exactly the semantic base's action logits, uses the
+832-value API observation at 12 Hz, and applies a small supervised anchor after
+each rollout to limit catastrophic forgetting. It saves periodic checkpoints
+under `semantic_finetune_checkpoints`, the best rolling-reward model under
+`semantic_finetune_best`, and TensorBoard curves under `SemanticBasePPO`.
+Safety overrides are disabled by default because silently replacing a sampled
+action would invalidate PPO's on-policy update.
+
 Fine-tune that human base online without discarding its behavior:
 
 ```bat
