@@ -38,10 +38,12 @@ def shop_budget_limits(
     rerolls = max(0, int(base_rerolls))
     late_or_rich = wave >= 8 or materials >= 300
     if late_or_rich and buys > 0:
-        buys = max(buys, min(24, 6 + materials // 60))
+        # Four visible offers and ten rerolls were not enough to drain the
+        # 700-1,000 material balances produced by strong mid-game runs.
+        buys = max(buys, min(48, 8 + materials // 25))
     if late_or_rich and rerolls > 0:
-        rerolls = max(rerolls, min(10, 2 + materials // 120))
-    reserve = max(40, min(150, 220 - wave * 12)) if late_or_rich else 0
+        rerolls = max(rerolls, min(20, 3 + materials // 50))
+    reserve = max(20, min(100, 160 - wave * 10)) if late_or_rich else 0
     return buys, rerolls, reserve
 
 
@@ -109,6 +111,28 @@ class AutoUiController:
         action["_policy_score"] = ranked.score
         return action
 
+    def _rank_shop(
+        self,
+        state: Mapping[str, Any],
+        actions: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Let the learned model rank purchases without buying harmful offers.
+
+        The imitation dataset contains choice rankings but no calibrated
+        no-purchase class.  Keep the rule teacher as an eligibility gate until
+        that abstention target exists, then use the compact model to rank the
+        safe candidates.
+        """
+
+        candidates = actions
+        if self._learned is not None and self._teacher is not None:
+            candidates = [
+                action
+                for action in actions
+                if self._teacher.select(state, [action]) is not None
+            ]
+        return self._rank_structured(state, candidates)
+
     def reset_episode(self) -> None:
         self._shop_wave = None
         self._shop_buys = 0
@@ -174,7 +198,7 @@ class AutoUiController:
                     key = (str(action["id"]), materials)
                     if key not in self._attempted:
                         buy_candidates.append(action)
-                ranked = self._rank_structured(state, buy_candidates)
+                ranked = self._rank_shop(state, buy_candidates)
                 if ranked is not None:
                     return ranked
                 # Old bridge packages have no structured choice metadata. Keep

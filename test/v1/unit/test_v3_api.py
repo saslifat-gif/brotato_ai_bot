@@ -489,9 +489,9 @@ def test_late_rich_shop_spends_instead_of_hoarding():
     buys, rerolls, reserve = shop_budget_limits(
         9, 1000, base_buys=4, base_rerolls=1
     )
-    assert buys >= 20
-    assert rerolls >= 8
-    assert reserve < 200
+    assert buys >= 40
+    assert rerolls >= 16
+    assert reserve <= 100
     assert shop_budget_limits(9, 1000, base_buys=0, base_rerolls=0)[:2] == (0, 0)
 
 
