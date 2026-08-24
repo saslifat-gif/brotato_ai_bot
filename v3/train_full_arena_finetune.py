@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import gymnasium as gym
+from gymnasium import spaces
 from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
@@ -29,6 +31,25 @@ from v3.train_combat_finetune import (
     actor_logits,
 )
 from v3.train_semantic_combat_bc import load_semantic_records
+
+
+class OfflineFullArenaEnv(gym.Env):
+    """Shape-only environment used to verify and save a migration offline."""
+
+    action_space = spaces.Discrete(9)
+    observation_space = spaces.Box(
+        low=-1.0,
+        high=1.0,
+        shape=(FULL_ARENA_OBSERVATION_SIZE,),
+        dtype=np.float32,
+    )
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        return np.zeros(FULL_ARENA_OBSERVATION_SIZE, dtype=np.float32), {}
+
+    def step(self, _action):
+        raise RuntimeError("offline migration environment cannot be stepped")
 
 
 class LegacySemanticPpoActor(nn.Module):
@@ -191,6 +212,11 @@ def main() -> int:
     parser.add_argument("--learning-rate", type=float, default=3e-5)
     parser.add_argument("--ent-coef", type=float, default=0.0002)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument(
+        "--bootstrap-only",
+        action="store_true",
+        help="verify and save the migrated actor without opening the bridge server",
+    )
     parser.add_argument("--safety", action="store_true")
     args = parser.parse_args()
     if not 4.0 <= args.state_hz <= 24.0:
@@ -202,11 +228,15 @@ def main() -> int:
     if len(records) < 1_000:
         raise RuntimeError(f"only {len(records)} semantic records in {args.dataset}")
     features, actions = _padded_anchor_arrays(records)
-    env = Monitor(BrotatoApiEnv(
-        cfg,
-        vectorizer=FullArenaCombatVectorizer(),
-        state_hz=args.state_hz,
-    ))
+    env = (
+        OfflineFullArenaEnv()
+        if args.bootstrap_only
+        else Monitor(BrotatoApiEnv(
+            cfg,
+            vectorizer=FullArenaCombatVectorizer(),
+            state_hz=args.state_hz,
+        ))
+    )
     checkpoints = cfg.output_dir / "full_arena_finetune_checkpoints"
     checkpoints.mkdir(parents=True, exist_ok=True)
     transfer_difference = None
@@ -256,6 +286,10 @@ def main() -> int:
         f"transfer_max_abs_diff={transfer_difference} state_hz={args.state_hz:g} "
         f"safety={cfg.safety_shield} bc_coefficient={model.bc_coefficient}"
     )
+    if args.bootstrap_only:
+        print("[full-arena-ppo] bootstrap-only migration verified; live bridge untouched")
+        env.close()
+        return 0
     callbacks = CallbackList([
         CheckpointCallback(
             save_freq=5_000,

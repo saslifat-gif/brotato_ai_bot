@@ -150,6 +150,9 @@ run:
 python -m v3.train_full_arena_finetune --source-model models/version_3/semantic_finetune_checkpoints/semantic_base_ppo_200000_steps.zip --state-hz 12
 ```
 
+Add `--bootstrap-only` to verify and save the migrated checkpoint without
+opening port 4242 or interrupting an existing semantic training process.
+
 Checkpoints are written under `full_arena_finetune_checkpoints`, the best model
 under `full_arena_finetune_best`, and TensorBoard curves under `FullArenaPPO`.
 
