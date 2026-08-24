@@ -712,6 +712,8 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert 'str(node.name).to_lower() == "gobutton"' in bridge
     assert 'const BRIDGE_RESTART_WAVE_ACTION := "bridge://restart_wave"' in bridge
     assert "func _capture_wave_restart_state(wave_number: int)" in bridge
+    assert "ProgressData.load_game_file()" in bridge
+    assert '"has_run_state"' in bridge
     assert "ProgressData.current_run_state = restored_state" in bridge
     assert "RunData.resume_from_state(restored_state)" in bridge
     assert "get_tree().change_scene(MenuData.shop_scene)" in bridge
@@ -1365,7 +1367,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.9.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.10.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

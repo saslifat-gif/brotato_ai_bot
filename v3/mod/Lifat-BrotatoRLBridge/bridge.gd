@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.9"
+const MOD_VERSION := "0.3.10"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -513,14 +513,22 @@ func _capture_wave_restart_state(wave_number: int) -> void:
 	# Brotato stores the build entering the next wave in current_run_state while
 	# the shop is open. Keep an in-memory deep copy because vanilla game-over
 	# clears ProgressData before the trainer can press a retry button.
-	var current_state = ProgressData.current_run_state
-	if current_state == null:
-		return
 	var next_wave := wave_number + 1
 	if next_wave <= 1:
 		return
+	if _wave_restart_number == next_wave and _wave_restart_state != null:
+		return
+	# Current Brotato keeps the authoritative shop-boundary state on disk and
+	# may leave the singleton's current_run_state empty until explicitly loaded.
+	# Loading it here changes only ProgressData; the live shop remains in RunData.
+	ProgressData.load_game_file()
+	var current_state = ProgressData.current_run_state
+	if current_state == null or not bool(_property(current_state, "has_run_state", false)):
+		print("[BrotatoRLBridge] no saved run state before wave %d" % next_wave)
+		return
 	_wave_restart_state = current_state.duplicate(true)
 	_wave_restart_number = next_wave
+	print("[BrotatoRLBridge] captured shop before wave %d" % _wave_restart_number)
 
 
 func _full_arena_enemy_grid(spawned_enemies, arena_size: Vector2, player_state: Dictionary) -> Array:
