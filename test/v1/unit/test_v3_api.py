@@ -29,6 +29,7 @@ from v3.combat_policy import (
     BULLET_HELL_GRID_SIZE,
     BULLET_HELL_OBSERVATION_SIZE,
     BulletHellCombatVectorizer,
+    movement_transition_metrics,
 )
 from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
 from v3.record_human import require_human_input_capability, should_record
@@ -447,6 +448,39 @@ def test_bullet_hell_vector_preserves_full_arena_and_separates_future_risks():
     )
     cursor += BULLET_HELL_ACTION_RISK_SIZE
     assert bullet[cursor:cursor + 2] == pytest.approx([0.25, 0.125])
+
+
+def test_movement_transition_detects_reversal_and_failed_displacement():
+    previous = _state()
+    previous["combat"] = {"move_speed": 300.0}
+    previous["player"]["position"] = {"x": 500.0, "y": 300.0}
+    state = _state()
+    state["combat"] = {"move_speed": 300.0}
+    state["player"]["position"] = {"x": 501.0, "y": 300.0}
+    metrics = movement_transition_metrics(
+        previous,
+        state,
+        previous_action=3,
+        action=4,
+        state_hz=10.0,
+    )
+    assert metrics["active"] is True
+    assert metrics["reversal"] is True
+    assert metrics["low_motion"] is True
+    assert metrics["distance"] == pytest.approx(1.0)
+    assert metrics["expected_distance"] == pytest.approx(30.0)
+
+    state["player"]["position"] = {"x": 530.0, "y": 300.0}
+    moving = movement_transition_metrics(
+        previous,
+        state,
+        previous_action=4,
+        action=4,
+        state_hz=10.0,
+    )
+    assert moving["reversal"] is False
+    assert moving["low_motion"] is False
+    assert moving["efficiency"] == pytest.approx(1.0)
 
 
 def test_bullet_hell_ppo_transfer_preserves_trained_full_arena_logits():

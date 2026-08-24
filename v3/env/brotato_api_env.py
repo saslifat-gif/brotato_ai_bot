@@ -7,7 +7,11 @@ import numpy as np
 from gymnasium import spaces
 
 from v3.bridge_server import BridgeServer
-from v3.combat_policy import CombatDecisionLogger, CombatSafetyShield
+from v3.combat_policy import (
+    CombatDecisionLogger,
+    CombatSafetyShield,
+    movement_transition_metrics,
+)
 from v3.config import V3Config
 from v3.protocol import (
     MoveAction,
@@ -132,8 +136,10 @@ class BrotatoApiEnv(gym.Env):
         }
 
     def step(self, action):
+        previous_state = self.last_state or {}
+        previous_action = self.previous_action
         requested = int(MoveAction(int(action)))
-        decision = self.safety_shield.apply(self.last_state or {}, requested)
+        decision = self.safety_shield.apply(previous_state, requested)
         normalized = decision.applied_action
         previous_paths = (self.last_state or {}).get("projectile_paths", {})
         projectile_risks = (
@@ -189,10 +195,37 @@ class BrotatoApiEnv(gym.Env):
             after_tick=previous_tick,
             minimum_sequence=self.sequence,
         )
+        movement = movement_transition_metrics(
+            previous_state,
+            state,
+            previous_action,
+            normalized,
+            state_hz=self.state_hz or 12.0,
+        )
+        threat_max_risk = max(
+            _risk_vector(projectile_risks) + _risk_vector(enemy_risks),
+            default=0.0,
+        )
+        idle_penalty = (
+            float(getattr(self.vectorizer, "idle_reward_scale", 0.0))
+            if movement["active"] and normalized == int(MoveAction.IDLE)
+            else 0.0
+        )
+        reversal_penalty = (
+            float(getattr(self.vectorizer, "reversal_reward_scale", 0.0))
+            if movement["reversal"] and threat_max_risk < 0.35
+            else 0.0
+        )
+        low_motion_penalty = (
+            float(getattr(self.vectorizer, "low_motion_reward_scale", 0.0))
+            if movement["low_motion"]
+            else 0.0
+        )
         reward = self.reward_engine.step(state)
         reward -= float(getattr(self.vectorizer, "path_risk_reward_scale", 0.0)) * (
             selected_path_risk
         )
+        reward -= idle_penalty + reversal_penalty + low_motion_penalty
         terminated = bool(state.get("dead") or state.get("victory"))
         ui_sent = []
         ui_confirmed = []
@@ -270,6 +303,13 @@ class BrotatoApiEnv(gym.Env):
                 else 0.0
             ),
             "selected_path_risk_penalty": selected_path_risk,
+            "movement_distance": float(movement["distance"]),
+            "movement_efficiency": float(movement["efficiency"]),
+            "movement_reversal": bool(movement["reversal"]),
+            "movement_low_motion": bool(movement["low_motion"]),
+            "movement_idle_penalty": idle_penalty,
+            "movement_reversal_penalty": reversal_penalty,
+            "movement_low_motion_penalty": low_motion_penalty,
         }
         return observation, reward, terminated, truncated, info
 

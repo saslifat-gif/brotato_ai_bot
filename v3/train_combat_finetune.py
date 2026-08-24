@@ -202,6 +202,34 @@ class CombatTensorboardCallback(BaseCallback):
                 "combat/selected_path_risk_penalty",
                 float(info.get("selected_path_risk_penalty", 0.0)),
             )
+            self.logger.record_mean(
+                "movement/distance",
+                float(info.get("movement_distance", 0.0)),
+            )
+            self.logger.record_mean(
+                "movement/efficiency",
+                float(info.get("movement_efficiency", 0.0)),
+            )
+            self.logger.record_mean(
+                "movement/reversal_rate",
+                float(bool(info.get("movement_reversal"))),
+            )
+            self.logger.record_mean(
+                "movement/low_motion_rate",
+                float(bool(info.get("movement_low_motion"))),
+            )
+            self.logger.record_mean(
+                "movement/idle_penalty",
+                float(info.get("movement_idle_penalty", 0.0)),
+            )
+            self.logger.record_mean(
+                "movement/reversal_penalty",
+                float(info.get("movement_reversal_penalty", 0.0)),
+            )
+            self.logger.record_mean(
+                "movement/low_motion_penalty",
+                float(info.get("movement_low_motion_penalty", 0.0)),
+            )
             for action in range(9):
                 self.logger.record_mean(
                     f"actions/applied_{action}", float(applied == action)

@@ -70,6 +70,53 @@ ACTION_VECTORS = {
 }
 
 
+def movement_transition_metrics(
+    previous_state: Mapping[str, Any],
+    state: Mapping[str, Any],
+    previous_action: int,
+    action: int,
+    *,
+    state_hz: float,
+) -> dict[str, float | bool]:
+    """Measure real displacement and rapid action reversal for one API step."""
+
+    active = previous_state.get("phase") == "combat" and state.get("phase") == "combat"
+    old_position = _xy(_mapping(previous_state.get("player")).get("position"))
+    new_position = _xy(_mapping(state.get("player")).get("position"))
+    distance = math.hypot(
+        new_position[0] - old_position[0],
+        new_position[1] - old_position[1],
+    ) if active else 0.0
+    speed = max(
+        1.0,
+        _number(_mapping(previous_state.get("combat")).get("move_speed"), 300.0),
+    )
+    expected_distance = speed / max(1.0, float(state_hz))
+    efficiency = distance / expected_distance if active else 0.0
+    old_vector = ACTION_VECTORS[MoveAction(int(previous_action))]
+    new_vector = ACTION_VECTORS[MoveAction(int(action))]
+    dot = old_vector[0] * new_vector[0] + old_vector[1] * new_vector[1]
+    reversal = bool(
+        active
+        and int(previous_action) != int(MoveAction.IDLE)
+        and int(action) != int(MoveAction.IDLE)
+        and dot <= -0.5
+    )
+    low_motion = bool(
+        active
+        and int(action) != int(MoveAction.IDLE)
+        and distance < expected_distance * 0.15
+    )
+    return {
+        "active": active,
+        "distance": distance,
+        "expected_distance": expected_distance,
+        "efficiency": efficiency,
+        "reversal": reversal,
+        "low_motion": low_motion,
+    }
+
+
 def _number(value: Any, default: float = 0.0) -> float:
     try:
         result = float(value)
@@ -571,6 +618,9 @@ class BulletHellCombatVectorizer:
 
     observation_size = BULLET_HELL_OBSERVATION_SIZE
     path_risk_reward_scale = 0.05
+    idle_reward_scale = 0.01
+    reversal_reward_scale = 0.004
+    low_motion_reward_scale = 0.006
 
     def __init__(self):
         self.base = FullArenaCombatVectorizer()

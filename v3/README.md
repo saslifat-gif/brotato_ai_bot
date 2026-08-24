@@ -187,6 +187,14 @@ publishing states. It resumes immediately after the update. This prevents the
 1.5-second action timeout from handing control back to an idle human input while
 enemies continue moving, and keeps unrecorded movement out of the rollout.
 
+The bullet-hell environment also measures real displacement between structured
+states. It removes the normal survival reward from IDLE steps, adds a small
+low-motion penalty when a movement command produces almost no displacement, and
+penalizes rapid opposite-direction reversals only when immediate projectile and
+enemy-contact risk is low. TensorBoard exposes these under `movement/` so a
+stationary or oscillating policy is visible instead of being hidden by aggregate
+action counts.
+
 Fine-tune that human base online without discarding its behavior:
 
 ```bat
