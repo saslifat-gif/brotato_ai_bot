@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.3"
+const MOD_VERSION := "0.3.4"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -328,7 +328,7 @@ func _build_state() -> Dictionary:
 				if is_instance_valid(enemy):
 					_observe_enemy_death(enemy)
 					enemies.append(_entity_state(enemy))
-		_append_projectiles(main.get_node_or_null("Projectiles"), projectiles, MAX_PROJECTILES)
+		_collect_projectiles(main, projectiles, MAX_PROJECTILES)
 		_append_pickups(main.get_node_or_null("Items"), pickups, "item", MAX_PICKUPS)
 		_append_pickups(main.get_node_or_null("Consumables"), pickups, "consumable", MAX_PICKUPS)
 
@@ -1018,33 +1018,69 @@ func _entity_state(entity) -> Dictionary:
 	}
 
 
-func _append_projectiles(container, output: Array, maximum: int) -> void:
+func _collect_projectiles(main, output: Array, maximum: int) -> void:
+	var seen := {}
+	for path in [
+		"Projectiles",
+		"EnemyProjectiles",
+		"Bullets",
+		"Shots",
+		"EntitySpawner/Projectiles",
+		"EntitySpawner/EnemyProjectiles"
+	]:
+		_append_projectiles(main.get_node_or_null(path), output, maximum, seen)
+	for group_name in ["projectiles", "enemy_projectiles", "bullets", "shots"]:
+		for projectile in get_tree().get_nodes_in_group(group_name):
+			_append_projectile(projectile, output, maximum, seen)
+
+
+func _append_projectiles(container, output: Array, maximum: int, seen: Dictionary) -> void:
 	if container == null:
 		return
 	for child in container.get_children():
-		if output.size() >= maximum:
-			break
-		var static_data := _projectile_static_data(child)
-		var shape_data := _collision_shape_data(child)
-		output.append({
-			"id": static_data["id"],
-			"position": _vector_json(_property(child, "position", Vector2.ZERO)),
-			"velocity": _vector_json(_property(child, "linear_velocity", Vector2.ZERO)),
-			"rotation": float(_property(child, "rotation", 0.0)),
-			"radius": static_data["radius"],
-			"width": shape_data["width"],
-			"height": shape_data["height"],
-			"shape": shape_data["shape"],
-			"size_known": shape_data["known"],
-			"damage": static_data["damage"],
-			"attack_type": static_data["attack_type"],
-			"time_to_live": float(_first_property(
-				child,
-				["time_to_live", "lifetime_remaining", "duration_remaining"],
-				-1.0
-			)),
-			"kind": "projectile"
-		})
+		_append_projectile(child, output, maximum, seen)
+
+
+func _append_projectile(projectile, output: Array, maximum: int, seen: Dictionary) -> void:
+	if projectile == null or output.size() >= maximum or not is_instance_valid(projectile):
+		return
+	var instance_id := int(projectile.get_instance_id())
+	if seen.has(instance_id):
+		return
+	seen[instance_id] = true
+	var static_data := _projectile_static_data(projectile)
+	var shape_data := _collision_shape_data(projectile)
+	var velocity = _first_property(
+		projectile,
+		["linear_velocity", "velocity", "current_velocity"],
+		Vector2.ZERO
+	)
+	if typeof(velocity) != TYPE_VECTOR2:
+		velocity = Vector2.ZERO
+	var direction = _first_property(projectile, ["direction", "_direction"], Vector2.ZERO)
+	if velocity.length_squared() < 0.01 and typeof(direction) == TYPE_VECTOR2:
+		velocity = direction * float(_first_property(projectile, ["speed", "current_speed"], 0.0))
+	output.append({
+		"id": static_data["id"],
+		"position": _vector_json(_first_property(
+			projectile, ["global_position", "position"], Vector2.ZERO
+		)),
+		"velocity": _vector_json(velocity),
+		"rotation": float(_property(projectile, "global_rotation", _property(projectile, "rotation", 0.0))),
+		"radius": static_data["radius"],
+		"width": shape_data["width"],
+		"height": shape_data["height"],
+		"shape": shape_data["shape"],
+		"size_known": shape_data["known"],
+		"damage": static_data["damage"],
+		"attack_type": static_data["attack_type"],
+		"time_to_live": float(_first_property(
+			projectile,
+			["time_to_live", "lifetime_remaining", "duration_remaining"],
+			-1.0
+		)),
+		"kind": "projectile"
+	})
 
 
 func _append_pickups(container, output: Array, kind: String, maximum: int) -> void:

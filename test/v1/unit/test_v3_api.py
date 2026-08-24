@@ -388,6 +388,14 @@ def test_exact_state_reward_penalizes_damage_and_rewards_progress():
     wave_end = dict(_state(), phase="wave_end")
     assert engine.step(wave_end) > 9
 
+    late_engine = ApiRewardEngine()
+    late_engine.reset(_state(wave=10))
+    late_death = late_engine.step(dict(_state(wave=10), dead=True))
+    early_engine = ApiRewardEngine()
+    early_engine.reset(_state(wave=1))
+    early_death = early_engine.step(dict(_state(wave=1), dead=True))
+    assert late_death < early_death
+
 
 def test_mod_manifest_and_extension_are_packaged():
     mod = ROOT / "v3" / "mod" / MOD_DIR_NAME

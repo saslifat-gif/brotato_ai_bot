@@ -97,6 +97,8 @@ def main() -> int:
     parser.add_argument("--state-hz", type=float, default=12.0)
     parser.add_argument("--bc-coefficient", type=float, default=0.20)
     parser.add_argument("--bc-batches", type=int, default=2)
+    parser.add_argument("--learning-rate", type=float, default=3e-5)
+    parser.add_argument("--ent-coef", type=float, default=0.0002)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--safety", action="store_true")
     args = parser.parse_args()
@@ -121,6 +123,11 @@ def main() -> int:
     transfer_difference = None
     if args.resume:
         model = HumanAnchoredPPO.load(args.resume, env=env, device=args.device)
+        model.learning_rate = max(1e-7, float(args.learning_rate))
+        model.lr_schedule = lambda _progress: model.learning_rate
+        for parameter_group in model.policy.optimizer.param_groups:
+            parameter_group["lr"] = model.learning_rate
+        model.ent_coef = max(0.0, float(args.ent_coef))
         print(f"[semantic-ppo] resumed={args.resume.resolve()}")
     else:
         base, base_metadata = load_semantic_combat_base(args.base_model)
@@ -128,13 +135,13 @@ def main() -> int:
             "MlpPolicy",
             env,
             verbose=1,
-            learning_rate=2e-5,
+            learning_rate=max(1e-7, float(args.learning_rate)),
             n_steps=1024,
             batch_size=256,
             n_epochs=4,
             gamma=0.995,
             gae_lambda=0.95,
-            ent_coef=0.002,
+            ent_coef=max(0.0, float(args.ent_coef)),
             tensorboard_log=str(cfg.output_dir / "logs"),
             device=args.device,
             bc_coefficient=args.bc_coefficient,
@@ -158,7 +165,8 @@ def main() -> int:
         f"[semantic-ppo] base={args.base_model.resolve()} records={len(records)} "
         f"validation_accuracy={base_metadata.get('validation_accuracy')} "
         f"transfer_max_abs_diff={transfer_difference} state_hz={args.state_hz:g} "
-        f"safety={cfg.safety_shield} bc_coefficient={model.bc_coefficient}"
+        f"safety={cfg.safety_shield} bc_coefficient={model.bc_coefficient} "
+        f"learning_rate={model.learning_rate} ent_coef={model.ent_coef}"
     )
     callbacks = CallbackList([
         CheckpointCallback(

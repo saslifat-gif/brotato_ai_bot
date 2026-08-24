@@ -168,6 +168,7 @@ class BrotatoApiEnv(gym.Env):
             / max(1.0, float(state.get("player", {}).get("max_health", 1.0))),
             "enemy_count": len(state.get("enemies", [])),
             "projectile_count": len(state.get("projectiles", [])),
+            "attack_indicator_count": len(state.get("attack_indicators", [])),
         }
         return observation, reward, terminated, truncated, info
 

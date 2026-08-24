@@ -148,6 +148,10 @@ class CombatTensorboardCallback(BaseCallback):
             self.logger.record_mean("combat/materials", float(info.get("materials", 0)))
             self.logger.record_mean("combat/enemy_count", float(info.get("enemy_count", 0)))
             self.logger.record_mean("combat/projectile_count", float(info.get("projectile_count", 0)))
+            self.logger.record_mean(
+                "combat/attack_indicator_count",
+                float(info.get("attack_indicator_count", 0)),
+            )
             for action in range(9):
                 self.logger.record_mean(
                     f"actions/applied_{action}", float(applied == action)

@@ -23,7 +23,12 @@ class ApiRewardEngine:
         self.previous = state
 
     def step(self, state: Mapping[str, Any]) -> float:
-        reward = 0.01 if state.get("phase") == "combat" else 0.0
+        wave_number = max(0.0, _nested(state, "wave", "number"))
+        # Later waves are the curriculum bottleneck. Keep the shaping modest
+        # early, then make survival/completion increasingly important from the
+        # middle of a run onward.
+        late_wave_scale = 1.0 + min(20.0, wave_number) * 0.05
+        reward = 0.01 * late_wave_scale if state.get("phase") == "combat" else 0.0
         previous = self.previous
         if previous is not None:
             old_max = max(1.0, _nested(previous, "player", "max_health", 1.0))
@@ -42,7 +47,7 @@ class ApiRewardEngine:
             )
             reward += max(0.0, min(10.0, kills_delta)) * 0.5
             wave_delta = _nested(state, "wave", "number") - _nested(previous, "wave", "number")
-            reward += max(0.0, wave_delta) * 10.0
+            reward += max(0.0, wave_delta) * (10.0 + min(20.0, wave_number) * 2.0)
             if (
                 previous.get("phase") == "combat"
                 and state.get("phase") == "wave_end"
@@ -50,7 +55,7 @@ class ApiRewardEngine:
             ):
                 reward += 10.0
         if state.get("dead"):
-            reward -= 25.0
+            reward -= 25.0 + min(20.0, wave_number) * 2.0
         if state.get("victory"):
             reward += 100.0
         self.previous = state
