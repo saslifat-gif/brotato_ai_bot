@@ -1382,3 +1382,132 @@ def test_installer_activates_bridge_in_current_profile(tmp_path):
     entry = saved["profiles"]["training"]["mod_list"][MOD_DIR_NAME]
     assert entry == {"is_active": True, "zip_path": package.as_posix()}
     assert profile_path.with_name("mod_user_profiles.json.before-v3.bak").is_file()
+
+
+def test_v4_vector_preserves_v3_prefix_and_records_real_transition():
+    from v4.combat_policy import (
+        HISTORY_FEATURES,
+        HISTORY_SIZE,
+        OBJECTIVE_EVADE,
+        V4_OBSERVATION_SIZE,
+        HierarchicalCombatVectorizer,
+    )
+
+    state = _state()
+    state["session"] = "run-a"
+    state["projectile_paths"] = {
+        "action_risk": [0.9, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+        "enemy_action_risk": [0.0] * 9,
+        "boundary_action_risk": [0.0] * 9,
+    }
+    vectorizer = HierarchicalCombatVectorizer()
+    vectorizer.reset(state)
+    first = vectorizer.build(state, previous_action=0)
+    v3 = BulletHellCombatVectorizer().build(state, previous_action=0)
+    assert first.shape == (V4_OBSERVATION_SIZE,)
+    assert np.array_equal(first[:BULLET_HELL_OBSERVATION_SIZE], v3)
+    history_start = BULLET_HELL_OBSERVATION_SIZE
+    assert not np.any(first[history_start:history_start + HISTORY_SIZE])
+
+    moved = dict(state, tick=2, player=dict(state["player"]))
+    moved["player"]["position"] = {"x": 520, "y": 300}
+    second = vectorizer.build(moved, previous_action=4)
+    latest = second[
+        history_start + HISTORY_SIZE - HISTORY_FEATURES:
+        history_start + HISTORY_SIZE
+    ]
+    assert latest[4] == pytest.approx(1.0)
+    assert latest[9] == pytest.approx(0.2)
+    assert latest[11] == pytest.approx(0.2)
+    macro = second[history_start + HISTORY_SIZE:]
+    assert macro[OBJECTIVE_EVADE] == pytest.approx(1.0)
+    assert macro[-1] == pytest.approx(0.9)
+
+
+def test_v4_anchor_balancing_limits_idle_to_ten_percent():
+    pytest.importorskip("gymnasium")
+    pytest.importorskip("stable_baselines3")
+    from v4.train_temporal_hierarchical import balanced_anchor_arrays
+
+    records = [
+        {"features": [0.0] * SEMANTIC_OBSERVATION_SIZE, "action": 0}
+        for _ in range(100)
+    ] + [
+        {"features": [0.0] * SEMANTIC_OBSERVATION_SIZE, "action": 1 + index % 8}
+        for index in range(90)
+    ]
+    features, actions, idle_fraction = balanced_anchor_arrays(records)
+    assert features.shape == (100, 4077)
+    assert actions.shape == (100,)
+    assert idle_fraction == pytest.approx(0.10)
+
+
+def test_v4_transfer_preserves_complete_bullet_actor_logits():
+    gym = pytest.importorskip("gymnasium")
+    pytest.importorskip("stable_baselines3")
+    from gymnasium import spaces
+    from v3.train_bullet_hell_finetune import BulletHellActorExtractor
+    from v3.train_combat_finetune import HumanAnchoredPPO, actor_logits
+    from v4.combat_policy import V4_OBSERVATION_SIZE
+    from v4.train_temporal_hierarchical import (
+        TemporalHierarchicalActorExtractor,
+        initialize_v4_from_bullet_ppo,
+    )
+
+    class DummyEnv(gym.Env):
+        action_space = spaces.Discrete(9)
+
+        def __init__(self, observation_size):
+            self.observation_space = spaces.Box(
+                low=-1.0,
+                high=1.0,
+                shape=(observation_size,),
+                dtype=np.float32,
+            )
+
+        def reset(self, *, seed=None, options=None):
+            super().reset(seed=seed)
+            return np.zeros(self.observation_space.shape, dtype=np.float32), {}
+
+        def step(self, _action):
+            return np.zeros(self.observation_space.shape, dtype=np.float32), 0.0, False, False, {}
+
+    source = HumanAnchoredPPO(
+        "MlpPolicy",
+        DummyEnv(BULLET_HELL_OBSERVATION_SIZE),
+        n_steps=8,
+        batch_size=4,
+        n_epochs=1,
+        policy_kwargs={
+            "features_extractor_class": BulletHellActorExtractor,
+            "net_arch": {"pi": [], "vf": [16]},
+            "activation_fn": torch.nn.Tanh,
+            "share_features_extractor": False,
+        },
+    )
+    with torch.no_grad():
+        source.policy.action_net.weight.normal_(0.0, 0.03)
+        source.policy.action_net.bias.normal_(0.0, 0.03)
+    target = HumanAnchoredPPO(
+        "MlpPolicy",
+        DummyEnv(V4_OBSERVATION_SIZE),
+        n_steps=8,
+        batch_size=4,
+        n_epochs=1,
+        policy_kwargs={
+            "features_extractor_class": TemporalHierarchicalActorExtractor,
+            "net_arch": {"pi": [], "vf": [16]},
+            "activation_fn": torch.nn.Tanh,
+            "share_features_extractor": False,
+        },
+    )
+    assert initialize_v4_from_bullet_ppo(target, source) <= 1e-5
+    old_observation = torch.rand((4, BULLET_HELL_OBSERVATION_SIZE)) * 2.0 - 1.0
+    new_observation = torch.rand((4, V4_OBSERVATION_SIZE)) * 2.0 - 1.0
+    new_observation[:, :BULLET_HELL_OBSERVATION_SIZE] = old_observation
+    with torch.no_grad():
+        assert torch.allclose(
+            actor_logits(source.policy, old_observation),
+            actor_logits(target.policy, new_observation),
+            atol=1e-6,
+        )

@@ -195,6 +195,27 @@ enemy-contact risk is low. TensorBoard exposes these under `movement/` so a
 stationary or oscillating policy is visible instead of being hidden by aggregate
 action counts.
 
+## V4 temporal hierarchical movement
+
+`train_v4_temporal_rl.bat` upgrades a trained 3,941-input bullet-hell actor to
+a 4,077-input temporal actor. The complete V3 action function is copied with
+exact initial logit parity, so migration does not erase the movement already
+learned. A GRU reads the last eight action/displacement/damage/threat
+transitions, while a transparent macro planner advertises one of five goals:
+evade, heal, loot, engage, or reposition.
+
+Verify the migration without touching a live V3 trainer:
+
+```powershell
+python -m v4.train_temporal_hierarchical --bootstrap-only
+```
+
+The human behavior anchor keeps every moving demonstration but limits IDLE to
+about 10 percent, preventing stationary demonstrations from dominating V4.
+Live training defaults to 20 Hz, writes checkpoints under
+`v4_temporal_checkpoints`, and adds `v4/*` objective, urgency, and history
+curves to TensorBoard under `V4TemporalPPO`.
+
 Fine-tune that human base online without discarding its behavior:
 
 ```bat

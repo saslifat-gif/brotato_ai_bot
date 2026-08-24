@@ -126,6 +126,9 @@ class BrotatoApiEnv(gym.Env):
         self.last_state = state
         self.previous_action = int(MoveAction.IDLE)
         self.reward_engine.reset(state)
+        reset_vectorizer = getattr(self.vectorizer, "reset", None)
+        if callable(reset_vectorizer):
+            reset_vectorizer(state)
         observation = self.vectorizer.build(state, self.previous_action)
         return observation, {
             "tick": int(state.get("tick", -1)),
