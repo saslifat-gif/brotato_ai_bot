@@ -38,7 +38,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.0.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.1.zip
 ```
 
 It also keeps an editable diagnostic copy under
@@ -98,7 +98,7 @@ and repeated idle input is limited to 2 Hz. Records are written to
 This is structured state/action data, not screen video. Train/validation splits
 keep complete episodes together to prevent adjacent-frame leakage.
 
-Bridge 0.3.0 records an 832-value API-only semantic observation. It preserves
+Bridge 0.3.1 records an 832-value API-only semantic observation. It preserves
 the prior 384 rich inputs and adds stable enemy identity and collision size,
 pickup category/healing/value, per-weapon cooldown/reload/ammo readiness, and
 visible attack-warning geometry. No screen capture or CV is used.

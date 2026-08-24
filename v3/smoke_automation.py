@@ -1,6 +1,7 @@
 """Run a short deterministic end-to-end v3 automation check without PPO."""
 
 import argparse
+import json
 
 from v3.config import load_config
 from v3.env.brotato_api_env import BrotatoApiEnv
@@ -22,10 +23,16 @@ def main() -> int:
         default=0,
         help="stop successfully after this many automatic episode resets",
     )
+    parser.add_argument(
+        "--semantic-details",
+        action="store_true",
+        help="print the first live sample of each semantic API entity",
+    )
     args = parser.parse_args()
     env = BrotatoApiEnv(load_config())
     phases = []
     episodes = 0
+    semantic_seen = set()
     try:
         _observation, info = env.reset()
         print(f"[v3-smoke] reset phase={info['phase']} tick={info['tick']}")
@@ -40,6 +47,22 @@ def main() -> int:
             should_idle = args.idle_after_wave > 0 and current_wave >= args.idle_after_wave
             action = 0 if should_idle else movement[(step // max(1, args.segment)) % len(movement)]
             _observation, reward, terminated, truncated, info = env.step(action)
+            if args.semantic_details:
+                state = env.last_state or {}
+                combat = state.get("combat", {})
+                semantic_sources = {
+                    "enemy": state.get("enemies") or [],
+                    "pickup": state.get("pickups") or [],
+                    "weapon": combat.get("weapons") or [],
+                    "attack_indicator": state.get("attack_indicators") or [],
+                }
+                for kind, entries in semantic_sources.items():
+                    if kind not in semantic_seen and entries:
+                        semantic_seen.add(kind)
+                        print(
+                            f"[v3-semantic] kind={kind} "
+                            + json.dumps(entries[0], ensure_ascii=False)
+                        )
             completed_steps = step + 1
             highest_wave = max(highest_wave, int(info.get("wave", 0)))
             confirmed_ui.update(info.get("ui_confirmed", []))

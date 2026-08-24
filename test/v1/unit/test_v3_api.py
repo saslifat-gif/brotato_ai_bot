@@ -258,7 +258,7 @@ def test_human_recorder_rejects_old_bridge():
     require_human_input_capability({
         "capabilities": ["human_input_observation", "semantic_entities_v2"]
     })
-    with pytest.raises(RuntimeError, match="Bridge 0.3.0"):
+    with pytest.raises(RuntimeError, match="Bridge 0.3.1"):
         require_human_input_capability({"capabilities": ["structured_state"]})
 
 
@@ -889,7 +889,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.0.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.1.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

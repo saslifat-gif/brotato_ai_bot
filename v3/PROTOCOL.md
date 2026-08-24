@@ -13,7 +13,7 @@ Game to trainer:
   upgrade and found-item actions include a language-independent `choice` object with internal
   IDs, category, tier, price, affordability, tags and numeric effects. Full inventory/build
   metadata is emitted only during UI phases. Combat states contain a compact `combat` summary
-  with character, weapon counts/range, movement speed, armor and attack speed. Bridge 0.3.0
+  with character, weapon counts/range, movement speed, armor and attack speed. Bridge 0.3.1
   adds per-weapon IDs, range, cooldown/reload timers, ammo capacity, readiness and attack state.
   Enemy entries advertise stable IDs/types, exact collision width/height when available,
   contact damage, attack/movement type, cooldown, charging/attacking and boss/elite flags.

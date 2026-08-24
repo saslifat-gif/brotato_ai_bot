@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.0"
+const MOD_VERSION := "0.3.1"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -63,6 +63,7 @@ var _last_human_input_ms := 0
 var _last_attack_indicators := []
 var _indicator_scan_nodes := 0
 var _indicator_scan_seen := {}
+var _logged_semantic_probes := {}
 
 
 func _ready() -> void:
@@ -671,7 +672,12 @@ func _combat_summary(player, run_data) -> Dictionary:
 
 
 func _combat_weapon_state(weapon, weapon_stats) -> Dictionary:
-	var weapon_data = _first_property(weapon, ["weapon_data", "item_data", "data"], null)
+	var weapon_data = _first_property(
+		weapon,
+		["_weapon_data", "weapon_data", "_item_data", "item_data", "_data", "data"],
+		null
+	)
+	_log_semantic_probe("weapon", weapon, weapon_data)
 	var token := _script_token(weapon) + " " + _script_token(weapon_data)
 	var cooldown_timer = _first_property(
 		weapon,
@@ -714,11 +720,7 @@ func _combat_weapon_state(weapon, weapon_stats) -> Dictionary:
 		false
 	))
 	return {
-		"id": str(_first_property(
-			weapon_data,
-			["weapon_id", "my_id", "id"],
-			_first_property(weapon, ["weapon_id", "my_id", "id"], str(weapon.name))
-		)),
+		"id": _semantic_id(weapon, weapon_data),
 		"attack_type": token,
 		"range": float(_first_property(weapon_stats, ["max_range", "range"], 170.0)),
 		"cooldown_remaining": max(0.0, cooldown_remaining),
@@ -1053,15 +1055,16 @@ func _entity_static_data(entity) -> Dictionary:
 	var cache_key := int(entity.get_instance_id())
 	if _entity_static_cache.has(cache_key):
 		return _entity_static_cache[cache_key]
-	var entity_data = _first_property(entity, ["enemy_data", "unit_data", "data"], null)
+	var entity_data = _first_property(
+		entity,
+		["_enemy_data", "enemy_data", "_unit_data", "unit_data", "_data", "data"],
+		null
+	)
+	_log_semantic_probe("enemy", entity, entity_data)
 	var entity_token := _script_token(entity) + " " + _script_token(entity_data)
 	var shape_data := _collision_shape_data(entity)
 	var result := {
-		"id": str(_first_property(
-			entity_data,
-			["my_id", "id"],
-			_first_property(entity, ["my_id", "id"], str(entity.name))
-		)),
+		"id": _semantic_id(entity, entity_data),
 		"type": entity_token,
 		"radius": shape_data["radius"],
 		"width": shape_data["width"],
@@ -1084,9 +1087,13 @@ func _pickup_static_data(pickup, kind: String) -> Dictionary:
 		return _pickup_static_cache[cache_key]
 	var data = _first_property(
 		pickup,
-		["consumable_data", "pickup_data", "item_data", "data"],
+		[
+			"_consumable_data", "consumable_data", "_pickup_data", "pickup_data",
+			"_item_data", "item_data", "_data", "data"
+		],
 		null
 	)
+	_log_semantic_probe("pickup", pickup, data)
 	var token := _script_token(pickup) + " " + _script_token(data)
 	var category := kind
 	if token.find("fruit") >= 0 or token.find("heal") >= 0 or token.find("food") >= 0:
@@ -1099,11 +1106,7 @@ func _pickup_static_data(pickup, kind: String) -> Dictionary:
 		category = "consumable"
 	var shape_data := _collision_shape_data(pickup)
 	var result := {
-		"id": str(_first_property(
-			data,
-			["my_id", "id", "item_id", "consumable_id"],
-			_first_property(pickup, ["my_id", "id"], str(pickup.name))
-		)),
+		"id": _semantic_id(pickup, data),
 		"type": token,
 		"category": category,
 		"radius": shape_data["radius"],
@@ -1133,7 +1136,7 @@ func _projectile_static_data(projectile) -> Dictionary:
 		return _projectile_static_cache[cache_key]
 	var shape_data := _collision_shape_data(projectile)
 	var result := {
-		"id": str(_first_property(projectile, ["my_id", "id"], str(projectile.name))),
+		"id": _semantic_id(projectile, null),
 		"radius": shape_data["radius"],
 		"damage": float(_first_property(projectile, ["damage", "current_damage"], 0.0)),
 		"attack_type": _script_token(projectile)
@@ -1218,9 +1221,9 @@ func _append_attack_indicator(node, output: Array) -> void:
 	)
 	var owner_node = _first_property(node, ["source", "attacker", "owner_unit", "enemy"], null)
 	output.append({
-		"id": str(_first_property(node, ["my_id", "id"], str(node.name))),
+		"id": _semantic_id(node, null),
 		"type": token,
-		"owner_id": str(_first_property(owner_node, ["my_id", "id"], "")),
+		"owner_id": _semantic_id(owner_node, null) if owner_node != null else "",
 		"position": _vector_json(_first_property(
 			node,
 			["global_position", "position"],
@@ -1250,12 +1253,60 @@ func _append_attack_indicator(node, output: Array) -> void:
 func _script_token(object) -> String:
 	if object == null:
 		return ""
-	var token := str(_first_property(object, ["name", "my_id", "id"], "")).to_lower()
+	var raw_name := str(_first_property(object, ["my_id", "id", "name"], "")).to_lower()
+	# Generated names such as @Enemy@1622 identify one instance, not an enemy
+	# class. Excluding them makes observations stable between spawns and runs.
+	var token := "" if raw_name.begins_with("@") else raw_name
+	var resource_path := str(_first_property(
+		object,
+		["resource_path", "filename", "scene_file_path"],
+		""
+	)).to_lower()
+	if not resource_path.empty():
+		token += " " + resource_path
 	if object is Object:
 		var script = object.get_script()
 		if script != null:
 			token += " " + str(script.resource_path).to_lower()
-	return token
+	return token.strip_edges()
+
+
+func _semantic_id(object, data) -> String:
+	for candidate in [data, object]:
+		if candidate == null:
+			continue
+		var identity := str(_first_property(
+			candidate,
+			[
+				"weapon_id", "item_id", "consumable_id", "enemy_id", "unit_id",
+				"my_id", "id", "resource_path", "filename", "scene_file_path"
+			],
+			""
+		)).strip_edges().to_lower()
+		if not identity.empty() and not identity.begins_with("@"):
+			return identity
+	var token := (_script_token(data) + " " + _script_token(object)).strip_edges()
+	return token if not token.empty() else "unknown"
+
+
+func _log_semantic_probe(kind: String, object, data) -> void:
+	if _logged_semantic_probes.has(kind) or object == null:
+		return
+	_logged_semantic_probes[kind] = true
+	var properties := []
+	for descriptor in object.get_property_list():
+		properties.append(str(descriptor.get("name", "")))
+	var children := []
+	for child in object.get_children():
+		if children.size() >= 24:
+			break
+		children.append(_script_token(child))
+	print("[BrotatoRLBridge] semantic_probe kind=%s data=%s properties=%s children=%s" % [
+		kind,
+		_script_token(data),
+		properties,
+		children
+	])
 
 
 func _collision_radius(object) -> float:
