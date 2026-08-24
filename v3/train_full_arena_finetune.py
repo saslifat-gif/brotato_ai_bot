@@ -108,11 +108,20 @@ def initialize_full_arena_from_semantic_ppo(
 ) -> float:
     """Copy a trained semantic PPO actor and verify exact action-logit parity."""
 
-    from v3.train_semantic_finetune import SemanticActorExtractor
-
     source_extractor = source.policy.pi_features_extractor
     target_extractor = model.policy.pi_features_extractor
-    if not isinstance(source_extractor, SemanticActorExtractor):
+    # SB3 cloudpickles custom extractor classes. A checkpoint written from a
+    # ``python -m`` entry point can therefore reconstruct the same class under
+    # ``__main__`` and fail identity-based isinstance checks. Validate the
+    # serialized architecture instead.
+    source_semantic_actor = getattr(source_extractor, "semantic_actor", None)
+    source_observation_shape = tuple(source.observation_space.shape)
+    source_action_inputs = int(getattr(source.policy.action_net, "in_features", -1))
+    if (
+        not isinstance(source_semantic_actor, nn.Module)
+        or source_observation_shape != (SEMANTIC_OBSERVATION_SIZE,)
+        or source_action_inputs != 9 + SEMANTIC_OBSERVATION_SIZE
+    ):
         raise RuntimeError("source checkpoint is not a semantic PPO policy")
     if not isinstance(target_extractor, FullArenaActorExtractor):
         raise RuntimeError("target policy is missing FullArenaActorExtractor")
