@@ -215,6 +215,9 @@ about 10 percent, preventing stationary demonstrations from dominating V4.
 Live training defaults to 20 Hz, writes checkpoints under
 `v4_temporal_checkpoints`, and adds `v4/*` objective, urgency, and history
 curves to TensorBoard under `V4TemporalPPO`.
+`train_v4_temporal_scheduled.bat` is the unattended launcher: after a restart
+it automatically selects the newest V4 checkpoint, falling back to the
+verified bootstrap when no live checkpoint exists yet.
 
 Fine-tune that human base online without discarding its behavior:
 
