@@ -152,6 +152,38 @@ class CombatTensorboardCallback(BaseCallback):
                 "combat/attack_indicator_count",
                 float(info.get("attack_indicator_count", 0)),
             )
+            self.logger.record_mean(
+                "combat/projectile_path_count",
+                float(info.get("projectile_path_count", 0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_max_risk",
+                float(info.get("projectile_path_max_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_action_risk",
+                float(info.get("projectile_path_action_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/enemy_path_max_risk",
+                float(info.get("enemy_path_max_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/enemy_path_action_risk",
+                float(info.get("enemy_path_action_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/boundary_path_max_risk",
+                float(info.get("boundary_path_max_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/boundary_path_action_risk",
+                float(info.get("boundary_path_action_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/selected_path_risk_penalty",
+                float(info.get("selected_path_risk_penalty", 0.0)),
+            )
             for action in range(9):
                 self.logger.record_mean(
                     f"actions/applied_{action}", float(applied == action)

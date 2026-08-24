@@ -25,6 +25,10 @@ from v3.combat_policy import (
     FULL_ARENA_GRID_SIZE,
     FULL_ARENA_OBSERVATION_SIZE,
     FullArenaCombatVectorizer,
+    BULLET_HELL_ACTION_RISK_SIZE,
+    BULLET_HELL_GRID_SIZE,
+    BULLET_HELL_OBSERVATION_SIZE,
+    BulletHellCombatVectorizer,
 )
 from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
 from v3.record_human import require_human_input_capability, should_record
@@ -407,6 +411,111 @@ def test_full_arena_ppo_transfer_preserves_trained_semantic_logits():
         )
 
 
+def test_bullet_hell_vector_preserves_full_arena_and_separates_future_risks():
+    state = _state()
+    grid = np.zeros(BULLET_HELL_GRID_SIZE, dtype=np.float32)
+    grid[0] = 0.25
+    grid[-1] = 0.75
+    projectile_risk = np.linspace(0.0, 0.8, 9, dtype=np.float32)
+    enemy_risk = np.linspace(0.9, 0.1, 9, dtype=np.float32)
+    boundary_risk = np.linspace(0.1, 0.5, 9, dtype=np.float32)
+    state["projectile_paths"] = {
+        "grid": grid.tolist(),
+        "action_risk": projectile_risk.tolist(),
+        "enemy_action_risk": enemy_risk.tolist(),
+        "boundary_action_risk": boundary_risk.tolist(),
+        "count": 128,
+        "enemy_count": 64,
+    }
+    full = FullArenaCombatVectorizer().build(state, previous_action=4)
+    bullet = BulletHellCombatVectorizer().build(state, previous_action=4)
+    assert bullet.shape == (BULLET_HELL_OBSERVATION_SIZE,)
+    assert np.array_equal(bullet[:FULL_ARENA_OBSERVATION_SIZE], full)
+    cursor = FULL_ARENA_OBSERVATION_SIZE
+    assert bullet[cursor] == pytest.approx(0.25)
+    assert bullet[cursor + BULLET_HELL_GRID_SIZE - 1] == pytest.approx(0.75)
+    cursor += BULLET_HELL_GRID_SIZE
+    assert bullet[cursor:cursor + 9] == pytest.approx(projectile_risk)
+    assert bullet[cursor + 9:cursor + 18] == pytest.approx(
+        enemy_risk
+    )
+    assert bullet[cursor + 18:cursor + BULLET_HELL_ACTION_RISK_SIZE] == pytest.approx(
+        boundary_risk
+    )
+    cursor += BULLET_HELL_ACTION_RISK_SIZE
+    assert bullet[cursor:cursor + 2] == pytest.approx([0.25, 0.125])
+
+
+def test_bullet_hell_ppo_transfer_preserves_trained_full_arena_logits():
+    gym = pytest.importorskip("gymnasium")
+    pytest.importorskip("stable_baselines3")
+    from gymnasium import spaces
+    from v3.train_bullet_hell_finetune import (
+        BulletHellActorExtractor,
+        initialize_bullet_hell_from_full_arena_ppo,
+    )
+    from v3.train_combat_finetune import HumanAnchoredPPO, actor_logits
+    from v3.train_full_arena_finetune import FullArenaActorExtractor
+
+    class DummyEnv(gym.Env):
+        action_space = spaces.Discrete(9)
+
+        def __init__(self, observation_size):
+            self.observation_space = spaces.Box(
+                low=-1.0,
+                high=1.0,
+                shape=(observation_size,),
+                dtype=np.float32,
+            )
+
+        def reset(self, *, seed=None, options=None):
+            super().reset(seed=seed)
+            return np.zeros(self.observation_space.shape, dtype=np.float32), {}
+
+        def step(self, _action):
+            return np.zeros(self.observation_space.shape, dtype=np.float32), 0.0, False, False, {}
+
+    source = HumanAnchoredPPO(
+        "MlpPolicy",
+        DummyEnv(FULL_ARENA_OBSERVATION_SIZE),
+        n_steps=8,
+        batch_size=4,
+        n_epochs=1,
+        policy_kwargs={
+            "features_extractor_class": FullArenaActorExtractor,
+            "net_arch": {"pi": [], "vf": [16]},
+            "activation_fn": torch.nn.Tanh,
+            "share_features_extractor": False,
+        },
+    )
+    with torch.no_grad():
+        source.policy.action_net.weight.normal_(0.0, 0.03)
+        source.policy.action_net.bias.normal_(0.0, 0.03)
+    target = HumanAnchoredPPO(
+        "MlpPolicy",
+        DummyEnv(BULLET_HELL_OBSERVATION_SIZE),
+        n_steps=8,
+        batch_size=4,
+        n_epochs=1,
+        policy_kwargs={
+            "features_extractor_class": BulletHellActorExtractor,
+            "net_arch": {"pi": [], "vf": [16]},
+            "activation_fn": torch.nn.Tanh,
+            "share_features_extractor": False,
+        },
+    )
+    assert initialize_bullet_hell_from_full_arena_ppo(target, source) <= 1e-5
+    old_observation = torch.rand((4, FULL_ARENA_OBSERVATION_SIZE)) * 2.0 - 1.0
+    new_observation = torch.rand((4, BULLET_HELL_OBSERVATION_SIZE)) * 2.0 - 1.0
+    new_observation[:, :FULL_ARENA_OBSERVATION_SIZE] = old_observation
+    with torch.no_grad():
+        assert torch.allclose(
+            actor_logits(source.policy, old_observation),
+            actor_logits(target.policy, new_observation),
+            atol=1e-6,
+        )
+
+
 def test_human_recorder_samples_transitions_and_throttles_idle():
     assert should_record(4, 3, 0.01, sample_hz=8, idle_hz=2)
     assert not should_record(4, 4, 0.05, sample_hz=8, idle_hz=2)
@@ -559,8 +668,14 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '"weapon_readiness"' in bridge
     assert '"attack_indicators"' in bridge
     assert '"full_arena_grid_v1"' in bridge
+    assert '"projectile_path_grid_v1"' in bridge
     assert '"arena_grid"' in bridge
+    assert '"projectile_paths"' in bridge
     assert "func _full_arena_enemy_grid(" in bridge
+    assert "func _projectile_path_state(" in bridge
+    assert "func _splat_projectile_path(" in bridge
+    assert '"enemy_action_risk"' in bridge
+    assert '"boundary_action_risk"' in bridge
     assert '"configurable_state_rate"' in bridge
     assert "_tick - _last_indicator_scan_tick >= 6" in bridge
     assert "var _property_name_cache := {}" in bridge
@@ -1186,7 +1301,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.6.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.7.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

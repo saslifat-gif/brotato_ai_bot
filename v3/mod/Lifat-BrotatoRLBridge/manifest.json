@@ -1,7 +1,7 @@
 {
   "name": "BrotatoRLBridge",
   "namespace": "Lifat",
-  "version_number": "0.3.6",
+  "version_number": "0.3.7",
   "description": "Local-only structured-state bridge for Brotato reinforcement learning.",
   "website_url": "https://github.com/saslifat-gif/brotato_ai_bot",
   "dependencies": [],

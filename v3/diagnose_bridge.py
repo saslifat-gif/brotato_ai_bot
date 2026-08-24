@@ -30,6 +30,14 @@ def main() -> int:
             player = state.get("player", {})
             wave = state.get("wave", {})
             counters = state.get("counters", {})
+            paths = state.get("projectile_paths", {})
+            path_risks = paths.get("action_risk", []) if isinstance(paths, dict) else []
+            enemy_risks = (
+                paths.get("enemy_action_risk", []) if isinstance(paths, dict) else []
+            )
+            boundary_risks = (
+                paths.get("boundary_action_risk", []) if isinstance(paths, dict) else []
+            )
             position = player.get("position", {})
             print(
                 "[v3-state] "
@@ -39,6 +47,10 @@ def main() -> int:
                 f"materials={counters.get('materials')} kills={counters.get('kills')} "
                 f"enemies={len(state.get('enemies', []))} "
                 f"projectiles={len(state.get('projectiles', []))} "
+                f"hostile_paths={paths.get('count', 0) if isinstance(paths, dict) else 0} "
+                f"path_risk={max(path_risks, default=0.0):.3f} "
+                f"contact_risk={max(enemy_risks, default=0.0):.3f} "
+                f"boundary_risk={max(boundary_risks, default=0.0):.3f} "
                 f"pickups={len(state.get('pickups', []))} "
                 f"indicators={len(state.get('attack_indicators', []))}"
             )
@@ -50,6 +62,19 @@ def main() -> int:
                     "pickup": (state.get("pickups") or [None])[0],
                     "weapon": (combat.get("weapons") or [None])[0],
                     "attack_indicator": (state.get("attack_indicators") or [None])[0],
+                    "projectile_paths": {
+                        "columns": paths.get("columns"),
+                        "rows": paths.get("rows"),
+                        "channels": paths.get("channels"),
+                        "hostile_count": paths.get("count"),
+                        "enemy_count": paths.get("enemy_count"),
+                        "active_grid_values": sum(
+                            1 for value in paths.get("grid", []) if float(value) > 0.0
+                        ),
+                        "action_risk": path_risks,
+                        "enemy_action_risk": enemy_risks,
+                        "boundary_action_risk": boundary_risks,
+                    },
                     "ui_actions": [
                         {
                             "role": action.get("role"),

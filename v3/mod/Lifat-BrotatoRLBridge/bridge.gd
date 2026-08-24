@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.6"
+const MOD_VERSION := "0.3.7"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -22,6 +22,23 @@ const MAX_UI_ACTIONS := 64
 const MAX_BUILD_ITEMS := 128
 const FULL_ARENA_GRID_COLUMNS := 10
 const FULL_ARENA_GRID_ROWS := 6
+const BULLET_GRID_COLUMNS := 20
+const BULLET_GRID_ROWS := 12
+const BULLET_GRID_CHANNELS := 10
+const BULLET_GRID_WIDTH := 1600.0
+const BULLET_GRID_HEIGHT := 900.0
+const BULLET_PATH_HORIZONS := [0.0, 0.25, 0.5, 0.75, 1.0]
+const BULLET_ACTION_VECTORS := [
+	Vector2.ZERO,
+	Vector2(0, -1),
+	Vector2(0, 1),
+	Vector2(-1, 0),
+	Vector2(1, 0),
+	Vector2(-0.70710678, -0.70710678),
+	Vector2(0.70710678, -0.70710678),
+	Vector2(-0.70710678, 0.70710678),
+	Vector2(0.70710678, 0.70710678)
+]
 const BUILD_STAT_KEYS := [
 	"stat_max_hp",
 	"stat_armor",
@@ -316,6 +333,7 @@ func _build_state() -> Dictionary:
 	var player_state := _player_state(player)
 	var enemies := []
 	var projectiles := []
+	var projectile_nodes := []
 	var pickups := []
 	var attack_indicators := []
 	var ui_actions := []
@@ -335,7 +353,7 @@ func _build_state() -> Dictionary:
 				if is_instance_valid(enemy):
 					_observe_enemy_death(enemy)
 					enemies.append(_entity_state(enemy))
-		_collect_projectiles(main, projectiles, MAX_PROJECTILES)
+		_collect_projectiles(main, projectiles, MAX_PROJECTILES, projectile_nodes)
 		_append_pickups(main.get_node_or_null("Items"), pickups, "item", MAX_PICKUPS)
 		_append_pickups(main.get_node_or_null("Consumables"), pickups, "consumable", MAX_PICKUPS)
 
@@ -415,6 +433,13 @@ func _build_state() -> Dictionary:
 			"enemy": _full_arena_enemy_grid(spawned_enemies, arena_size, player_state)
 		},
 		"projectiles": projectiles,
+		"projectile_paths": _projectile_path_state(
+			projectile_nodes,
+			spawned_enemies,
+			player_state,
+			combat_state,
+			arena_size
+		),
 		"pickups": pickups,
 		"attack_indicators": attack_indicators,
 		"combat": combat_state,
@@ -991,7 +1016,11 @@ func _player_state(player) -> Dictionary:
 	if max_health == null:
 		max_health = _first_property(player, ["max_health", "health_max", "max_hp"], 1.0)
 	return {
-		"position": _vector_json(_property(player, "position", Vector2.ZERO)),
+		"position": _vector_json(_first_property(
+			player,
+			["global_position", "position"],
+			Vector2.ZERO
+		)),
 		"velocity": _vector_json(_property(player, "linear_velocity", Vector2.ZERO)),
 		"health": float(health),
 		"max_health": max(1.0, float(max_health))
@@ -1077,7 +1106,7 @@ func _entity_state(entity) -> Dictionary:
 	}
 
 
-func _collect_projectiles(main, output: Array, maximum: int) -> void:
+func _collect_projectiles(main, output: Array, maximum: int, all_nodes: Array) -> void:
 	var seen := {}
 	for path in [
 		"Projectiles",
@@ -1087,26 +1116,41 @@ func _collect_projectiles(main, output: Array, maximum: int) -> void:
 		"EntitySpawner/Projectiles",
 		"EntitySpawner/EnemyProjectiles"
 	]:
-		_append_projectiles(main.get_node_or_null(path), output, maximum, seen)
+		_append_projectiles(main.get_node_or_null(path), output, maximum, seen, all_nodes)
 	for group_name in ["projectiles", "enemy_projectiles", "bullets", "shots"]:
 		for projectile in get_tree().get_nodes_in_group(group_name):
-			_append_projectile(projectile, output, maximum, seen)
+			_append_projectile(projectile, output, maximum, seen, all_nodes)
 
 
-func _append_projectiles(container, output: Array, maximum: int, seen: Dictionary) -> void:
+func _append_projectiles(
+	container,
+	output: Array,
+	maximum: int,
+	seen: Dictionary,
+	all_nodes: Array
+) -> void:
 	if container == null:
 		return
 	for child in container.get_children():
-		_append_projectile(child, output, maximum, seen)
+		_append_projectile(child, output, maximum, seen, all_nodes)
 
 
-func _append_projectile(projectile, output: Array, maximum: int, seen: Dictionary) -> void:
-	if projectile == null or output.size() >= maximum or not is_instance_valid(projectile):
+func _append_projectile(
+	projectile,
+	output: Array,
+	maximum: int,
+	seen: Dictionary,
+	all_nodes: Array
+) -> void:
+	if projectile == null or not is_instance_valid(projectile):
 		return
 	var instance_id := int(projectile.get_instance_id())
 	if seen.has(instance_id):
 		return
 	seen[instance_id] = true
+	all_nodes.append(projectile)
+	if output.size() >= maximum:
+		return
 	var static_data := _projectile_static_data(projectile)
 	var shape_data := _collision_shape_data(projectile)
 	var velocity = _first_property(
@@ -1140,6 +1184,271 @@ func _append_projectile(projectile, output: Array, maximum: int, seen: Dictionar
 		)),
 		"kind": "projectile"
 	})
+
+
+func _projectile_path_state(
+	projectile_nodes: Array,
+	spawned_enemies,
+	player_state: Dictionary,
+	combat_state: Dictionary,
+	arena_size: Vector2
+) -> Dictionary:
+	var grid := []
+	for _index in range(BULLET_GRID_COLUMNS * BULLET_GRID_ROWS * BULLET_GRID_CHANNELS):
+		grid.append(0.0)
+	var action_risk := []
+	var enemy_action_risk := []
+	var boundary_action_risk := []
+	for _index in range(BULLET_ACTION_VECTORS.size()):
+		action_risk.append(0.0)
+		enemy_action_risk.append(0.0)
+		boundary_action_risk.append(0.0)
+	var player_position := _json_vector(player_state.get("position", {}))
+	var max_health := max(1.0, float(player_state.get("max_health", 1.0)))
+	var player_speed := max(150.0, float(combat_state.get("move_speed", 300.0)))
+	var hostile_count := 0
+	for projectile in projectile_nodes:
+		if projectile == null or not is_instance_valid(projectile):
+			continue
+		if not _is_hostile_projectile(projectile):
+			continue
+		hostile_count += 1
+		var position = _first_property(
+			projectile,
+			["global_position", "position"],
+			Vector2.ZERO
+		)
+		if typeof(position) != TYPE_VECTOR2:
+			continue
+		var velocity = _first_property(
+			projectile,
+			["linear_velocity", "velocity", "current_velocity"],
+			Vector2.ZERO
+		)
+		if typeof(velocity) != TYPE_VECTOR2:
+			velocity = Vector2.ZERO
+		var direction = _first_property(projectile, ["direction", "_direction"], Vector2.ZERO)
+		if velocity.length_squared() < 0.01 and typeof(direction) == TYPE_VECTOR2:
+			velocity = direction * float(_first_property(
+				projectile,
+				["speed", "current_speed"],
+				0.0
+			))
+		var static_data := _projectile_static_data(projectile)
+		var radius := max(4.0, float(static_data.get("radius", 12.0))) + 36.0
+		var damage := max(0.0, float(static_data.get("damage", 0.0)))
+		var relative: Vector2 = position - player_position
+		for horizon_index in range(BULLET_PATH_HORIZONS.size()):
+			var horizon := float(BULLET_PATH_HORIZONS[horizon_index])
+			_splat_projectile_path(
+				grid,
+				relative + velocity * horizon,
+				radius,
+				horizon_index,
+				velocity,
+				damage / max_health
+			)
+			if horizon_index > 0:
+				var previous_horizon := float(BULLET_PATH_HORIZONS[horizon_index - 1])
+				_splat_projectile_path(
+					grid,
+					relative + velocity * ((previous_horizon + horizon) * 0.5),
+					radius,
+					horizon_index,
+					velocity,
+					damage / max_health
+				)
+		for action_index in range(BULLET_ACTION_VECTORS.size()):
+			var player_velocity: Vector2 = BULLET_ACTION_VECTORS[action_index] * player_speed
+			var relative_velocity: Vector2 = velocity - player_velocity
+			var speed_squared := relative_velocity.length_squared()
+			var closest_time := 0.0
+			if speed_squared > 1.0:
+				closest_time = clamp(
+					-relative.dot(relative_velocity) / speed_squared,
+					0.0,
+					0.8
+				)
+			var miss_distance := (relative + relative_velocity * closest_time).length()
+			if miss_distance < radius:
+				action_risk[action_index] += (
+					(radius - miss_distance) / radius
+					* (1.0 + min(2.0, damage / max_health))
+				)
+	for index in range(grid.size()):
+		grid[index] = clamp(float(grid[index]), 0.0, 1.0)
+	for index in range(action_risk.size()):
+		action_risk[index] = clamp(float(action_risk[index]) / 4.0, 0.0, 1.0)
+	var enemy_count := 0
+	if typeof(spawned_enemies) == TYPE_ARRAY:
+		for enemy in spawned_enemies:
+			if enemy == null or not is_instance_valid(enemy):
+				continue
+			enemy_count += 1
+			var enemy_position = _first_property(
+				enemy,
+				["global_position", "position"],
+				Vector2.ZERO
+			)
+			if typeof(enemy_position) != TYPE_VECTOR2:
+				continue
+			var enemy_velocity = _first_property(
+				enemy,
+				["linear_velocity", "velocity", "current_velocity"],
+				Vector2.ZERO
+			)
+			if typeof(enemy_velocity) != TYPE_VECTOR2:
+				enemy_velocity = Vector2.ZERO
+			var enemy_static := _entity_static_data(enemy)
+			var contact_radius := max(
+				20.0,
+				float(enemy_static.get("radius", 40.0)) + 36.0
+			)
+			var current_stats = _property(enemy, "current_stats", null)
+			var contact_damage := max(0.0, float(_first_property(
+				current_stats,
+				["damage", "contact_damage", "touch_damage"],
+				_first_property(enemy, ["damage", "contact_damage", "touch_damage"], 0.0)
+			)))
+			var enemy_relative: Vector2 = enemy_position - player_position
+			# Several Brotato movement behaviours update position directly and leave
+			# linear_velocity at zero.  Treat a nearby mobile enemy as approaching
+			# the player in that case, so IDLE is not incorrectly advertised as safe.
+			if enemy_velocity.length_squared() < 1.0 and enemy_relative.length_squared() > 1.0:
+				var estimated_enemy_speed := max(60.0, float(_first_property(
+					enemy,
+					["current_speed", "movement_speed", "move_speed", "speed"],
+					120.0
+				)))
+				enemy_velocity = -enemy_relative.normalized() * estimated_enemy_speed
+			for action_index in range(BULLET_ACTION_VECTORS.size()):
+				var player_velocity: Vector2 = BULLET_ACTION_VECTORS[action_index] * player_speed
+				var relative_velocity: Vector2 = enemy_velocity - player_velocity
+				var speed_squared := relative_velocity.length_squared()
+				var closest_time := 0.0
+				if speed_squared > 1.0:
+					closest_time = clamp(
+						-enemy_relative.dot(relative_velocity) / speed_squared,
+						0.0,
+						0.8
+					)
+				var miss_distance := (
+					enemy_relative + relative_velocity * closest_time
+				).length()
+				if miss_distance < contact_radius:
+					enemy_action_risk[action_index] += (
+						(contact_radius - miss_distance) / contact_radius
+						* (1.0 + min(2.0, contact_damage / max_health))
+					)
+	for index in range(enemy_action_risk.size()):
+		enemy_action_risk[index] = clamp(
+			float(enemy_action_risk[index]) / 4.0,
+			0.0,
+			1.0
+		)
+	# Predict half a second ahead. This exposes actions that keep pressing into
+	# an arena wall, a frequent precursor to an avoidable contact death.
+	var boundary_margin := 80.0
+	for action_index in range(BULLET_ACTION_VECTORS.size()):
+		var future_position: Vector2 = (
+			player_position
+			+ BULLET_ACTION_VECTORS[action_index] * player_speed * 0.5
+		)
+		var edge_clearance := min(
+			min(future_position.x, future_position.y),
+			min(arena_size.x - future_position.x, arena_size.y - future_position.y)
+		)
+		boundary_action_risk[action_index] = clamp(
+			(boundary_margin - edge_clearance) / boundary_margin,
+			0.0,
+			1.0
+		)
+	return {
+		"columns": BULLET_GRID_COLUMNS,
+		"rows": BULLET_GRID_ROWS,
+		"channels": BULLET_GRID_CHANNELS,
+		"horizons": BULLET_PATH_HORIZONS,
+		"grid": grid,
+		"action_risk": action_risk,
+		"enemy_action_risk": enemy_action_risk,
+		"boundary_action_risk": boundary_action_risk,
+		"count": hostile_count,
+		"enemy_count": enemy_count
+	}
+
+
+func _splat_projectile_path(
+	grid: Array,
+	relative: Vector2,
+	radius: float,
+	horizon_channel: int,
+	velocity: Vector2,
+	damage_fraction: float
+) -> void:
+	var half_width := BULLET_GRID_WIDTH * 0.5
+	var half_height := BULLET_GRID_HEIGHT * 0.5
+	if (
+		relative.x + radius < -half_width
+		or relative.x - radius > half_width
+		or relative.y + radius < -half_height
+		or relative.y - radius > half_height
+	):
+		return
+	var cell_width := BULLET_GRID_WIDTH / BULLET_GRID_COLUMNS
+	var cell_height := BULLET_GRID_HEIGHT / BULLET_GRID_ROWS
+	var min_column := int(clamp(
+		floor((relative.x - radius + half_width) / cell_width),
+		0,
+		BULLET_GRID_COLUMNS - 1
+	))
+	var max_column := int(clamp(
+		floor((relative.x + radius + half_width) / cell_width),
+		0,
+		BULLET_GRID_COLUMNS - 1
+	))
+	var min_row := int(clamp(
+		floor((relative.y - radius + half_height) / cell_height),
+		0,
+		BULLET_GRID_ROWS - 1
+	))
+	var max_row := int(clamp(
+		floor((relative.y + radius + half_height) / cell_height),
+		0,
+		BULLET_GRID_ROWS - 1
+	))
+	var direction_channel := 5
+	if abs(velocity.x) >= abs(velocity.y):
+		direction_channel = 5 if velocity.x >= 0.0 else 6
+	else:
+		direction_channel = 7 if velocity.y >= 0.0 else 8
+	for row in range(min_row, max_row + 1):
+		for column in range(min_column, max_column + 1):
+			var offset := (
+				(row * BULLET_GRID_COLUMNS + column) * BULLET_GRID_CHANNELS
+			)
+			grid[offset + horizon_channel] += 0.25
+			grid[offset + direction_channel] += 0.125
+			grid[offset + 9] += max(0.05, min(1.0, damage_fraction)) * 0.25
+
+
+func _is_hostile_projectile(projectile) -> bool:
+	if bool(_first_property(
+		projectile,
+		["is_player_projectile", "from_player", "player_projectile"],
+		false
+	)):
+		return false
+	var source = _first_property(
+		projectile,
+		["source", "owner_unit", "shooter", "attacker"],
+		null
+	)
+	if source != null and source == TempStats.player:
+		return false
+	var token := _script_token(projectile)
+	if token.find("player_projectile") >= 0 or token.find("player_bullet") >= 0:
+		return false
+	return true
 
 
 func _append_pickups(container, output: Array, kind: String, maximum: int) -> void:
@@ -1522,6 +1831,12 @@ func _vector_json(value) -> Dictionary:
 	return {"x": float(value.x), "y": float(value.y)}
 
 
+func _json_vector(value) -> Vector2:
+	if typeof(value) != TYPE_DICTIONARY:
+		return Vector2.ZERO
+	return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+
+
 func _movement_to_action(value) -> int:
 	if typeof(value) != TYPE_VECTOR2:
 		return 0
@@ -1572,6 +1887,7 @@ func _send_hello() -> void:
 			"weapon_readiness",
 			"attack_indicators",
 			"full_arena_grid_v1",
+			"projectile_path_grid_v1",
 			"configurable_state_rate",
 			"human_input_observation"
 		]

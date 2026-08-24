@@ -116,6 +116,46 @@ class BrotatoApiEnv(gym.Env):
         requested = int(MoveAction(int(action)))
         decision = self.safety_shield.apply(self.last_state or {}, requested)
         normalized = decision.applied_action
+        previous_paths = (self.last_state or {}).get("projectile_paths", {})
+        projectile_risks = (
+            previous_paths.get("action_risk", [])
+            if isinstance(previous_paths, dict)
+            else []
+        )
+        enemy_risks = (
+            previous_paths.get("enemy_action_risk", [])
+            if isinstance(previous_paths, dict)
+            else []
+        )
+        boundary_risks = (
+            previous_paths.get("boundary_action_risk", [])
+            if isinstance(previous_paths, dict)
+            else []
+        )
+
+        def _risk_vector(values) -> list[float]:
+            result = [0.0] * len(MoveAction)
+            if not isinstance(values, (list, tuple)):
+                return result
+            for index, raw_value in enumerate(values[:len(result)]):
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(value):
+                    result[index] = float(np.clip(value, 0.0, 1.0))
+            return result
+
+        def _selected_risk(values) -> float:
+            return _risk_vector(values)[normalized]
+
+        selected_projectile_risk = _selected_risk(projectile_risks)
+        selected_enemy_risk = _selected_risk(enemy_risks)
+        selected_boundary_risk = _selected_risk(boundary_risks)
+        selected_path_risk = min(
+            1.0,
+            selected_projectile_risk + selected_enemy_risk + selected_boundary_risk,
+        )
         self.combat_logger.record(
             self.last_state or {},
             decision,
@@ -131,6 +171,9 @@ class BrotatoApiEnv(gym.Env):
             minimum_sequence=self.sequence,
         )
         reward = self.reward_engine.step(state)
+        reward -= float(getattr(self.vectorizer, "path_risk_reward_scale", 0.0)) * (
+            selected_path_risk
+        )
         terminated = bool(state.get("dead") or state.get("victory"))
         ui_sent = []
         ui_confirmed = []
@@ -152,6 +195,25 @@ class BrotatoApiEnv(gym.Env):
         self.last_state = state
         self.previous_action = normalized
         observation = self.vectorizer.build(state, self.previous_action)
+        projectile_paths = state.get("projectile_paths", {})
+        path_risks = (
+            projectile_paths.get("action_risk", [])
+            if isinstance(projectile_paths, dict)
+            else []
+        )
+        finite_risks = _risk_vector(path_risks)
+        enemy_path_risks = (
+            projectile_paths.get("enemy_action_risk", [])
+            if isinstance(projectile_paths, dict)
+            else []
+        )
+        finite_enemy_risks = _risk_vector(enemy_path_risks)
+        boundary_path_risks = (
+            projectile_paths.get("boundary_action_risk", [])
+            if isinstance(projectile_paths, dict)
+            else []
+        )
+        finite_boundary_risks = _risk_vector(boundary_path_risks)
         info = {
             "tick": int(state.get("tick", -1)),
             "phase": state.get("phase"),
@@ -169,6 +231,26 @@ class BrotatoApiEnv(gym.Env):
             "enemy_count": len(state.get("enemies", [])),
             "projectile_count": len(state.get("projectiles", [])),
             "attack_indicator_count": len(state.get("attack_indicators", [])),
+            "projectile_path_count": int(projectile_paths.get("count", 0))
+            if isinstance(projectile_paths, dict)
+            else 0,
+            "projectile_path_max_risk": max(finite_risks, default=0.0),
+            "projectile_path_action_risk": (
+                finite_risks[normalized] if normalized < len(finite_risks) else 0.0
+            ),
+            "enemy_path_max_risk": max(finite_enemy_risks, default=0.0),
+            "enemy_path_action_risk": (
+                finite_enemy_risks[normalized]
+                if normalized < len(finite_enemy_risks)
+                else 0.0
+            ),
+            "boundary_path_max_risk": max(finite_boundary_risks, default=0.0),
+            "boundary_path_action_risk": (
+                finite_boundary_risks[normalized]
+                if normalized < len(finite_boundary_risks)
+                else 0.0
+            ),
+            "selected_path_risk_penalty": selected_path_risk,
         }
         return observation, reward, terminated, truncated, info
 

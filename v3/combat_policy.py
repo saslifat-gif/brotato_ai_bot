@@ -35,6 +35,27 @@ FULL_ARENA_ATTACK_SIZE = RICH_MAX_ENEMIES * FULL_ARENA_ATTACK_FEATURES
 FULL_ARENA_OBSERVATION_SIZE = (
     SEMANTIC_OBSERVATION_SIZE + FULL_ARENA_GRID_SIZE + FULL_ARENA_ATTACK_SIZE
 )
+BULLET_HELL_GRID_COLUMNS = 20
+BULLET_HELL_GRID_ROWS = 12
+BULLET_HELL_GRID_CHANNELS = 10
+BULLET_HELL_GRID_SIZE = (
+    BULLET_HELL_GRID_COLUMNS * BULLET_HELL_GRID_ROWS * BULLET_HELL_GRID_CHANNELS
+)
+BULLET_HELL_PROJECTILE_RISK_SIZE = len(MoveAction)
+BULLET_HELL_ENEMY_RISK_SIZE = len(MoveAction)
+BULLET_HELL_BOUNDARY_RISK_SIZE = len(MoveAction)
+BULLET_HELL_ACTION_RISK_SIZE = (
+    BULLET_HELL_PROJECTILE_RISK_SIZE
+    + BULLET_HELL_ENEMY_RISK_SIZE
+    + BULLET_HELL_BOUNDARY_RISK_SIZE
+)
+BULLET_HELL_METADATA_SIZE = 2
+BULLET_HELL_OBSERVATION_SIZE = (
+    FULL_ARENA_OBSERVATION_SIZE
+    + BULLET_HELL_GRID_SIZE
+    + BULLET_HELL_ACTION_RISK_SIZE
+    + BULLET_HELL_METADATA_SIZE
+)
 
 ACTION_VECTORS = {
     MoveAction.IDLE: (0.0, 0.0),
@@ -537,6 +558,63 @@ class FullArenaCombatVectorizer:
                 np.clip((target_y - py) / height, -1.0, 1.0) if target_visible else 0.0,
             )
             cursor += FULL_ARENA_ATTACK_FEATURES
+        return output
+
+
+class BulletHellCombatVectorizer:
+    """V4 observation with all-projectile future paths and action risks.
+
+    The first 1,512 values are exactly the full-arena generation. Bridge 0.3.7
+    appends a player-centered 20x12 map with five time horizons, four separate
+    direction lanes, damage weighting, and collision risk for every action.
+    """
+
+    observation_size = BULLET_HELL_OBSERVATION_SIZE
+    path_risk_reward_scale = 0.05
+
+    def __init__(self):
+        self.base = FullArenaCombatVectorizer()
+
+    def build(self, state: Mapping[str, Any], previous_action: int = 0) -> np.ndarray:
+        output = np.zeros(BULLET_HELL_OBSERVATION_SIZE, dtype=np.float32)
+        output[:FULL_ARENA_OBSERVATION_SIZE] = self.base.build(state, previous_action)
+        cursor = FULL_ARENA_OBSERVATION_SIZE
+        paths = _mapping(state.get("projectile_paths"))
+        raw_grid = paths.get("grid")
+        if (
+            isinstance(raw_grid, Iterable)
+            and not isinstance(raw_grid, (str, bytes, Mapping))
+        ):
+            values = np.asarray(list(raw_grid), dtype=np.float32)
+            if values.shape == (BULLET_HELL_GRID_SIZE,) and np.isfinite(values).all():
+                output[cursor:cursor + BULLET_HELL_GRID_SIZE] = np.clip(
+                    values, 0.0, 1.0
+                )
+        cursor += BULLET_HELL_GRID_SIZE
+        for key, size in (
+            ("action_risk", BULLET_HELL_PROJECTILE_RISK_SIZE),
+            ("enemy_action_risk", BULLET_HELL_ENEMY_RISK_SIZE),
+            ("boundary_action_risk", BULLET_HELL_BOUNDARY_RISK_SIZE),
+        ):
+            raw_risk = paths.get(key)
+            if (
+                isinstance(raw_risk, Iterable)
+                and not isinstance(raw_risk, (str, bytes, Mapping))
+            ):
+                values = np.asarray(list(raw_risk), dtype=np.float32)
+                if values.shape == (size,) and np.isfinite(values).all():
+                    output[cursor:cursor + size] = np.clip(values, 0.0, 1.0)
+            cursor += size
+        output[cursor] = np.clip(
+            _number(paths.get("count"), len(_items(state.get("projectiles")))) / 512.0,
+            0.0,
+            1.0,
+        )
+        output[cursor + 1] = np.clip(
+            _number(paths.get("enemy_count"), len(_items(state.get("enemies")))) / 512.0,
+            0.0,
+            1.0,
+        )
         return output
 
 
