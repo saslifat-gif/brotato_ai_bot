@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.4"
+const MOD_VERSION := "0.3.5"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -20,6 +20,8 @@ const MAX_COMBAT_WEAPONS := 6
 const MAX_INDICATOR_SCAN_NODES := 500
 const MAX_UI_ACTIONS := 64
 const MAX_BUILD_ITEMS := 128
+const FULL_ARENA_GRID_COLUMNS := 10
+const FULL_ARENA_GRID_ROWS := 6
 const BUILD_STAT_KEYS := [
 	"stat_max_hp",
 	"stat_armor",
@@ -317,10 +319,15 @@ func _build_state() -> Dictionary:
 	var pickups := []
 	var attack_indicators := []
 	var ui_actions := []
+	var spawned_enemies := []
+	var zone_service = root.get_node_or_null("ZoneService")
+	var arena_size = _property(zone_service, "current_zone_max_position", Vector2(1920, 1080))
+	if typeof(arena_size) != TYPE_VECTOR2:
+		arena_size = Vector2(1920, 1080)
 
 	if main != null:
 		var spawner = main.get_node_or_null("EntitySpawner")
-		var spawned_enemies = _property(spawner, "enemies", [])
+		spawned_enemies = _property(spawner, "enemies", [])
 		if typeof(spawned_enemies) == TYPE_ARRAY:
 			for enemy in spawned_enemies:
 				if enemies.size() >= MAX_ENEMIES:
@@ -337,10 +344,6 @@ func _build_state() -> Dictionary:
 	var run_player_data = _run_player_data(run_data, player)
 	var build_state := {}
 	var combat_state := {}
-	var zone_service = root.get_node_or_null("ZoneService")
-	var arena_size = _property(zone_service, "current_zone_max_position", Vector2(1920, 1080))
-	if typeof(arena_size) != TYPE_VECTOR2:
-		arena_size = Vector2(1920, 1080)
 	var wave_number := int(_first_property(run_data, ["current_wave", "wave"], 0))
 	var health := float(player_state.get("health", 0.0))
 	var run_lost := bool(_property(main, "_is_run_lost", false))
@@ -408,6 +411,9 @@ func _build_state() -> Dictionary:
 			"kills": _kills_this_wave
 		},
 		"enemies": enemies,
+		"arena_grid": {
+			"enemy": _full_arena_enemy_grid(spawned_enemies, arena_size, player_state)
+		},
 		"projectiles": projectiles,
 		"pickups": pickups,
 		"attack_indicators": attack_indicators,
@@ -419,6 +425,55 @@ func _build_state() -> Dictionary:
 		"dead": dead,
 		"victory": run_won
 	}
+
+
+func _full_arena_enemy_grid(spawned_enemies, arena_size: Vector2, player_state: Dictionary) -> Array:
+	# Unlike the detailed entity list, this inexpensive aggregate includes every
+	# live enemy. It gives the policy whole-arena density and motion without
+	# serializing hundreds of reflected objects in late waves.
+	var output := []
+	for _index in range(FULL_ARENA_GRID_COLUMNS * FULL_ARENA_GRID_ROWS * 4):
+		output.append(0.0)
+	if typeof(spawned_enemies) != TYPE_ARRAY:
+		return output
+	var width := max(1.0, arena_size.x)
+	var height := max(1.0, arena_size.y)
+	var max_health := max(1.0, float(player_state.get("max_health", 1.0)))
+	for enemy in spawned_enemies:
+		if enemy == null or not is_instance_valid(enemy):
+			continue
+		var position = _property(enemy, "position", Vector2.ZERO)
+		if typeof(position) != TYPE_VECTOR2:
+			continue
+		var column := int(clamp(
+			floor(position.x / width * FULL_ARENA_GRID_COLUMNS),
+			0,
+			FULL_ARENA_GRID_COLUMNS - 1
+		))
+		var row := int(clamp(
+			floor(position.y / height * FULL_ARENA_GRID_ROWS),
+			0,
+			FULL_ARENA_GRID_ROWS - 1
+		))
+		var offset := (row * FULL_ARENA_GRID_COLUMNS + column) * 4
+		var current_stats = _property(enemy, "current_stats", null)
+		var static_data := _entity_static_data(enemy)
+		var radius := max(1.0, float(static_data.get("radius", 40.0)))
+		var damage := max(0.0, float(_first_property(
+			current_stats,
+			["damage", "contact_damage", "touch_damage"],
+			_first_property(enemy, ["damage", "contact_damage", "touch_damage"], 0.0)
+		)))
+		var velocity = _property(enemy, "linear_velocity", Vector2.ZERO)
+		if typeof(velocity) != TYPE_VECTOR2:
+			velocity = Vector2.ZERO
+		output[offset] += 1.0 / 16.0
+		output[offset + 1] += min(1.0, radius / 300.0 + damage / max_health) / 8.0
+		output[offset + 2] += clamp(velocity.x / 1000.0, -1.0, 1.0) / 8.0
+		output[offset + 3] += clamp(velocity.y / 1000.0, -1.0, 1.0) / 8.0
+	for index in range(output.size()):
+		output[index] = clamp(float(output[index]), -1.0, 1.0)
+	return output
 
 
 func _collect_ui_actions(node, output: Array, phase: String) -> void:
@@ -1512,6 +1567,7 @@ func _send_hello() -> void:
 			"pickup_semantics",
 			"weapon_readiness",
 			"attack_indicators",
+			"full_arena_grid_v1",
 			"configurable_state_rate",
 			"human_input_observation"
 		]

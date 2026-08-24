@@ -22,6 +22,9 @@ from v3.combat_policy import (
     SEMANTIC_OBSERVATION_SIZE,
     SemanticCombatPolicyBase,
     SemanticCombatVectorizer,
+    FULL_ARENA_GRID_SIZE,
+    FULL_ARENA_OBSERVATION_SIZE,
+    FullArenaCombatVectorizer,
 )
 from v3.install_mod import MOD_DIR_NAME, activate_mod_profile, install_mod
 from v3.record_human import require_human_input_capability, should_record
@@ -299,6 +302,111 @@ def test_semantic_ppo_actor_initialization_is_exact():
     assert initialize_actor_from_semantic_base(model, base) <= 1e-5
 
 
+def test_full_arena_vector_preserves_semantic_prefix_and_attack_geometry():
+    state = _state()
+    state["enemies"] = [{
+        "position": {"x": 700, "y": 330},
+        "velocity": {"x": -40, "y": 10},
+        "radius": 70,
+        "contact_damage": 4,
+        "is_attacking": True,
+        "charge_direction": {"x": -1, "y": 0.25},
+        "attack_target": {"x": 520, "y": 360},
+    }]
+    semantic = SemanticCombatVectorizer().build(state, previous_action=4)
+    full = FullArenaCombatVectorizer().build(state, previous_action=4)
+    assert full.shape == (FULL_ARENA_OBSERVATION_SIZE,)
+    assert np.array_equal(full[:SEMANTIC_OBSERVATION_SIZE], semantic)
+    assert np.count_nonzero(
+        full[SEMANTIC_OBSERVATION_SIZE:SEMANTIC_OBSERVATION_SIZE + FULL_ARENA_GRID_SIZE]
+    ) > 0
+    attack = full[SEMANTIC_OBSERVATION_SIZE + FULL_ARENA_GRID_SIZE:]
+    assert attack[:4] == pytest.approx([-1.0, 0.25, 0.02, 0.10])
+
+
+def test_full_arena_vector_prefers_bridge_grid_that_includes_all_enemies():
+    state = _state()
+    state["enemies"] = []
+    exported = np.zeros(10 * 6 * 4, dtype=np.float32)
+    exported[-4:] = [0.75, 0.5, -0.25, 0.125]
+    state["arena_grid"] = {"enemy": exported.tolist()}
+    full = FullArenaCombatVectorizer().build(state)
+    grid = full[
+        SEMANTIC_OBSERVATION_SIZE:SEMANTIC_OBSERVATION_SIZE + FULL_ARENA_GRID_SIZE
+    ].reshape(-1, 10)
+    assert grid[-1, :4] == pytest.approx([0.75, 0.5, -0.25, 0.125])
+
+
+def test_full_arena_ppo_transfer_preserves_trained_semantic_logits():
+    gym = pytest.importorskip("gymnasium")
+    pytest.importorskip("stable_baselines3")
+    from gymnasium import spaces
+    from v3.train_combat_finetune import HumanAnchoredPPO, actor_logits
+    from v3.train_full_arena_finetune import (
+        FullArenaActorExtractor,
+        initialize_full_arena_from_semantic_ppo,
+    )
+    from v3.train_semantic_finetune import SemanticActorExtractor
+
+    class DummyEnv(gym.Env):
+        action_space = spaces.Discrete(9)
+
+        def __init__(self, observation_size):
+            self.observation_space = spaces.Box(
+                low=-1.0,
+                high=1.0,
+                shape=(observation_size,),
+                dtype=np.float32,
+            )
+
+        def reset(self, *, seed=None, options=None):
+            super().reset(seed=seed)
+            return np.zeros(self.observation_space.shape, dtype=np.float32), {}
+
+        def step(self, _action):
+            return np.zeros(self.observation_space.shape, dtype=np.float32), 0.0, False, False, {}
+
+    source = HumanAnchoredPPO(
+        "MlpPolicy",
+        DummyEnv(SEMANTIC_OBSERVATION_SIZE),
+        n_steps=8,
+        batch_size=4,
+        n_epochs=1,
+        policy_kwargs={
+            "features_extractor_class": SemanticActorExtractor,
+            "net_arch": {"pi": [], "vf": [16]},
+            "activation_fn": torch.nn.Tanh,
+            "share_features_extractor": False,
+        },
+    )
+    with torch.no_grad():
+        source.policy.action_net.weight.normal_(0.0, 0.03)
+        source.policy.action_net.bias.normal_(0.0, 0.03)
+    target = HumanAnchoredPPO(
+        "MlpPolicy",
+        DummyEnv(FULL_ARENA_OBSERVATION_SIZE),
+        n_steps=8,
+        batch_size=4,
+        n_epochs=1,
+        policy_kwargs={
+            "features_extractor_class": FullArenaActorExtractor,
+            "net_arch": {"pi": [], "vf": [16]},
+            "activation_fn": torch.nn.Tanh,
+            "share_features_extractor": False,
+        },
+    )
+    assert initialize_full_arena_from_semantic_ppo(target, source) <= 1e-5
+    old_observation = torch.rand((4, SEMANTIC_OBSERVATION_SIZE)) * 2.0 - 1.0
+    full_observation = torch.rand((4, FULL_ARENA_OBSERVATION_SIZE)) * 2.0 - 1.0
+    full_observation[:, :SEMANTIC_OBSERVATION_SIZE] = old_observation
+    with torch.no_grad():
+        assert torch.allclose(
+            actor_logits(source.policy, old_observation),
+            actor_logits(target.policy, full_observation),
+            atol=1e-6,
+        )
+
+
 def test_human_recorder_samples_transitions_and_throttles_idle():
     assert should_record(4, 3, 0.01, sample_hz=8, idle_hz=2)
     assert not should_record(4, 4, 0.05, sample_hz=8, idle_hz=2)
@@ -449,6 +557,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '"pickup_semantics"' in bridge
     assert '"weapon_readiness"' in bridge
     assert '"attack_indicators"' in bridge
+    assert '"full_arena_grid_v1"' in bridge
+    assert '"arena_grid"' in bridge
+    assert "func _full_arena_enemy_grid(" in bridge
     assert '"configurable_state_rate"' in bridge
     assert "_tick - _last_indicator_scan_tick >= 6" in bridge
     assert "var _property_name_cache := {}" in bridge
@@ -1027,7 +1138,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.3.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.5.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

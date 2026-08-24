@@ -24,6 +24,17 @@ RICH_MAX_PICKUPS = 8
 SEMANTIC_OBSERVATION_SIZE = 832
 SEMANTIC_MAX_INDICATORS = 10
 SEMANTIC_MAX_WEAPONS = 6
+FULL_ARENA_GRID_COLUMNS = 10
+FULL_ARENA_GRID_ROWS = 6
+FULL_ARENA_GRID_CHANNELS = 10
+FULL_ARENA_ATTACK_FEATURES = 4
+FULL_ARENA_GRID_SIZE = (
+    FULL_ARENA_GRID_COLUMNS * FULL_ARENA_GRID_ROWS * FULL_ARENA_GRID_CHANNELS
+)
+FULL_ARENA_ATTACK_SIZE = RICH_MAX_ENEMIES * FULL_ARENA_ATTACK_FEATURES
+FULL_ARENA_OBSERVATION_SIZE = (
+    SEMANTIC_OBSERVATION_SIZE + FULL_ARENA_GRID_SIZE + FULL_ARENA_ATTACK_SIZE
+)
 
 ACTION_VECTORS = {
     MoveAction.IDLE: (0.0, 0.0),
@@ -417,6 +428,115 @@ class SemanticCombatVectorizer:
                 1.0 if indicator.get("active") else 0.0,
             )
             cursor += 10
+        return output
+
+
+class FullArenaCombatVectorizer:
+    """Whole-arena v3 observation preserving every v2 feature verbatim.
+
+    The first 832 values remain byte-for-byte compatible with the semantic
+    policy.  A coarse spatial map summarizes every entity exported by the API,
+    while the nearest enemies receive exact visible attack geometry.
+    """
+
+    observation_size = FULL_ARENA_OBSERVATION_SIZE
+
+    def __init__(self):
+        self.base = SemanticCombatVectorizer()
+
+    @staticmethod
+    def _cell(position: Any, width: float, height: float) -> int:
+        x, y = _xy(position)
+        column = min(
+            FULL_ARENA_GRID_COLUMNS - 1,
+            max(0, int(x / width * FULL_ARENA_GRID_COLUMNS)),
+        )
+        row = min(
+            FULL_ARENA_GRID_ROWS - 1,
+            max(0, int(y / height * FULL_ARENA_GRID_ROWS)),
+        )
+        return row * FULL_ARENA_GRID_COLUMNS + column
+
+    def build(self, state: Mapping[str, Any], previous_action: int = 0) -> np.ndarray:
+        output = np.zeros(FULL_ARENA_OBSERVATION_SIZE, dtype=np.float32)
+        output[:SEMANTIC_OBSERVATION_SIZE] = self.base.build(state, previous_action)
+        arena = _mapping(state.get("arena"))
+        width = max(1.0, _number(arena.get("width"), 1920.0))
+        height = max(1.0, _number(arena.get("height"), 1080.0))
+        player = _mapping(state.get("player"))
+        px, py = _xy(player.get("position"))
+        max_health = max(1.0, _number(player.get("max_health"), 1.0))
+        grid = output[
+            SEMANTIC_OBSERVATION_SIZE:
+            SEMANTIC_OBSERVATION_SIZE + FULL_ARENA_GRID_SIZE
+        ].reshape(-1, FULL_ARENA_GRID_CHANNELS)
+
+        exported_grid = _mapping(state.get("arena_grid")).get("enemy")
+        has_exported_grid = (
+            isinstance(exported_grid, Iterable)
+            and not isinstance(exported_grid, (str, bytes, Mapping))
+        )
+        if has_exported_grid:
+            exported_values = np.asarray(list(exported_grid), dtype=np.float32)
+            has_exported_grid = exported_values.shape == (
+                FULL_ARENA_GRID_COLUMNS * FULL_ARENA_GRID_ROWS * 4,
+            ) and bool(np.isfinite(exported_values).all())
+        if has_exported_grid:
+            grid[:, :4] = exported_values.reshape(-1, 4)
+        else:
+            for enemy in _items(state.get("enemies")):
+                cell = self._cell(enemy.get("position"), width, height)
+                vx, vy = _xy(enemy.get("velocity"))
+                radius = max(1.0, _number(enemy.get("radius"), 40.0))
+                damage = max(0.0, _number(enemy.get("contact_damage")))
+                grid[cell, 0] += 1.0 / 16.0
+                grid[cell, 1] += min(1.0, radius / 300.0 + damage / max_health) / 8.0
+                grid[cell, 2] += np.clip(vx / 1000.0, -1.0, 1.0) / 8.0
+                grid[cell, 3] += np.clip(vy / 1000.0, -1.0, 1.0) / 8.0
+
+        for projectile in _items(state.get("projectiles")):
+            cell = self._cell(projectile.get("position"), width, height)
+            vx, vy = _xy(projectile.get("velocity"))
+            damage = max(0.0, _number(projectile.get("damage")))
+            grid[cell, 4] += 1.0 / 16.0
+            grid[cell, 5] += min(1.0, damage / max_health) / 8.0
+            grid[cell, 6] += np.clip(vx / 1000.0, -1.0, 1.0) / 8.0
+            grid[cell, 7] += np.clip(vy / 1000.0, -1.0, 1.0) / 8.0
+
+        for pickup in _items(state.get("pickups")):
+            cell = self._cell(pickup.get("position"), width, height)
+            category = str(pickup.get("category", pickup.get("kind", ""))).lower()
+            if category in {"healing", "consumable"}:
+                grid[cell, 8] += max(
+                    1.0 / 8.0,
+                    min(1.0, _number(pickup.get("healing")) / max_health),
+                )
+            else:
+                value = max(
+                    1.0,
+                    _number(pickup.get("material_value")),
+                    _number(pickup.get("crate_value")) * 10.0,
+                )
+                grid[cell, 9] += min(1.0, value / 20.0)
+        np.clip(grid, -1.0, 1.0, out=grid)
+
+        cursor = SEMANTIC_OBSERVATION_SIZE + FULL_ARENA_GRID_SIZE
+        for enemy in _nearest(_items(state.get("enemies")), px, py)[:RICH_MAX_ENEMIES]:
+            charge_x, charge_y = _xy(enemy.get("charge_direction"))
+            target_x, target_y = _xy(enemy.get("attack_target"))
+            target_visible = bool(
+                enemy.get("is_attacking")
+                or enemy.get("is_charging")
+                or target_x
+                or target_y
+            )
+            output[cursor:cursor + FULL_ARENA_ATTACK_FEATURES] = (
+                np.clip(charge_x, -1.0, 1.0),
+                np.clip(charge_y, -1.0, 1.0),
+                np.clip((target_x - px) / width, -1.0, 1.0) if target_visible else 0.0,
+                np.clip((target_y - py) / height, -1.0, 1.0) if target_visible else 0.0,
+            )
+            cursor += FULL_ARENA_ATTACK_FEATURES
         return output
 
 

@@ -38,7 +38,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.3.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.5.zip
 ```
 
 It also keeps an editable diagnostic copy under
@@ -123,6 +123,35 @@ under `semantic_finetune_checkpoints`, the best rolling-reward model under
 `semantic_finetune_best`, and TensorBoard curves under `SemanticBasePPO`.
 Safety overrides are disabled by default because silently replacing a sampled
 action would invalidate PPO's on-policy update.
+
+## Whole-arena policy generation
+
+`train_v3_full_arena_rl.bat` migrates a trained semantic PPO checkpoint to a
+1,512-value observation. Its first 832 values are unchanged. The appended
+inputs contain a 10 by 6 whole-arena map for enemy density/danger/motion,
+projectile density/damage/motion, healing pickups and material/crate pickups,
+plus exact charge direction and attack-target geometry for the nearest 20
+enemies. Bridge 0.3.5 computes the enemy map over every live enemy before the
+detailed API list is capped, so dense late waves remain visible without the
+cost of serializing every enemy object.
+
+The migration copies the complete trained semantic PPO actor and its action
+head. The new residual is initialized to zero and the trainer verifies action
+logits before saving the bootstrap checkpoint. Consequently the generation
+starts with exactly the source model's movement behavior while gaining new
+inputs it can learn to use. Existing human records are padded safely and remain
+the behavior-cloning anchor; a new recording is optional, not required.
+
+By default the batch file reads
+`semantic_finetune_best/best_training_agent.zip`. To migrate a newer checkpoint,
+run:
+
+```powershell
+python -m v3.train_full_arena_finetune --source-model models/version_3/semantic_finetune_checkpoints/semantic_base_ppo_200000_steps.zip --state-hz 12
+```
+
+Checkpoints are written under `full_arena_finetune_checkpoints`, the best model
+under `full_arena_finetune_best`, and TensorBoard curves under `FullArenaPPO`.
 
 Fine-tune that human base online without discarding its behavior:
 
