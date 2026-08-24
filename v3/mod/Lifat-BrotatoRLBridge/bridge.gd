@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.8"
+const MOD_VERSION := "0.3.9"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -87,6 +87,10 @@ var _last_indicator_scan_tick := -999999
 var _requested_state_hz := 24.0
 var _property_name_cache := {}
 var _training_paused := false
+var _wave_restart_state = null
+var _wave_restart_number := -1
+
+const BRIDGE_RESTART_WAVE_ACTION := "bridge://restart_wave"
 
 
 func _ready() -> void:
@@ -295,6 +299,9 @@ func record_player_death() -> void:
 
 
 func _activate_ui_action(target: String, sequence: int) -> void:
+	if target == BRIDGE_RESTART_WAVE_ACTION:
+		_restart_saved_wave(sequence, target)
+		return
 	var root := get_tree().get_root()
 	var scene = get_tree().current_scene
 	var node = root.get_node_or_null(NodePath(target))
@@ -310,6 +317,26 @@ func _activate_ui_action(target: String, sequence: int) -> void:
 	node.emit_signal("pressed")
 	_send_ui_result(sequence, target, true, "")
 	_state_elapsed = _state_interval_sec()
+
+
+func _restart_saved_wave(sequence: int, target: String) -> void:
+	if _wave_restart_state == null or _wave_restart_number <= 1:
+		_send_ui_result(sequence, target, false, "restart_state_unavailable")
+		return
+	var restored_state = _wave_restart_state.duplicate(true)
+	ProgressData.current_run_state = restored_state
+	RunData.resume_from_state(restored_state)
+	_resume_game()
+	var error = get_tree().change_scene(MenuData.shop_scene)
+	if error != OK:
+		_send_ui_result(sequence, target, false, "change_scene_%d" % error)
+		return
+	_latest_action = 0
+	_last_action_ms = 0
+	_reset_kills_on_combat = true
+	_send_ui_result(sequence, target, true, "")
+	_state_elapsed = _state_interval_sec()
+	print("[BrotatoRLBridge] restored shop before wave %d" % _wave_restart_number)
 
 
 func _send_ui_result(sequence: int, target: String, ok: bool, error: String) -> void:
@@ -403,8 +430,19 @@ func _build_state() -> Dictionary:
 		run_won,
 		visible_ui_phase
 	)
+	if phase == "shop":
+		_capture_wave_restart_state(wave_number)
 	if phase != "combat" and phase != "wave_end":
 		build_state = _build_state_for_policy(run_data, run_player_data)
+		if phase == "game_over" and _wave_restart_state != null and _wave_restart_number > 1:
+			ui_actions.append({
+				"id": BRIDGE_RESTART_WAVE_ACTION,
+				"name": "BridgeRestartWave",
+				"text": "Restart wave",
+				"role": "restart",
+				"enabled": true,
+				"pressed": false
+			})
 		_collect_ui_actions(get_tree().current_scene, ui_actions, phase)
 	elif phase == "combat":
 		combat_state = _combat_summary(player, run_data)
@@ -469,6 +507,20 @@ func _build_state() -> Dictionary:
 		"dead": dead,
 		"victory": run_won
 	}
+
+
+func _capture_wave_restart_state(wave_number: int) -> void:
+	# Brotato stores the build entering the next wave in current_run_state while
+	# the shop is open. Keep an in-memory deep copy because vanilla game-over
+	# clears ProgressData before the trainer can press a retry button.
+	var current_state = ProgressData.current_run_state
+	if current_state == null:
+		return
+	var next_wave := wave_number + 1
+	if next_wave <= 1:
+		return
+	_wave_restart_state = current_state.duplicate(true)
+	_wave_restart_number = next_wave
 
 
 func _full_arena_enemy_grid(spawned_enemies, arena_size: Vector2, player_state: Dictionary) -> Array:
