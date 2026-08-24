@@ -102,6 +102,10 @@ def initialize_full_arena_from_semantic_ppo(
         source.policy.action_net.state_dict()
     )
     with torch.no_grad():
+        # SB3 applies its own orthogonal initialization after constructing a
+        # custom extractor, so enforce the zero residual at migration time.
+        target_extractor.full_arena_residual[-1].weight.zero_()
+        target_extractor.full_arena_residual[-1].bias.zero_()
         model.policy.action_net.weight.zero_()
         model.policy.action_net.bias.zero_()
         model.policy.action_net.weight[:, : FullArenaActorExtractor.actor_size].copy_(
