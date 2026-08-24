@@ -11,6 +11,7 @@ import torch
 from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3.common.utils import get_schedule_fn
 from torch import nn
 
 from v3.combat_policy import (
@@ -124,7 +125,7 @@ def main() -> int:
     if args.resume:
         model = HumanAnchoredPPO.load(args.resume, env=env, device=args.device)
         model.learning_rate = max(1e-7, float(args.learning_rate))
-        model.lr_schedule = lambda _progress: model.learning_rate
+        model.lr_schedule = get_schedule_fn(model.learning_rate)
         for parameter_group in model.policy.optimizer.param_groups:
             parameter_group["lr"] = model.learning_rate
         model.ent_coef = max(0.0, float(args.ent_coef))
