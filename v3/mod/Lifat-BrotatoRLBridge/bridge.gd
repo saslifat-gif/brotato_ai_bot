@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.1"
+const MOD_VERSION := "0.3.2"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -696,7 +696,11 @@ func _combat_weapon_state(weapon, weapon_stats) -> Dictionary:
 	var cooldown_remaining := float(_first_property(
 		cooldown_timer,
 		["time_left"],
-		_first_property(weapon, ["cooldown_remaining", "attack_cooldown", "_cooldown"], 0.0)
+		_first_property(
+			weapon,
+			["_current_cooldown", "cooldown_remaining", "attack_cooldown", "_cooldown"],
+			0.0
+		)
 	))
 	var cooldown_duration := float(_first_property(
 		cooldown_timer,
@@ -731,7 +735,7 @@ func _combat_weapon_state(weapon, weapon_stats) -> Dictionary:
 		"is_reloading": reloading,
 		"is_attacking": bool(_first_property(
 			weapon,
-			["is_attacking", "attacking", "_is_attacking"],
+			["_is_shooting", "is_shooting", "is_attacking", "attacking", "_is_attacking"],
 			false
 		)),
 		"ready": cooldown_remaining <= 0.001 and not reloading and ammo != 0,
@@ -1015,6 +1019,7 @@ func _append_projectiles(container, output: Array, maximum: int) -> void:
 			"width": shape_data["width"],
 			"height": shape_data["height"],
 			"shape": shape_data["shape"],
+			"size_known": shape_data["known"],
 			"damage": static_data["damage"],
 			"attack_type": static_data["attack_type"],
 			"time_to_live": float(_first_property(
@@ -1042,6 +1047,8 @@ func _append_pickups(container, output: Array, kind: String, maximum: int) -> vo
 			"radius": static_data["radius"],
 			"width": static_data["width"],
 			"height": static_data["height"],
+			"shape": static_data["shape"],
+			"size_known": static_data["size_known"],
 			"healing": static_data["healing"],
 			"material_value": static_data["material_value"],
 			"crate_value": static_data["crate_value"],
@@ -1112,6 +1119,8 @@ func _pickup_static_data(pickup, kind: String) -> Dictionary:
 		"radius": shape_data["radius"],
 		"width": shape_data["width"],
 		"height": shape_data["height"],
+		"shape": shape_data["shape"],
+		"size_known": shape_data["known"],
 		"healing": float(_first_property(
 			pickup,
 			["healing", "heal_amount", "hp_restored", "health_restored"],
@@ -1318,6 +1327,11 @@ func _collision_shape_data(object) -> Dictionary:
 	var collision = _first_property(hitbox, ["_collision", "collision", "collision_shape"], null)
 	if collision == null:
 		collision = _first_property(object, ["_collision", "collision", "collision_shape"], null)
+	if collision == null and object is Node:
+		for child in object.get_children():
+			if child is CollisionShape2D:
+				collision = child
+				break
 	var shape = _property(collision, "shape", null)
 	if shape == null:
 		return {

@@ -93,7 +93,7 @@ def main() -> int:
                 )
                 if args.stop_after_episodes > 0 and episodes >= args.stop_after_episodes:
                     break
-        if highest_wave > start_wave and "upgrade_choice" not in confirmed_ui:
+        if "upgrade" in phases and "upgrade_choice" not in confirmed_ui:
             raise RuntimeError(
                 "wave advanced without a bridge-confirmed upgrade selection; "
                 "do not click the upgrade manually during this test"

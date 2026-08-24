@@ -25,7 +25,7 @@ def require_human_input_capability(hello: object) -> None:
         or SEMANTIC_CAPABILITY not in capabilities
     ):
         raise RuntimeError(
-            "Bridge 0.3.1+ with human input and semantic entities is required; "
+            "Bridge 0.3.2+ with human input and semantic entities is required; "
             "reinstall the v3 mod and restart Brotato"
         )
 
