@@ -13,7 +13,7 @@ Game to trainer:
   upgrade and found-item actions include a language-independent `choice` object with internal
   IDs, category, tier, price, affordability, tags and numeric effects. Full inventory/build
   metadata is emitted only during UI phases. Combat states contain a compact `combat` summary
-  with character, weapon counts/range, movement speed, armor and attack speed. Bridge 0.3.2
+  with character, weapon counts/range, movement speed, armor and attack speed. Bridge 0.3.3
   adds per-weapon IDs, range, cooldown/reload timers, ammo capacity, readiness and attack state.
   Enemy entries advertise stable IDs/types, exact collision width/height when available,
   contact damage, attack/movement type, cooldown, charging/attacking and boss/elite flags.
@@ -37,6 +37,8 @@ Trainer to game:
   exact node identifier advertised in the latest state.
 - `reset`: releases movement control before the trainer uses an advertised
   restart action. It remains safe when no restart action is visible.
+- `configure`: requests a structured state rate from 4 to 24 Hz. Human
+  demonstration recording requests 8 Hz; PPO keeps the adaptive maximum.
 
 Movement actions are idle, up, down, left, right, up-left, up-right,
 down-left and down-right. Combat runs in real time at up to 24 structured

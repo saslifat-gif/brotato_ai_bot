@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.2"
+const MOD_VERSION := "0.3.3"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -17,7 +17,7 @@ const MAX_PROJECTILES := 64
 const MAX_PICKUPS := 32
 const MAX_ATTACK_INDICATORS := 32
 const MAX_COMBAT_WEAPONS := 6
-const MAX_INDICATOR_SCAN_NODES := 1200
+const MAX_INDICATOR_SCAN_NODES := 500
 const MAX_UI_ACTIONS := 64
 const MAX_BUILD_ITEMS := 128
 const BUILD_STAT_KEYS := [
@@ -64,6 +64,9 @@ var _last_attack_indicators := []
 var _indicator_scan_nodes := 0
 var _indicator_scan_seen := {}
 var _logged_semantic_probes := {}
+var _last_indicator_scan_tick := -999999
+var _requested_state_hz := 24.0
+var _property_name_cache := {}
 
 
 func _ready() -> void:
@@ -87,11 +90,12 @@ func _state_interval_sec() -> float:
 	# Combat actions remain active between observations. Human demonstrations are
 	# sampled at 8 Hz, so lowering only the structured state rate in dense waves
 	# preserves control while leaving substantially more time for the game.
+	var adaptive_interval := EARLY_STATE_INTERVAL_SEC
 	if _last_wave_number >= 10:
-		return LATE_STATE_INTERVAL_SEC
-	if _last_wave_number >= 6:
-		return MID_STATE_INTERVAL_SEC
-	return EARLY_STATE_INTERVAL_SEC
+		adaptive_interval = LATE_STATE_INTERVAL_SEC
+	elif _last_wave_number >= 6:
+		adaptive_interval = MID_STATE_INTERVAL_SEC
+	return max(adaptive_interval, 1.0 / max(4.0, _requested_state_hz))
 
 
 func _poll_connection() -> void:
@@ -100,6 +104,7 @@ func _poll_connection() -> void:
 		_last_status = status
 		if status == _stream.STATUS_CONNECTED:
 			_connected = true
+			_requested_state_hz = 24.0
 			_receive_buffer = ""
 			_send_hello()
 			print("[BrotatoRLBridge] trainer connected")
@@ -177,6 +182,13 @@ func _handle_message(line: String) -> void:
 	elif message_type == "ui_action":
 		_last_sequence = int(message.get("sequence", -1))
 		_activate_ui_action(str(message.get("target", "")), _last_sequence)
+	elif message_type == "configure":
+		_requested_state_hz = clamp(float(message.get("state_hz", 24.0)), 4.0, 24.0)
+		_send({
+			"type": "event",
+			"event": "configured",
+			"state_hz": _requested_state_hz
+		})
 	else:
 		_send_error("unknown_message_type")
 
@@ -359,9 +371,13 @@ func _build_state() -> Dictionary:
 		# Warning-node discovery is more expensive than the normal entity export.
 		# Four scans/second at early-wave rate is responsive without worsening the
 		# late-wave frame drops that motivated the adaptive state interval.
-		if _tick % 6 == 0 or _last_attack_indicators.empty():
+		if _tick - _last_indicator_scan_tick >= 6:
+			_last_indicator_scan_tick = _tick
 			_last_attack_indicators = _collect_attack_indicators(main)
 		attack_indicators = _last_attack_indicators.duplicate(true)
+	else:
+		_last_attack_indicators = []
+		_last_indicator_scan_tick = -999999
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
@@ -1378,10 +1394,22 @@ func _property(object, property_name: String, fallback):
 		var dictionary: Dictionary = object
 		var dictionary_value = dictionary.get(property_name, fallback)
 		return fallback if dictionary_value == null else dictionary_value
-	for descriptor in object.get_property_list():
-		if descriptor.has("name") and str(descriptor["name"]) == property_name:
-			var value = object.get(property_name)
-			return fallback if value == null else value
+	if typeof(object) != TYPE_OBJECT or not is_instance_valid(object):
+		return fallback
+	var schema_key := str(object.get_class())
+	var script = object.get_script()
+	if script != null and not str(script.resource_path).empty():
+		schema_key += ":" + str(script.resource_path)
+	if not _property_name_cache.has(schema_key):
+		var names := {}
+		for descriptor in object.get_property_list():
+			if descriptor.has("name"):
+				names[str(descriptor["name"])] = true
+		_property_name_cache[schema_key] = names
+	var property_names: Dictionary = _property_name_cache[schema_key]
+	if property_names.has(property_name):
+		var value = object.get(property_name)
+		return fallback if value == null else value
 	return fallback
 
 
@@ -1448,6 +1476,7 @@ func _send_hello() -> void:
 			"pickup_semantics",
 			"weapon_readiness",
 			"attack_indicators",
+			"configurable_state_rate",
 			"human_input_observation"
 		]
 	})

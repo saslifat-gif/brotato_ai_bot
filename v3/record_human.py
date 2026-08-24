@@ -10,6 +10,7 @@ from v3.bridge_server import BridgeServer
 from v3.combat_policy import SemanticHumanCombatDecisionLogger
 from v3.config import load_config
 from v3.protocol import MoveAction
+from v3.protocol import configure_message
 from v3.ui_automation import AutoUiController
 
 
@@ -25,7 +26,7 @@ def require_human_input_capability(hello: object) -> None:
         or SEMANTIC_CAPABILITY not in capabilities
     ):
         raise RuntimeError(
-            "Bridge 0.3.2+ with human input and semantic entities is required; "
+            "Bridge 0.3.3+ with human input and semantic entities is required; "
             "reinstall the v3 mod and restart Brotato"
         )
 
@@ -97,8 +98,12 @@ def main() -> int:
             session = str(state.get("session", ""))
             if session != verified_session:
                 require_human_input_capability(server.last_hello)
+                server.send(configure_message(state_hz=max(4.0, min(24.0, args.sample_hz))))
                 verified_session = session
-                print(f"[v3-human] verified_bridge_session={session}")
+                print(
+                    f"[v3-human] verified_bridge_session={session} "
+                    f"bridge_state_hz={args.sample_hz:g}"
+                )
             phase = str(state.get("phase", "menu"))
             if phase != "combat":
                 if last_phase == "combat" and phase in {"game_over", "victory"}:

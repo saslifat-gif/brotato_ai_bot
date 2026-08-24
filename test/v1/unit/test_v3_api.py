@@ -28,6 +28,7 @@ from v3.record_human import require_human_input_capability, should_record
 from v3.protocol import (
     BridgeProtocolError,
     action_message,
+    configure_message,
     decode_message,
     encode_message,
     ui_action_message,
@@ -88,6 +89,9 @@ def test_protocol_round_trip_and_action_validation():
     }
     with pytest.raises(BridgeProtocolError):
         ui_action_message("relative/path", sequence=1)
+    assert configure_message(state_hz=8) == {"type": "configure", "state_hz": 8.0}
+    with pytest.raises(BridgeProtocolError):
+        configure_message(state_hz=30)
 
 
 def test_vectorizer_has_fixed_finite_shape_and_nearest_enemy_first():
@@ -258,7 +262,7 @@ def test_human_recorder_rejects_old_bridge():
     require_human_input_capability({
         "capabilities": ["human_input_observation", "semantic_entities_v2"]
     })
-    with pytest.raises(RuntimeError, match="Bridge 0.3.2"):
+    with pytest.raises(RuntimeError, match="Bridge 0.3.3"):
         require_human_input_capability({"capabilities": ["structured_state"]})
 
 
@@ -388,6 +392,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '"pickup_semantics"' in bridge
     assert '"weapon_readiness"' in bridge
     assert '"attack_indicators"' in bridge
+    assert '"configurable_state_rate"' in bridge
+    assert "_tick - _last_indicator_scan_tick >= 6" in bridge
+    assert "var _property_name_cache := {}" in bridge
     assert '"width": static_data["width"]' in bridge
     assert '"healing": static_data["healing"]' in bridge
     assert "set_pause(true)" not in bridge
@@ -889,7 +896,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.2.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.3.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

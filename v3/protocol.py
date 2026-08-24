@@ -76,3 +76,10 @@ def ui_action_message(target: str, sequence: int) -> dict[str, Any]:
         "sequence": int(sequence),
         "target": normalized,
     }
+
+
+def configure_message(*, state_hz: float) -> dict[str, Any]:
+    normalized = float(state_hz)
+    if not 4.0 <= normalized <= 24.0:
+        raise BridgeProtocolError(f"state_hz must be between 4 and 24: {state_hz!r}")
+    return {"type": "configure", "state_hz": normalized}
