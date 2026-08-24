@@ -38,7 +38,7 @@ Select the folder containing `Brotato.exe`. The installer creates the runtime
 package where the exported game discovers local mods:
 
 ```text
-<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.5.zip
+<Brotato>\mods\Lifat-BrotatoRLBridge-0.3.6.zip
 ```
 
 It also keeps an editable diagnostic copy under
@@ -131,7 +131,7 @@ action would invalidate PPO's on-policy update.
 inputs contain a 10 by 6 whole-arena map for enemy density/danger/motion,
 projectile density/damage/motion, healing pickups and material/crate pickups,
 plus exact charge direction and attack-target geometry for the nearest 20
-enemies. Bridge 0.3.5 computes the enemy map over every live enemy before the
+enemies. Bridge 0.3.6 computes the enemy map over every live enemy before the
 detailed API list is capped, so dense late waves remain visible without the
 cost of serializing every enemy object.
 

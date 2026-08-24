@@ -538,6 +538,7 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert 'if typeof(object) == TYPE_DICTIONARY:' in bridge
     assert '["gold", "materials"]' in bridge
     assert "func _collect_ui_actions(node, output: Array, phase: String)" in bridge
+    assert 'if role != "other":' in bridge
     assert "func _detect_visible_ui_phase(node)" in bridge
     assert "func _ui_action_context(node)" not in bridge
     assert "_last_ui_action_result" not in bridge
@@ -1185,7 +1186,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.5.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.6.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

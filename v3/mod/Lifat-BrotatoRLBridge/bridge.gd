@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.5"
+const MOD_VERSION := "0.3.6"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -496,7 +496,11 @@ func _collect_ui_actions(node, output: Array, phase: String) -> void:
 			action["choice"] = choice
 			if role == "buy" and choice.has("affordable"):
 				action["enabled"] = bool(action["enabled"]) and bool(choice["affordable"])
-		output.append(action)
+		# Inventory and category controls can exceed the export cap in late
+		# shops, hiding GoButton even though it is visible. Only advertise roles
+		# the automation protocol understands.
+		if role != "other":
+			output.append(action)
 	for child in node.get_children():
 		if output.size() >= MAX_UI_ACTIONS:
 			break
