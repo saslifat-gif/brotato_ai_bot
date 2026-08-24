@@ -212,12 +212,15 @@ python -m v4.train_temporal_hierarchical --bootstrap-only
 
 The human behavior anchor keeps every moving demonstration but limits IDLE to
 about 10 percent, preventing stationary demonstrations from dominating V4.
-Live training defaults to 20 Hz, writes checkpoints under
+Live training supports 20 Hz and writes checkpoints under
 `v4_temporal_checkpoints`, and adds `v4/*` objective, urgency, and history
 curves to TensorBoard under `V4TemporalPPO`.
 `train_v4_temporal_scheduled.bat` is the unattended launcher: after a restart
 it automatically selects the newest V4 checkpoint, falling back to the
-verified bootstrap when no live checkpoint exists yet.
+verified bootstrap when no live checkpoint exists yet. Its first curriculum
+stage stays at the V3 actor's trained 12 Hz; increase it to 20 Hz only after a
+stable V4 checkpoint, so the state distribution does not change during weight
+migration.
 
 Fine-tune that human base online without discarding its behavior:
 

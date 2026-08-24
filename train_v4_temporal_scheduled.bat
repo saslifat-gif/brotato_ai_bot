@@ -11,4 +11,4 @@ for /f "delims=" %%F in ('dir /b /a-d /o-d "%MODEL_DIR%\v4_temporal_checkpoints\
 if defined LATEST_MODEL set "RESUME_MODEL=%MODEL_DIR%\v4_temporal_checkpoints\%LATEST_MODEL%"
 
 echo [v4-scheduled] resume=%RESUME_MODEL%
-"%PYTHON%" -u -m v4.train_temporal_hierarchical --resume "%RESUME_MODEL%" --state-hz 20 --timesteps 1000000 >> "%MODEL_DIR%\v4_temporal_train.log" 2>&1
+"%PYTHON%" -u -m v4.train_temporal_hierarchical --resume "%RESUME_MODEL%" --state-hz 12 --timesteps 1000000 >> "%MODEL_DIR%\v4_temporal_train.log" 2>&1
