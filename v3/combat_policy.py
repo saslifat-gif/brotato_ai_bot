@@ -250,6 +250,47 @@ class CombatSafetyShield:
         return SafetyDecision(requested, best_action, requested_risk, best_risk)
 
 
+class EnemyContactGuard:
+    """Veto only actions advertised as an imminent enemy-contact path."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        risk_threshold: float = 0.22,
+        improvement_margin: float = 0.08,
+    ):
+        self.enabled = bool(enabled)
+        self.risk_threshold = float(risk_threshold)
+        self.improvement_margin = float(improvement_margin)
+
+    @staticmethod
+    def risks(state: Mapping[str, Any]) -> list[float]:
+        paths = _mapping(state.get("projectile_paths"))
+        values = paths.get("enemy_action_risk", [])
+        output = [0.0] * len(MoveAction)
+        if not isinstance(values, (list, tuple)):
+            return output
+        for index, value in enumerate(values[:len(output)]):
+            output[index] = max(0.0, min(1.0, _number(value)))
+        return output
+
+    def apply(self, state: Mapping[str, Any], requested_action: int) -> SafetyDecision:
+        requested = int(MoveAction(int(requested_action)))
+        risks = self.risks(state)
+        requested_risk = risks[requested]
+        if not self.enabled or requested_risk < self.risk_threshold:
+            return SafetyDecision(requested, requested, requested_risk, requested_risk)
+        best_action = min(
+            range(len(risks)),
+            key=lambda action: (risks[action], action == int(MoveAction.IDLE)),
+        )
+        best_risk = risks[best_action]
+        if requested_risk - best_risk < self.improvement_margin:
+            return SafetyDecision(requested, requested, requested_risk, requested_risk)
+        return SafetyDecision(requested, best_action, requested_risk, best_risk)
+
+
 class CombatHeuristicTeacher:
     """Potential-field teacher used for data collection, not final game strategy."""
 

@@ -15,6 +15,7 @@ from v3.combat_policy import (
     CombatHeuristicTeacher,
     CombatPolicyBase,
     CombatSafetyShield,
+    EnemyContactGuard,
     HumanCombatDecisionLogger,
     SemanticHumanCombatDecisionLogger,
     RICH_OBSERVATION_SIZE,
@@ -616,6 +617,23 @@ def test_safety_shield_sidesteps_an_incoming_projectile():
     assert decision.overridden
     assert decision.applied_action in {1, 2, 5, 7}
     assert decision.applied_risk < decision.requested_risk
+
+
+def test_enemy_contact_guard_vetoes_only_high_confidence_contact_path():
+    state = _state()
+    state["projectile_paths"] = {
+        "enemy_action_risk": [0.08, 0.05, 0.07, 0.04, 0.31, 0.09, 0.06, 0.08, 0.1]
+    }
+    guard = EnemyContactGuard()
+    dangerous = guard.apply(state, requested_action=4)
+    assert dangerous.overridden
+    assert dangerous.applied_action == 3
+    assert dangerous.requested_risk == pytest.approx(0.31)
+    assert dangerous.applied_risk == pytest.approx(0.04)
+
+    ordinary = guard.apply(state, requested_action=5)
+    assert not ordinary.overridden
+    assert ordinary.applied_action == 5
 
 
 def test_combat_teacher_moves_toward_a_safe_distant_enemy():

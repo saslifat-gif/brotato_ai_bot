@@ -10,6 +10,8 @@ from v3.bridge_server import BridgeServer
 from v3.combat_policy import (
     CombatDecisionLogger,
     CombatSafetyShield,
+    EnemyContactGuard,
+    SafetyDecision,
     movement_transition_metrics,
 )
 from v3.config import V3Config
@@ -54,6 +56,15 @@ class BrotatoApiEnv(gym.Env):
         self.previous_action = int(MoveAction.IDLE)
         self.last_state = None
         self.safety_shield = CombatSafetyShield(enabled=cfg.safety_shield)
+        self.enemy_contact_guard = EnemyContactGuard(
+            enabled=bool(getattr(self.vectorizer, "enemy_contact_guard", False)),
+            risk_threshold=float(
+                getattr(self.vectorizer, "enemy_contact_guard_threshold", 0.22)
+            ),
+            improvement_margin=float(
+                getattr(self.vectorizer, "enemy_contact_guard_margin", 0.08)
+            ),
+        )
         self.combat_logger = CombatDecisionLogger(cfg.combat_decision_log)
         self.ui_controller = AutoUiController(
             max_shop_buys=cfg.max_shop_buys,
@@ -142,7 +153,24 @@ class BrotatoApiEnv(gym.Env):
         previous_state = self.last_state or {}
         previous_action = self.previous_action
         requested = int(MoveAction(int(action)))
-        decision = self.safety_shield.apply(previous_state, requested)
+        contact_decision = self.enemy_contact_guard.apply(previous_state, requested)
+        shield_decision = self.safety_shield.apply(
+            previous_state, contact_decision.applied_action
+        )
+        if contact_decision.overridden:
+            decision = SafetyDecision(
+                requested,
+                shield_decision.applied_action,
+                contact_decision.requested_risk,
+                contact_decision.applied_risk,
+            )
+        else:
+            decision = SafetyDecision(
+                requested,
+                shield_decision.applied_action,
+                shield_decision.requested_risk,
+                shield_decision.applied_risk,
+            )
         normalized = decision.applied_action
         previous_paths = (self.last_state or {}).get("projectile_paths", {})
         projectile_risks = (
@@ -224,11 +252,21 @@ class BrotatoApiEnv(gym.Env):
             if movement["low_motion"]
             else 0.0
         )
+        contact_override_penalty = (
+            float(getattr(self.vectorizer, "enemy_contact_override_penalty", 0.0))
+            if contact_decision.overridden
+            else 0.0
+        )
         reward = self.reward_engine.step(state)
         reward -= float(getattr(self.vectorizer, "path_risk_reward_scale", 0.0)) * (
             selected_path_risk
         )
-        reward -= idle_penalty + reversal_penalty + low_motion_penalty
+        reward -= (
+            idle_penalty
+            + reversal_penalty
+            + low_motion_penalty
+            + contact_override_penalty
+        )
         terminated = bool(state.get("dead") or state.get("victory"))
         ui_sent = []
         ui_confirmed = []
@@ -278,6 +316,10 @@ class BrotatoApiEnv(gym.Env):
             "requested_action": requested,
             "applied_action": normalized,
             "safety_overridden": decision.overridden,
+            "enemy_contact_overridden": contact_decision.overridden,
+            "enemy_contact_requested_risk": contact_decision.requested_risk,
+            "enemy_contact_applied_risk": contact_decision.applied_risk,
+            "enemy_contact_override_penalty": contact_override_penalty,
             "requested_risk": decision.requested_risk,
             "applied_risk": decision.applied_risk,
             "materials": int(state.get("counters", {}).get("materials", 0)),

@@ -222,6 +222,13 @@ stage stays at the V3 actor's trained 12 Hz; increase it to 20 Hz only after a
 stable V4 checkpoint, so the state distribution does not change during weight
 migration.
 
+V4 also has a narrow enemy-contact guard. It intervenes only when the bridge's
+all-enemy path predictor rates the requested action at least 0.22 and another
+movement direction improves risk by at least 0.08. Each intervention applies a
+small learning penalty to the originally requested PPO action, so the guard is
+a training scaffold rather than a permanent replacement for learned movement.
+TensorBoard reports its frequency and requested/applied risk under `movement/`.
+
 Fine-tune that human base online without discarding its behavior:
 
 ```bat

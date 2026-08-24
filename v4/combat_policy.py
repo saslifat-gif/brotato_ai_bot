@@ -73,6 +73,10 @@ class HierarchicalCombatVectorizer:
     idle_reward_scale = 0.02
     reversal_reward_scale = 0.004
     low_motion_reward_scale = 0.006
+    enemy_contact_guard = True
+    enemy_contact_guard_threshold = 0.22
+    enemy_contact_guard_margin = 0.08
+    enemy_contact_override_penalty = 0.02
 
     def __init__(self):
         self.base = BulletHellCombatVectorizer()
