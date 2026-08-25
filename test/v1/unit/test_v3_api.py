@@ -814,6 +814,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '"width": static_data["width"]' in bridge
     assert '"attack_method": attack_method' in bridge
     assert "func _infer_attack_method(token: String) -> String:" in bridge
+    assert '"runtime_id": str(entity.get_instance_id())' in bridge
+    assert '"owner_runtime_id"' in bridge
+    assert '"attack_method_source"' in bridge
     assert '"healing": static_data["healing"]' in bridge
     assert 'elif message_type == "training_pause":' in bridge
     assert '"training_pause_v1"' in bridge
@@ -1505,7 +1508,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.15.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.16.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

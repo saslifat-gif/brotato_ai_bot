@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.15"
+const MOD_VERSION := "0.3.16"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -1174,6 +1174,7 @@ func _entity_state(entity) -> Dictionary:
 	var attack_method := _infer_attack_method(attack_token)
 	return {
 		"id": static_data["id"],
+		"runtime_id": str(entity.get_instance_id()),
 		"type": static_data["type"],
 		"position": _vector_json(_property(entity, "position", Vector2.ZERO)),
 		"velocity": _vector_json(_property(entity, "linear_velocity", Vector2.ZERO)),
@@ -1203,7 +1204,8 @@ func _entity_state(entity) -> Dictionary:
 		"attack_cooldown_remaining": max(0.0, cooldown_remaining),
 		"attack_type": attack_token,
 		"attack_method": attack_method,
-		"attack_method_confidence": 1.0 if attack_method != "unknown" else 0.0,
+		"attack_method_confidence": 0.5 if attack_method != "unknown" else 0.0,
+		"attack_method_source": "script_token_heuristic" if attack_method != "unknown" else "unknown",
 		"movement_type": _script_token(movement_behavior)
 	}
 
@@ -1315,8 +1317,16 @@ func _append_projectile(
 	var direction = _first_property(projectile, ["direction", "_direction"], Vector2.ZERO)
 	if velocity.length_squared() < 0.01 and typeof(direction) == TYPE_VECTOR2:
 		velocity = direction * float(_first_property(projectile, ["speed", "current_speed"], 0.0))
+	var source = _first_property(
+		projectile,
+		["source", "owner_unit", "shooter", "attacker"],
+		null
+	)
 	output.append({
 		"id": static_data["id"],
+		"runtime_id": str(projectile.get_instance_id()),
+		"owner_id": _semantic_id(source, null) if source != null else "",
+		"owner_runtime_id": str(source.get_instance_id()) if typeof(source) == TYPE_OBJECT and is_instance_valid(source) else "",
 		"position": _vector_json(_first_property(
 			projectile, ["global_position", "position"], Vector2.ZERO
 		)),
@@ -1827,10 +1837,16 @@ func _append_projectile_attack_indicator(projectile, output: Array) -> void:
 		0.0
 	))
 	var identity := str(static_data.get("id", "projectile"))
+	var source = _first_property(
+		projectile,
+		["source", "owner_unit", "shooter", "attacker"],
+		null
+	)
 	output.append({
 		"id": identity + ":incoming_projectile",
 		"type": "incoming_projectile " + str(static_data.get("attack_type", "")),
-		"owner_id": "",
+		"owner_id": _semantic_id(source, null) if source != null else "",
+		"owner_runtime_id": str(source.get_instance_id()) if typeof(source) == TYPE_OBJECT and is_instance_valid(source) else "",
 		"position": _vector_json(_first_property(
 			projectile, ["global_position", "position"], Vector2.ZERO
 		)),
@@ -1880,6 +1896,7 @@ func _append_attack_indicator(node, output: Array) -> void:
 		"id": _semantic_id(node, null),
 		"type": token,
 		"owner_id": _semantic_id(owner_node, null) if owner_node != null else "",
+		"owner_runtime_id": str(owner_node.get_instance_id()) if typeof(owner_node) == TYPE_OBJECT and is_instance_valid(owner_node) else "",
 		"position": _vector_json(_first_property(
 			node,
 			["global_position", "position"],
