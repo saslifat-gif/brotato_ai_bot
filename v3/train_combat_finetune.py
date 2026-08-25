@@ -250,6 +250,17 @@ class CombatTensorboardCallback(BaseCallback):
                 "movement/low_motion_penalty",
                 float(info.get("movement_low_motion_penalty", 0.0)),
             )
+            self.logger.record_mean(
+                "reward/total",
+                float(info.get("reward_total", 0.0)),
+            )
+            reward_components = info.get("reward_components", {})
+            if isinstance(reward_components, dict):
+                for name, value in reward_components.items():
+                    self.logger.record_mean(
+                        f"reward/{name}",
+                        float(value),
+                    )
             for action in range(9):
                 self.logger.record_mean(
                     f"actions/applied_{action}", float(applied == action)

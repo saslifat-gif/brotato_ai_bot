@@ -684,6 +684,25 @@ def test_exact_state_reward_penalizes_damage_and_rewards_progress():
     assert late_death < early_death
 
 
+def test_reward_components_make_outcomes_dominate_shaping():
+    engine = ApiRewardEngine()
+    engine.reset(_state(wave=17))
+    death = engine.step(dict(_state(wave=17), dead=True))
+    assert death <= -160.0
+    assert engine.last_components["death"] < -160.0
+
+    engine.reset(_state(wave=19))
+    victory = engine.step(dict(_state(wave=19), victory=True, phase="victory"))
+    assert victory >= 300.0
+    assert engine.last_components["victory"] == pytest.approx(300.0)
+
+    engine.reset(_state())
+    shaping = engine.step(_state(materials=5, kills=4))
+    assert engine.last_components["kills"] == pytest.approx(0.4)
+    assert engine.last_components["materials"] == pytest.approx(0.075)
+    assert shaping < 1.0
+
+
 def test_mod_manifest_and_extension_are_packaged():
     mod = ROOT / "v3" / "mod" / MOD_DIR_NAME
     manifest = json.loads((mod / "manifest.json").read_text(encoding="utf-8"))

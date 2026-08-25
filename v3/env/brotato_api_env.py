@@ -264,15 +264,26 @@ class BrotatoApiEnv(gym.Env):
             else 0.0
         )
         reward = self.reward_engine.step(state)
-        reward -= float(getattr(self.vectorizer, "path_risk_reward_scale", 0.0)) * (
-            selected_path_risk
-        )
+        reward_components = dict(self.reward_engine.last_components)
+        path_risk_penalty = float(
+            getattr(self.vectorizer, "path_risk_reward_scale", 0.0)
+        ) * selected_path_risk
+        boundary_risk_penalty = float(
+            getattr(self.vectorizer, "boundary_risk_reward_scale", 0.0)
+        ) * selected_boundary_risk
+        reward -= path_risk_penalty + boundary_risk_penalty
+        reward_components["path_risk"] = -path_risk_penalty
+        reward_components["boundary_risk"] = -boundary_risk_penalty
         reward -= (
             idle_penalty
             + reversal_penalty
             + low_motion_penalty
             + contact_override_penalty
         )
+        reward_components["idle"] = -idle_penalty
+        reward_components["reversal"] = -reversal_penalty
+        reward_components["low_motion"] = -low_motion_penalty
+        reward_components["contact_override"] = -contact_override_penalty
         terminated = bool(state.get("dead") or state.get("victory"))
         ui_sent = []
         ui_confirmed = []
@@ -286,6 +297,8 @@ class BrotatoApiEnv(gym.Env):
             self.sequence = result.sequence
             for menu_state in result.states:
                 reward += self.reward_engine.step(menu_state)
+                for key, value in self.reward_engine.last_components.items():
+                    reward_components[key] = reward_components.get(key, 0.0) + float(value)
             state = result.state
             ui_sent = result.sent_roles
             ui_confirmed = result.confirmed_roles
@@ -363,6 +376,8 @@ class BrotatoApiEnv(gym.Env):
             "movement_idle_penalty": idle_penalty,
             "movement_reversal_penalty": reversal_penalty,
             "movement_low_motion_penalty": low_motion_penalty,
+            "reward_total": float(reward),
+            "reward_components": reward_components,
         }
         return observation, reward, terminated, truncated, info
 

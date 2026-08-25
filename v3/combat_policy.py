@@ -738,7 +738,10 @@ class BulletHellCombatVectorizer:
     """
 
     observation_size = BULLET_HELL_OBSERVATION_SIZE
-    path_risk_reward_scale = 0.05
+    # Risk shaping must be large enough to compete with kill shaping, while
+    # remaining smaller than a wave-clear or terminal outcome.
+    path_risk_reward_scale = 0.10
+    boundary_risk_reward_scale = 0.08
     idle_reward_scale = 0.01
     reversal_reward_scale = 0.004
     low_motion_reward_scale = 0.006
