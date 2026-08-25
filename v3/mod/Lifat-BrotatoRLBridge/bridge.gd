@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.12"
+const MOD_VERSION := "0.3.13"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -1694,10 +1694,9 @@ func _collect_attack_indicators_recursive(node, output: Array) -> void:
 		return
 	_indicator_scan_nodes += 1
 	var token := _script_token(node)
-	# Avoid walking the entire menu tree, but inspect controls explicitly named
-	# as warnings or telegraphs.
-	if node is Control and not _looks_like_attack_indicator(token):
-		return
+	# Walk through generic Control containers as well.  Brotato's boss
+	# telegraphs are often Sprite2D/Polygon2D descendants of a plain Control
+	# node, so pruning unnamed controls hides the red-circle warning entirely.
 	if node is CanvasItem and not node.is_visible_in_tree():
 		return
 	if _looks_like_attack_indicator(token):
