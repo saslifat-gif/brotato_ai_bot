@@ -184,11 +184,18 @@ class SafetyDecision:
 
 
 class CombatSafetyShield:
-    """Override only actions with an imminent geometric collision."""
+    """Override actions that are unsafe geometrically or on API path maps."""
 
-    def __init__(self, *, enabled: bool = True, override_margin: float = 0.25):
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        override_margin: float = 0.08,
+        hard_risk_threshold: float = 0.65,
+    ):
         self.enabled = bool(enabled)
         self.override_margin = float(override_margin)
+        self.hard_risk_threshold = float(hard_risk_threshold)
 
     def risk(self, state: Mapping[str, Any], action: int) -> float:
         player = _mapping(state.get("player"))
@@ -234,6 +241,19 @@ class CombatSafetyShield:
             if miss_distance < danger:
                 urgency = 1.0 if stationary else 1.0 - min(1.0, tti / 0.8)
                 risk += ((danger - miss_distance) / danger) ** 2 * (3.0 + 5.0 * urgency)
+
+        # The bridge already predicts enemy, projectile, and boundary paths for
+        # every action.  The old shield ignored those vectors, so it could
+        # approve an action that the API had explicitly marked dangerous.
+        paths = _mapping(state.get("projectile_paths"))
+        for key, scale in (
+            ("action_risk", 1.5),
+            ("enemy_action_risk", 1.5),
+            ("boundary_action_risk", 1.25),
+        ):
+            values = paths.get(key, [])
+            if isinstance(values, (list, tuple)) and int(action) < len(values):
+                risk += max(0.0, min(1.0, _number(values[int(action)]))) * scale
         return float(risk)
 
     def apply(self, state: Mapping[str, Any], requested_action: int) -> SafetyDecision:
@@ -241,11 +261,14 @@ class CombatSafetyShield:
         if not self.enabled:
             return SafetyDecision(requested, requested, 0.0, 0.0)
         requested_risk = self.risk(state, requested)
-        if requested_risk < 0.35:
+        if requested_risk < 0.30:
             return SafetyDecision(requested, requested, requested_risk, requested_risk)
         scored = [(self.risk(state, int(action)), int(action)) for action in MoveAction]
         best_risk, best_action = min(scored, key=lambda row: (row[0], row[1] == 0))
-        if requested_risk - best_risk < self.override_margin:
+        if (
+            requested_risk < self.hard_risk_threshold
+            and requested_risk - best_risk < self.override_margin
+        ):
             best_action, best_risk = requested, requested_risk
         return SafetyDecision(requested, best_action, requested_risk, best_risk)
 
@@ -292,15 +315,15 @@ class EnemyContactGuard:
 
 
 class CrowdRecoveryGuard:
-    """Hold a short center escape when late-wave crowds trap the player."""
+    """Force a short low-risk escape before a crowd becomes lethal."""
 
     def __init__(
         self,
         *,
         enabled: bool = True,
-        wave_threshold: int = 18,
-        enemy_threshold: int = 28,
-        boundary_threshold: float = 0.65,
+        wave_threshold: int = 14,
+        enemy_threshold: int = 18,
+        boundary_threshold: float = 0.45,
         hold_steps: int = 8,
     ):
         self.enabled = bool(enabled)
@@ -340,6 +363,32 @@ class CrowdRecoveryGuard:
             return int(MoveAction.RIGHT)
         return int(MoveAction.UP if vertical < 0 else MoveAction.DOWN)
 
+    @staticmethod
+    def _safest_escape_action(state: Mapping[str, Any]) -> int:
+        """Choose an inward, moving action without walking through a hazard."""
+
+        center_action = CrowdRecoveryGuard._center_action(state)
+        shield = CombatSafetyShield(enabled=True, override_margin=0.0)
+        player = _mapping(state.get("player"))
+        arena = _mapping(state.get("arena"))
+        px, py = _xy(player.get("position"))
+        width = max(1.0, _number(arena.get("width"), 1920.0))
+        height = max(1.0, _number(arena.get("height"), 1080.0))
+        dx = width * 0.5 - px
+        dy = height * 0.5 - py
+        center_length = max(1.0, math.hypot(dx, dy))
+        center_vector = (dx / center_length, dy / center_length)
+        scored = []
+        for action, movement in ACTION_VECTORS.items():
+            if action == int(MoveAction.IDLE):
+                continue
+            risk = shield.risk(state, action)
+            toward_center = movement[0] * center_vector[0] + movement[1] * center_vector[1]
+            # Prefer the center direction only when it is comparably safe.
+            center_bias = 0.08 if action == center_action else 0.0
+            scored.append((risk - 0.12 * toward_center - center_bias, action))
+        return min(scored, key=lambda row: (row[0], row[1]))[1]
+
     def apply(self, state: Mapping[str, Any], requested_action: int) -> SafetyDecision:
         requested = int(MoveAction(int(requested_action)))
         if not self.enabled:
@@ -353,21 +402,30 @@ class CrowdRecoveryGuard:
             if isinstance(boundary, (list, tuple))
             else 0.0
         )
+        # The previous three-way AND missed the actual failure mode: waves
+        # 14-17 often have either a dense crowd or an edge trap, but not both.
+        # Also protect against an extreme edge risk at any wave.
         trigger = (
-            wave >= self.wave_threshold
-            and enemy_count >= self.enemy_threshold
-            and boundary_max >= self.boundary_threshold
+            boundary_max >= 0.80
+            or (
+                wave >= self.wave_threshold
+                and (
+                    enemy_count >= self.enemy_threshold
+                    or boundary_max >= self.boundary_threshold
+                )
+            )
         )
         if self.remaining <= 0 and trigger:
             self.remaining = self.hold_steps
         if self.remaining <= 0:
             return SafetyDecision(requested, requested, boundary_max, boundary_max)
         self.remaining -= 1
+        escape_action = self._safest_escape_action(state)
         return SafetyDecision(
             requested,
-            self._center_action(state),
+            escape_action,
             boundary_max,
-            0.0,
+            boundary_max,
         )
 
 

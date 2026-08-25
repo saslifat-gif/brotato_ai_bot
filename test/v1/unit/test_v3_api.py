@@ -620,6 +620,17 @@ def test_safety_shield_sidesteps_an_incoming_projectile():
     assert decision.applied_risk < decision.requested_risk
 
 
+def test_safety_shield_honors_advertised_boundary_path_risk():
+    state = _state()
+    state["projectile_paths"] = {
+        "boundary_action_risk": [0.0, 0.0, 0.0, 0.0, 0.95, 0.0, 0.0, 0.0, 0.0]
+    }
+    decision = CombatSafetyShield().apply(state, requested_action=4)
+    assert decision.overridden
+    assert decision.applied_action != 4
+    assert decision.applied_risk < decision.requested_risk
+
+
 def test_enemy_contact_guard_vetoes_only_high_confidence_contact_path():
     state = _state()
     state["projectile_paths"] = {
@@ -649,6 +660,17 @@ def test_crowd_recovery_guard_holds_center_escape_in_late_dense_wave():
     assert decision.overridden
     assert decision.applied_action == 4
     assert guard.remaining == 7
+
+
+def test_crowd_recovery_guard_starts_before_wave_18_on_one_hazard():
+    state = _state(wave=14)
+    state["enemies"] = [{"position": {"x": 450.0, "y": 300.0}} for _ in range(20)]
+    state["projectile_paths"] = {
+        "boundary_action_risk": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    }
+    decision = CrowdRecoveryGuard().apply(state, requested_action=0)
+    assert decision.overridden
+    assert decision.applied_action != int(MoveAction.IDLE)
 
 
 def test_combat_teacher_moves_toward_a_safe_distant_enemy():

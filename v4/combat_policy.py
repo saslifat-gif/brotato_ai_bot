@@ -69,7 +69,8 @@ class HierarchicalCombatVectorizer:
     """
 
     observation_size = V4_OBSERVATION_SIZE
-    path_risk_reward_scale = 0.05
+    path_risk_reward_scale = 0.10
+    boundary_risk_reward_scale = 0.08
     idle_reward_scale = 0.02
     reversal_reward_scale = 0.004
     low_motion_reward_scale = 0.006
@@ -152,7 +153,8 @@ class HierarchicalCombatVectorizer:
         paths = _mapping(state.get("projectile_paths"))
         projectile_risk = _risk_vector(paths, "action_risk")
         enemy_risk = _risk_vector(paths, "enemy_action_risk")
-        combined = np.clip(projectile_risk + enemy_risk, 0.0, 1.0)
+        boundary_risk = _risk_vector(paths, "boundary_action_risk")
+        combined = np.clip(projectile_risk + enemy_risk + boundary_risk, 0.0, 1.0)
         threat = _maximum(combined)
         pickups = state.get("pickups", [])
         healing = [

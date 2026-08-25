@@ -238,12 +238,20 @@ def main() -> int:
     parser.add_argument("--ent-coef", type=float, default=0.0002)
     parser.add_argument("--bc-coefficient", type=float, default=0.10)
     parser.add_argument("--bc-batches", type=int, default=2)
+    parser.add_argument(
+        "--no-safety",
+        action="store_true",
+        help="disable the runtime safety shield (diagnostics only)",
+    )
     parser.add_argument("--bootstrap-only", action="store_true")
     args = parser.parse_args()
     if not 8.0 <= args.state_hz <= 24.0:
         parser.error("--state-hz must be between 8 and 24")
 
-    cfg = replace(cfg, safety_shield=False)
+    # Keep the hard safety shield on for live training.  The old trainer
+    # disabled it unconditionally, allowing the policy to walk into API-rated
+    # enemy and boundary paths.  --no-safety remains available for diagnostics.
+    cfg = replace(cfg, safety_shield=not args.no_safety)
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     records = load_semantic_records(args.dataset)
     if len(records) < 1_000:
