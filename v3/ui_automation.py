@@ -292,10 +292,14 @@ class AutoUiController:
             restart_stage_changed = (
                 pending_phase_change is not None
                 and pending_phase_change[1] == "restart"
-                and any(
-                    str(action.get("id", "")) != pending_phase_change[3]
-                    for action in available_actions(state, "restart")
-                )
+                # Retry dialogs advertise both Yes and No at the same time.
+                # Treating "any different button" as a new stage clicked No
+                # immediately after Yes, cancelling a valid restart.  A stage
+                # change is only unambiguous when exactly one new restart
+                # action remains.
+                and len(available_actions(state, "restart")) == 1
+                and str(available_actions(state, "restart")[0].get("id", ""))
+                != pending_phase_change[3]
             )
             repeatable_choice = (
                 pending_phase_change is not None

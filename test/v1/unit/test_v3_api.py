@@ -1266,6 +1266,48 @@ def test_ui_automation_waits_for_slow_retry_scene_change():
     assert result.confirmed_roles == ["restart", "restart"]
 
 
+def test_ui_automation_does_not_cancel_two_button_retry_dialog():
+    confirm_path = "/root/Main/UI/RetryWave/Menu/Retry_WaveContainer/ConfirmButton"
+    cancel_path = "/root/Main/UI/RetryWave/Menu/Retry_WaveContainer/CancelButton"
+    game_over = dict(_state(wave=14), phase="game_over", tick=10)
+    game_over["dead"] = True
+    game_over["ui"] = {
+        "actions": [
+            {"id": confirm_path, "role": "restart", "enabled": True},
+            {"id": cancel_path, "role": "restart", "enabled": True},
+        ],
+        "last_result": {},
+    }
+    after_confirm = dict(game_over, tick=11)
+    after_confirm["ui"] = {
+        "actions": game_over["ui"]["actions"],
+        "last_result": {"sequence": 1, "ok": True, "changed": False},
+    }
+    combat = dict(_state(wave=14), tick=12)
+
+    class FakeServer:
+        def __init__(self):
+            self.states = iter([after_confirm, combat])
+            self.sent = []
+
+        def send(self, message, timeout_sec):
+            self.sent.append(message)
+
+        def wait_for_state(self, **_kwargs):
+            return next(self.states)
+
+    server = FakeServer()
+    result = AutoUiController().advance(
+        server,
+        game_over,
+        sequence=0,
+        timeout_sec=5,
+        allow_restart=True,
+    )
+    assert [message["target"] for message in server.sent] == [confirm_path]
+    assert result.state["phase"] == "combat"
+
+
 def test_ui_automation_advances_wave_end_shop_and_next_wave():
     wave_end = dict(_state(wave=3), phase="wave_end", tick=10)
     shop = dict(_state(wave=3, materials=20), phase="shop", tick=11)
