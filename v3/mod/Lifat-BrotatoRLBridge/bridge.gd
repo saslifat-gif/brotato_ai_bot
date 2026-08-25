@@ -451,7 +451,7 @@ func _build_state() -> Dictionary:
 		# late-wave frame drops that motivated the adaptive state interval.
 		if _tick - _last_indicator_scan_tick >= 6:
 			_last_indicator_scan_tick = _tick
-			_last_attack_indicators = _collect_attack_indicators(main)
+			_last_attack_indicators = _collect_attack_indicators(main, projectile_nodes)
 		attack_indicators = _last_attack_indicators.duplicate(true)
 	else:
 		_last_attack_indicators = []
@@ -1661,14 +1661,29 @@ func _projectile_static_data(projectile) -> Dictionary:
 	return result
 
 
-func _collect_attack_indicators(main) -> Array:
+func _collect_attack_indicators(main, projectile_nodes: Array = []) -> Array:
 	var output := []
 	_indicator_scan_nodes = 0
 	_indicator_scan_seen = {}
-	for group_name in ["attack_indicators", "warning_areas", "danger_zones", "telegraphs"]:
+	for group_name in [
+		"attack_indicators",
+		"attack_warnings",
+		"warning_areas",
+		"danger_zones",
+		"telegraphs",
+		"target_indicators"
+	]:
 		for node in get_tree().get_nodes_in_group(group_name):
 			_append_attack_indicator(node, output)
 	_collect_attack_indicators_recursive(main, output)
+	# Some Brotato builds render the red telegraphs as hostile projectile nodes
+	# rather than a separate warning-area node. Mirror those nodes into the
+	# indicator channel so the policy receives the same warning geometry a human
+	# sees instead of an always-empty feature block.
+	for projectile in projectile_nodes:
+		if output.size() >= MAX_ATTACK_INDICATORS:
+			break
+		_append_projectile_attack_indicator(projectile, output)
 	return output
 
 
@@ -1678,11 +1693,13 @@ func _collect_attack_indicators_recursive(node, output: Array) -> void:
 	if _indicator_scan_nodes >= MAX_INDICATOR_SCAN_NODES:
 		return
 	_indicator_scan_nodes += 1
-	if node is Control:
+	var token := _script_token(node)
+	# Avoid walking the entire menu tree, but inspect controls explicitly named
+	# as warnings or telegraphs.
+	if node is Control and not _looks_like_attack_indicator(token):
 		return
 	if node is CanvasItem and not node.is_visible_in_tree():
 		return
-	var token := _script_token(node)
 	if _looks_like_attack_indicator(token):
 		_append_attack_indicator(node, output)
 	for child in node.get_children():
@@ -1695,8 +1712,12 @@ func _looks_like_attack_indicator(token: String) -> bool:
 	for term in [
 		"attack_indicator",
 		"attackindicator",
+		"attack_warning",
+		"attackwarning",
 		"warning_area",
 		"warningarea",
+		"hit_warning",
+		"hitwarning",
 		"danger_zone",
 		"dangerzone",
 		"telegraph",
@@ -1705,11 +1726,66 @@ func _looks_like_attack_indicator(token: String) -> bool:
 		"aim_line",
 		"aimline",
 		"laser_warning",
-		"aoe_warning"
+		"aoe_warning",
+		"area_warning",
+		"spell_warning",
+		"projectile_warning"
 	]:
 		if token.find(term) >= 0:
 			return true
 	return false
+
+
+func _append_projectile_attack_indicator(projectile, output: Array) -> void:
+	if projectile == null or output.size() >= MAX_ATTACK_INDICATORS:
+		return
+	if typeof(projectile) == TYPE_OBJECT and not is_instance_valid(projectile):
+		return
+	if not _is_hostile_projectile(projectile):
+		return
+	var static_data := _projectile_static_data(projectile)
+	var shape_data := _collision_shape_data(projectile)
+	var velocity = _first_property(
+		projectile,
+		["linear_velocity", "velocity", "current_velocity"],
+		Vector2.ZERO
+	)
+	if typeof(velocity) != TYPE_VECTOR2:
+		velocity = Vector2.ZERO
+	var direction = _first_property(projectile, ["direction", "_direction"], Vector2.ZERO)
+	if velocity.length_squared() > 0.01:
+		direction = velocity.normalized()
+	elif typeof(direction) != TYPE_VECTOR2:
+		direction = Vector2.ZERO
+	var lifetime := float(_first_property(
+		projectile,
+		["time_to_live", "lifetime_remaining", "duration_remaining"],
+		0.0
+	))
+	var identity := str(static_data.get("id", "projectile"))
+	output.append({
+		"id": identity + ":incoming_projectile",
+		"type": "incoming_projectile " + str(static_data.get("attack_type", "")),
+		"owner_id": "",
+		"position": _vector_json(_first_property(
+			projectile, ["global_position", "position"], Vector2.ZERO
+		)),
+		"direction": _vector_json(direction),
+		"rotation": float(_property(
+			projectile,
+			"global_rotation",
+			_property(projectile, "rotation", 0.0)
+		)),
+		"radius": shape_data["radius"],
+		"width": shape_data["width"],
+		"height": shape_data["height"],
+		"shape": shape_data["shape"],
+		"time_to_activate": 0.0,
+		"duration": max(0.0, lifetime),
+		"damage": float(static_data.get("damage", 0.0)),
+		"active": true,
+		"source": "projectile"
+	})
 
 
 func _append_attack_indicator(node, output: Array) -> void:

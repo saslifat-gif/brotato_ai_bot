@@ -20,8 +20,10 @@ Game to trainer:
   Pickup entries advertise stable identity, collision size, and a `category` of `healing`,
   `crate`, `material`, or `consumable`, plus healing/material values where the game exposes
   them. `attack_indicators` contains visible API-discovered warning geometry, direction,
-  activation time and damage. Projectile entries include ID, collision geometry, damage,
-  lifetime and attack type. Bridge 0.2.1+ also emits
+  activation time and damage. When red telegraphs are represented as hostile
+  projectile nodes, they are mirrored into this channel with
+  `source: "projectile"`. Projectile entries include ID, collision geometry,
+  damage, lifetime and attack type. Bridge 0.2.1+ also emits
   `human_action`, the nine-way action returned by Brotato's vanilla movement behavior, plus
   `human_input_age_ms`. Observation-only recorders can capture keyboard demonstrations without
   sending combat actions. `sequence` acknowledges the most recent

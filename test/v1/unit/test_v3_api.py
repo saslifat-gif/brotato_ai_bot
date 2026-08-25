@@ -780,6 +780,10 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "const MAX_PROJECTILES := 64" in bridge
     assert "const MAX_PICKUPS := 32" in bridge
     assert "func _state_interval_sec() -> float:" in bridge
+    assert "func _append_projectile_attack_indicator(projectile, output: Array)" in bridge
+    assert "_collect_attack_indicators(main, projectile_nodes)" in bridge
+    assert '"source": "projectile"' in bridge
+    assert '"attack_warning"' in bridge
     assert '"semantic_entities_v2"' in bridge
     assert '"pickup_semantics"' in bridge
     assert '"weapon_readiness"' in bridge
