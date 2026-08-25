@@ -230,6 +230,26 @@ class CombatSafetyShield:
                     5.0 if enemy.get("is_charging") else 2.0
                 )
 
+        enemies = _items(state.get("enemies"))
+        boss_present = any(
+            bool(enemy.get("is_boss"))
+            or any(term in f"{enemy.get('id', '')} {enemy.get('type', '')} {enemy.get('name', '')}".lower()
+                   for term in ("boss", "summoner", "召唤"))
+            for enemy in enemies
+        )
+        if boss_present:
+            # During boss attacks, remaining in melee range is more dangerous
+            # than the normal crowd estimate suggests.
+            for enemy in enemies:
+                token = f"{enemy.get('id', '')} {enemy.get('type', '')} {enemy.get('name', '')}".lower()
+                if not (enemy.get("is_boss") or any(term in token for term in ("boss", "summoner", "召唤"))):
+                    continue
+                ex, ey = _xy(enemy.get("position"))
+                boss_distance = math.hypot(ex - future_x, ey - future_y)
+                if boss_distance < 360.0:
+                    risk += ((360.0 - boss_distance) / 360.0) ** 2 * 7.0
+                break
+
         for projectile in _nearest(_items(state.get("projectiles")), px, py)[:32]:
             tti, miss_distance = projectile_time_to_impact(
                 projectile, (px, py), movement, player_speed
@@ -240,12 +260,13 @@ class CombatSafetyShield:
             danger = radius * (2.3 if stationary else 1.5)
             if miss_distance < danger:
                 urgency = 1.0 if stationary else 1.0 - min(1.0, tti / 0.8)
-                risk += ((danger - miss_distance) / danger) ** 2 * (3.0 + 5.0 * urgency)
+                risk += ((danger - miss_distance) / danger) ** 2 * (
+                    (6.0 + 8.0 * urgency) if boss_present else (3.0 + 5.0 * urgency)
+                )
 
         # Boss telegraphs are stationary warning zones rather than moving
         # projectiles.  Treat an imminent AOE indicator as a hard hazard so a
         # melee policy cannot keep farming loot inside overlapping red circles.
-        boss_present = any(bool(enemy.get("is_boss")) for enemy in _items(state.get("enemies")))
         for indicator in _nearest(_items(state.get("attack_indicators")), px, py)[:32]:
             token = f"{indicator.get('id', '')} {indicator.get('type', '')}".lower()
             if not boss_present and not any(term in token for term in ("aoe", "warning", "circle", "boss")):
