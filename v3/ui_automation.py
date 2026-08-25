@@ -292,6 +292,10 @@ class AutoUiController:
             restart_stage_changed = (
                 pending_phase_change is not None
                 and pending_phase_change[1] == "restart"
+                # In the vanilla RetryWave dialog, pressing Yes temporarily
+                # leaves only No visible while the scene is restarting.  It
+                # is not a new menu stage and must never be clicked.
+                and "confirmbutton" not in pending_phase_change[3].lower()
                 # Retry dialogs advertise both Yes and No at the same time.
                 # Treating "any different button" as a new stage clicked No
                 # immediately after Yes, cancelling a valid restart.  A stage
