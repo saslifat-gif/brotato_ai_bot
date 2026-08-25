@@ -85,6 +85,7 @@ class AutoUiController:
         self._shop_wave = None
         self._shop_buys = 0
         self._shop_rerolls = 0
+        self._shop_merges = 0
         self._shop_buy_limit = self.max_shop_buys
         self._shop_reroll_limit = self.max_shop_rerolls
         self._shop_reserve = 0
@@ -140,6 +141,7 @@ class AutoUiController:
         self._shop_wave = None
         self._shop_buys = 0
         self._shop_rerolls = 0
+        self._shop_merges = 0
         self._shop_buy_limit = self.max_shop_buys
         self._shop_reroll_limit = self.max_shop_rerolls
         self._shop_reserve = 0
@@ -199,6 +201,11 @@ class AutoUiController:
         if phase == "shop":
             self._enter_shop(state)
             materials = int(state.get("counters", {}).get("materials", 0))
+            # Handle a visible manual combine once per shop without changing
+            # the learned model's feature dimensions.
+            merges = available_actions(state, "merge")
+            if merges and self._shop_merges < 1:
+                return merges[0]
             if self._shop_buys < self._shop_buy_limit:
                 buy_candidates = []
                 for action in available_actions(state, "buy"):
@@ -254,6 +261,8 @@ class AutoUiController:
         elif role == "reroll":
             self._shop_rerolls += 1
             self._attempted.clear()
+        elif role == "merge":
+            self._shop_merges += 1
 
     def advance(
         self,
@@ -291,7 +300,7 @@ class AutoUiController:
             repeatable_choice = (
                 pending_phase_change is not None
                 and pending_phase_change[1]
-                in {"upgrade_choice", "take_item", "recycle_item", "reroll"}
+                in {"upgrade_choice", "take_item", "recycle_item", "reroll", "merge"}
             )
             choice_fallback_ready = (
                 repeatable_choice

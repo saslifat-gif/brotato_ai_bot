@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.11"
+const MOD_VERSION := "0.3.12"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -629,6 +629,14 @@ func _ui_role(node, phase: String, text: String) -> String:
 			return "take_item"
 	if token.find("reroll") >= 0 or token.find("刷新") >= 0:
 		return "reroll"
+	if (
+		token.find("merge") >= 0
+		or token.find("combine") >= 0
+		or token.find("fuse") >= 0
+		or token.find("合并") >= 0
+		or token.find("融合") >= 0
+	):
+		return "merge"
 	if token.find("next_wave") >= 0 or token.find("next wave") >= 0 or token.find("下一波") >= 0:
 		return "next_wave"
 	if phase == "shop" and str(node.name).to_lower() == "gobutton":

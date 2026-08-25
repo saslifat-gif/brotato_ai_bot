@@ -832,6 +832,21 @@ def test_ui_automation_only_uses_enabled_exact_targets():
     assert AutoUiController().choose(state)["id"] == "/root/Choice"
 
 
+def test_ui_automation_prioritizes_one_manual_merge_per_shop():
+    state = dict(_state(wave=12, materials=100), phase="shop")
+    state["ui"] = {"actions": [
+        {"id": "/root/Shop/MergeButton", "role": "merge", "enabled": True},
+        {"id": "/root/Shop/Stick/BuyButton", "role": "buy", "enabled": True,
+         "choice": {"id": "weapon_stick_1", "base_id": "weapon_stick",
+                     "category": "weapon", "price": 20, "affordable": True}},
+    ]}
+    controller = AutoUiController()
+    action = controller.choose(state)
+    assert action["role"] == "merge"
+    controller.mark_sent(state, action)
+    assert controller.choose(state)["role"] == "buy"
+
+
 def test_ui_automation_takes_found_item_before_recycle():
     state = dict(_state(wave=7), phase="item_found")
     state["ui"] = {
@@ -863,6 +878,15 @@ def test_bridge_detects_found_item_take_and_recycle_buttons():
     assert 'return "recycle_item"' in bridge
     assert 'button_text.find("拿取")' in bridge
     assert 'button_text.find("回收")' in bridge
+
+
+def test_bridge_detects_manual_merge_buttons():
+    bridge = (ROOT / "v3" / "mod" / MOD_DIR_NAME / "bridge.gd").read_text(
+        encoding="utf-8"
+    )
+    assert 'token.find("merge")' in bridge
+    assert 'token.find("combine")' in bridge
+    assert 'return "merge"' in bridge
 
 
 def test_bridge_advertises_language_independent_build_choices():
@@ -1366,7 +1390,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.11.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.12.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())
