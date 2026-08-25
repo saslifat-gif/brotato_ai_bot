@@ -242,6 +242,31 @@ class CombatSafetyShield:
                 urgency = 1.0 if stationary else 1.0 - min(1.0, tti / 0.8)
                 risk += ((danger - miss_distance) / danger) ** 2 * (3.0 + 5.0 * urgency)
 
+        # Boss telegraphs are stationary warning zones rather than moving
+        # projectiles.  Treat an imminent AOE indicator as a hard hazard so a
+        # melee policy cannot keep farming loot inside overlapping red circles.
+        boss_present = any(bool(enemy.get("is_boss")) for enemy in _items(state.get("enemies")))
+        for indicator in _nearest(_items(state.get("attack_indicators")), px, py)[:32]:
+            token = f"{indicator.get('id', '')} {indicator.get('type', '')}".lower()
+            if not boss_present and not any(term in token for term in ("aoe", "warning", "circle", "boss")):
+                continue
+            ix, iy = _xy(indicator.get("position"))
+            half_width = max(35.0, _number(indicator.get("width"), 80.0) * 0.5) + 45.0
+            half_height = max(35.0, _number(indicator.get("height"), 80.0) * 0.5) + 45.0
+            dx = abs(future_x - ix)
+            dy = abs(future_y - iy)
+            inside = dx <= half_width and dy <= half_height
+            time_to_activate = max(0.0, _number(indicator.get("time_to_activate"), 5.0))
+            imminent = bool(indicator.get("active")) or time_to_activate <= 1.25
+            if inside:
+                risk += 14.0 if imminent else 7.0
+            else:
+                gap_x = max(0.0, dx - half_width)
+                gap_y = max(0.0, dy - half_height)
+                distance = math.hypot(gap_x, gap_y)
+                if distance < 180.0:
+                    risk += (1.0 - distance / 180.0) ** 2 * (5.0 if imminent else 2.0)
+
         # The bridge already predicts enemy, projectile, and boundary paths for
         # every action.  The old shield ignored those vectors, so it could
         # approve an action that the API had explicitly marked dangerous.
