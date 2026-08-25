@@ -151,6 +151,7 @@ class CombatTensorboardCallback(BaseCallback):
         self.best_wave = 0
         self.deaths_by_wave: dict[int, int] = {}
         self.total_deaths = 0
+        self.episode_id = 1
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -161,6 +162,7 @@ class CombatTensorboardCallback(BaseCallback):
             self.best_wave = max(self.best_wave, wave)
             self.logger.record_mean("combat/current_wave", wave)
             self.logger.record("combat/best_wave", self.best_wave)
+            self.logger.record("combat/episode_id", self.episode_id)
             self.logger.record_mean(
                 "combat/safety_override_rate", float(bool(info.get("safety_overridden")))
             )
@@ -279,6 +281,8 @@ class CombatTensorboardCallback(BaseCallback):
                 # death.  Count it once here, rather than once per dead-state
                 # observation, and retain separate curves for each wave.
                 if str(info.get("phase", "")) == "game_over" or death_reward < 0.0:
+                    self.logger.record("combat/episode_death", 1.0)
+                    self.logger.record("combat/episode_death_wave", max(0, wave))
                     self.deaths_by_wave[wave] = self.deaths_by_wave.get(wave, 0) + 1
                     self.total_deaths += 1
                     self.logger.record(
@@ -286,6 +290,9 @@ class CombatTensorboardCallback(BaseCallback):
                         self.deaths_by_wave[wave],
                     )
                     self.logger.record("combat/death_count_total", self.total_deaths)
+                else:
+                    self.logger.record("combat/episode_death", 0.0)
+                self.episode_id += 1
         return True
 
 
