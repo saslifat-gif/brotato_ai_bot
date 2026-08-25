@@ -20,8 +20,17 @@ def remove_stale_packages(directory: Path, keep_name: str) -> list[Path]:
         return removed
     for candidate in directory.glob(f"{MOD_DIR_NAME}-*.zip"):
         if candidate.name != keep_name:
-            candidate.unlink()
-            removed.append(candidate)
+            try:
+                candidate.unlink()
+            except PermissionError:
+                # Brotato/Steam may keep the currently loaded Workshop ZIP
+                # open while the game is running.  The new version has a
+                # distinct filename, so leaving the locked archive in place
+                # is safe and lets installation proceed without closing the
+                # game first.
+                print(f"[v3-install] stale package locked; keeping {candidate}")
+            else:
+                removed.append(candidate)
     return removed
 
 
