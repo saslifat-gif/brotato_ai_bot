@@ -24,6 +24,7 @@ class V3Config:
     ui_decision_log: Optional[Path]
     safety_shield: bool
     combat_decision_log: Optional[Path]
+    late_wave_focus: bool
 
 
 def load_config() -> V3Config:
@@ -72,4 +73,6 @@ def load_config() -> V3Config:
         safety_shield=os.environ.get("BROTATO_V3_SAFETY_SHIELD", "0").strip().lower()
         in {"1", "true", "yes", "on"},
         combat_decision_log=combat_decision_log,
+        late_wave_focus=os.environ.get("BROTATO_V3_LATE_WAVE_FOCUS", "0").strip().lower()
+        in {"1", "true", "yes", "on"},
     )

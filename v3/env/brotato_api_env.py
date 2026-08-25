@@ -1,6 +1,6 @@
 """Gymnasium environment backed by the local Brotato mod API."""
 
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 import gymnasium as gym
 import numpy as np
@@ -28,6 +28,14 @@ from v3.ui_automation import AutoUiController
 from v3.vectorizer import ApiStateVectorizer
 
 
+def _state_wave(state: Mapping[str, Any]) -> float:
+    wave = state.get("wave", {}) if isinstance(state, Mapping) else {}
+    try:
+        return float(wave.get("number", 0.0)) if isinstance(wave, Mapping) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class BrotatoApiEnv(gym.Env):
     metadata = {"render_modes": []}
 
@@ -45,7 +53,7 @@ class BrotatoApiEnv(gym.Env):
         self.vectorizer = vectorizer or ApiStateVectorizer()
         self.state_hz = float(state_hz) if state_hz is not None else None
         self._configured_session = ""
-        self.reward_engine = ApiRewardEngine()
+        self.reward_engine = ApiRewardEngine(late_wave_focus=cfg.late_wave_focus)
         self.action_space = spaces.Discrete(len(MoveAction))
         self.observation_space = spaces.Box(
             low=-1.0,
@@ -265,12 +273,14 @@ class BrotatoApiEnv(gym.Env):
         )
         reward = self.reward_engine.step(state)
         reward_components = dict(self.reward_engine.last_components)
+        late_focus = bool(self.cfg.late_wave_focus and _state_wave(previous_state) >= 18)
+        threat_scale = 3.0 if late_focus else 1.0
         path_risk_penalty = float(
             getattr(self.vectorizer, "path_risk_reward_scale", 0.0)
-        ) * selected_path_risk
+        ) * selected_path_risk * threat_scale
         boundary_risk_penalty = float(
             getattr(self.vectorizer, "boundary_risk_reward_scale", 0.0)
-        ) * selected_boundary_risk
+        ) * selected_boundary_risk * threat_scale
         reward -= path_risk_penalty + boundary_risk_penalty
         reward_components["path_risk"] = -path_risk_penalty
         reward_components["boundary_risk"] = -boundary_risk_penalty
@@ -369,6 +379,8 @@ class BrotatoApiEnv(gym.Env):
                 else 0.0
             ),
             "selected_path_risk_penalty": selected_path_risk,
+            "late_wave_focus": late_focus,
+            "late_threat_scale": threat_scale,
             "movement_distance": float(movement["distance"]),
             "movement_efficiency": float(movement["efficiency"]),
             "movement_reversal": bool(movement["reversal"]),

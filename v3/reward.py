@@ -37,9 +37,10 @@ class ApiRewardEngine:
     DEATH_PENALTY_SCALE = 4.0
     VICTORY_REWARD = 300.0
 
-    def __init__(self):
+    def __init__(self, *, late_wave_focus: bool = False):
         self.previous: Optional[Mapping[str, Any]] = None
         self.last_components: dict[str, float] = {}
+        self.late_wave_focus = bool(late_wave_focus)
 
     def reset(self, state: Mapping[str, Any]) -> None:
         self.previous = state
@@ -50,6 +51,9 @@ class ApiRewardEngine:
         # Survival is deliberately small but present at every combat sample;
         # terminal outcomes and wave completion remain much larger.
         late_wave_scale = 1.0 + min(20.0, wave_number) * 0.05
+        focused = self.late_wave_focus and wave_number >= 18.0
+        if focused:
+            late_wave_scale *= 2.0
         components = {
             "survival": self.SURVIVAL_REWARD * late_wave_scale
             if state.get("phase") == "combat"
@@ -93,9 +97,11 @@ class ApiRewardEngine:
                 and state.get("phase") == "wave_end"
                 and not state.get("dead")
             ):
-                components["wave_clear"] += self.WAVE_CLEAR_REWARD
+                components["wave_clear"] += self.WAVE_CLEAR_REWARD * (2.0 if focused else 1.0)
         if state.get("dead"):
-            components["death"] -= self.DEATH_PENALTY_BASE + min(20.0, wave_number) * self.DEATH_PENALTY_SCALE
+            components["death"] -= (
+                self.DEATH_PENALTY_BASE + min(20.0, wave_number) * self.DEATH_PENALTY_SCALE
+            ) * (1.5 if focused else 1.0)
         if state.get("victory"):
             components["victory"] += self.VICTORY_REWARD
         self.previous = state

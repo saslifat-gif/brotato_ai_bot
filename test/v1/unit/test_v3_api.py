@@ -725,6 +725,17 @@ def test_reward_components_make_outcomes_dominate_shaping():
     assert shaping < 1.0
 
 
+def test_late_wave_focus_amplifies_survival_and_death_objectives():
+    focused = ApiRewardEngine(late_wave_focus=True)
+    focused.reset(_state(wave=19))
+    focused_death = focused.step(dict(_state(wave=19), dead=True))
+    baseline = ApiRewardEngine()
+    baseline.reset(_state(wave=19))
+    baseline_death = baseline.step(dict(_state(wave=19), dead=True))
+    assert focused_death < baseline_death
+    assert focused.last_components["death"] < baseline.last_components["death"]
+
+
 def test_mod_manifest_and_extension_are_packaged():
     mod = ROOT / "v3" / "mod" / MOD_DIR_NAME
     manifest = json.loads((mod / "manifest.json").read_text(encoding="utf-8"))
