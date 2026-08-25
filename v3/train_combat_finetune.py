@@ -149,6 +149,8 @@ class CombatTensorboardCallback(BaseCallback):
     def __init__(self):
         super().__init__()
         self.best_wave = 0
+        self.deaths_by_wave: dict[int, int] = {}
+        self.total_deaths = 0
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -267,6 +269,23 @@ class CombatTensorboardCallback(BaseCallback):
                 )
             if index < len(dones) and bool(dones[index]):
                 self.logger.record_mean("combat/episode_wave", wave)
+                reward_components = info.get("reward_components", {})
+                death_reward = (
+                    float(reward_components.get("death", 0.0))
+                    if isinstance(reward_components, dict)
+                    else 0.0
+                )
+                # A terminal episode with a death penalty is one actual player
+                # death.  Count it once here, rather than once per dead-state
+                # observation, and retain separate curves for each wave.
+                if str(info.get("phase", "")) == "game_over" or death_reward < 0.0:
+                    self.deaths_by_wave[wave] = self.deaths_by_wave.get(wave, 0) + 1
+                    self.total_deaths += 1
+                    self.logger.record(
+                        f"combat/deaths_wave_{max(0, wave)}",
+                        self.deaths_by_wave[wave],
+                    )
+                    self.logger.record("combat/death_count_total", self.total_deaths)
         return True
 
 
