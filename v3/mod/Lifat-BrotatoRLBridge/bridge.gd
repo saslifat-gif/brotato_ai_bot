@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.13"
+const MOD_VERSION := "0.3.14"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -1091,7 +1091,12 @@ func _player_state(player) -> Dictionary:
 			"position": _vector_json(Vector2.ZERO),
 			"velocity": _vector_json(Vector2.ZERO),
 			"health": 0.0,
-			"max_health": 1.0
+			"max_health": 1.0,
+			"radius": 28.0,
+			"width": 56.0,
+			"height": 56.0,
+			"shape": "unknown",
+			"size_known": false
 		}
 	var current_stats = _property(player, "current_stats", null)
 	var max_stats = _property(player, "max_stats", null)
@@ -1103,6 +1108,7 @@ func _player_state(player) -> Dictionary:
 		max_health = _first_property(current_stats, ["max_health", "health_max"], null)
 	if max_health == null:
 		max_health = _first_property(player, ["max_health", "health_max", "max_hp"], 1.0)
+	var shape_data := _collision_shape_data(player)
 	return {
 		"position": _vector_json(_first_property(
 			player,
@@ -1111,7 +1117,12 @@ func _player_state(player) -> Dictionary:
 		)),
 		"velocity": _vector_json(_property(player, "linear_velocity", Vector2.ZERO)),
 		"health": float(health),
-		"max_health": max(1.0, float(max_health))
+		"max_health": max(1.0, float(max_health)),
+		"radius": shape_data["radius"],
+		"width": shape_data["width"],
+		"height": shape_data["height"],
+		"shape": shape_data["shape"],
+		"size_known": shape_data["known"]
 	}
 
 
