@@ -250,14 +250,19 @@ class CombatSafetyShield:
         if boss_present:
             # During boss attacks, remaining in melee range is more dangerous
             # than the normal crowd estimate suggests.
+            player_radius = max(18.0, _number(player.get("radius"), 28.0))
             for enemy in enemies:
                 token = f"{enemy.get('id', '')} {enemy.get('type', '')} {enemy.get('name', '')}".lower()
                 if not (enemy.get("is_boss") or any(term in token for term in ("boss", "summoner", "召唤"))):
                     continue
                 ex, ey = _xy(enemy.get("position"))
                 boss_distance = math.hypot(ex - future_x, ey - future_y)
-                if boss_distance < 360.0:
-                    risk += ((360.0 - boss_distance) / 360.0) ** 2 * 7.0
+                boss_radius = max(45.0, _number(enemy.get("radius"), 55.0))
+                # Keep a generous buffer around the actual bodies; the visual
+                # sprite and attack body are larger than the center point.
+                separation = max(480.0, boss_radius + player_radius + 300.0)
+                if boss_distance < separation:
+                    risk += ((separation - boss_distance) / separation) ** 2 * 10.0
                 break
 
         for projectile in _nearest(_items(state.get("projectiles")), px, py)[:32]:
