@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
 
@@ -239,6 +240,11 @@ def main() -> int:
     parser.add_argument("--bc-coefficient", type=float, default=0.10)
     parser.add_argument("--bc-batches", type=int, default=2)
     parser.add_argument(
+        "--run-name",
+        default=None,
+        help="TensorBoard run name; defaults to a unique timestamp per launch",
+    )
+    parser.add_argument(
         "--no-safety",
         action="store_true",
         help="disable the runtime safety shield (diagnostics only)",
@@ -247,6 +253,7 @@ def main() -> int:
     args = parser.parse_args()
     if not 8.0 <= args.state_hz <= 24.0:
         parser.error("--state-hz must be between 8 and 24")
+    run_name = args.run_name or f"V4TemporalPPO_{datetime.now():%Y%m%d_%H%M%S}"
 
     # Keep the hard safety shield on for live training.  The old trainer
     # disabled it unconditionally, allowing the policy to walk into API-rated
@@ -328,7 +335,7 @@ def main() -> int:
         model.learn(
             total_timesteps=max(1, int(args.timesteps)),
             callback=callbacks,
-            tb_log_name="V4TemporalPPO",
+            tb_log_name=run_name,
             reset_num_timesteps=not bool(args.resume),
         )
     except KeyboardInterrupt:
