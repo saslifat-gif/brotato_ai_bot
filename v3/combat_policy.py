@@ -291,6 +291,86 @@ class EnemyContactGuard:
         return SafetyDecision(requested, best_action, requested_risk, best_risk)
 
 
+class CrowdRecoveryGuard:
+    """Hold a short center escape when late-wave crowds trap the player."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        wave_threshold: int = 18,
+        enemy_threshold: int = 28,
+        boundary_threshold: float = 0.65,
+        hold_steps: int = 8,
+    ):
+        self.enabled = bool(enabled)
+        self.wave_threshold = int(wave_threshold)
+        self.enemy_threshold = int(enemy_threshold)
+        self.boundary_threshold = float(boundary_threshold)
+        self.hold_steps = max(1, int(hold_steps))
+        self.remaining = 0
+
+    def reset(self) -> None:
+        self.remaining = 0
+
+    @staticmethod
+    def _center_action(state: Mapping[str, Any]) -> int:
+        player = _mapping(state.get("player"))
+        arena = _mapping(state.get("arena"))
+        px, py = _xy(player.get("position"))
+        width = max(1.0, _number(arena.get("width"), 1920.0))
+        height = max(1.0, _number(arena.get("height"), 1080.0))
+        dx = width * 0.5 - px
+        dy = height * 0.5 - py
+        horizontal = 1 if dx > width * 0.06 else -1 if dx < -width * 0.06 else 0
+        vertical = 1 if dy > height * 0.06 else -1 if dy < -height * 0.06 else 0
+        if horizontal == 0 and vertical == 0:
+            return int(MoveAction.IDLE)
+        if horizontal < 0 and vertical < 0:
+            return int(MoveAction.UP_LEFT)
+        if horizontal > 0 and vertical < 0:
+            return int(MoveAction.UP_RIGHT)
+        if horizontal < 0 and vertical > 0:
+            return int(MoveAction.DOWN_LEFT)
+        if horizontal > 0 and vertical > 0:
+            return int(MoveAction.DOWN_RIGHT)
+        if horizontal < 0:
+            return int(MoveAction.LEFT)
+        if horizontal > 0:
+            return int(MoveAction.RIGHT)
+        return int(MoveAction.UP if vertical < 0 else MoveAction.DOWN)
+
+    def apply(self, state: Mapping[str, Any], requested_action: int) -> SafetyDecision:
+        requested = int(MoveAction(int(requested_action)))
+        if not self.enabled:
+            return SafetyDecision(requested, requested, 0.0, 0.0)
+        wave = int(_number(_mapping(state.get("wave")).get("number"), 0))
+        enemy_count = len(_items(state.get("enemies")))
+        paths = _mapping(state.get("projectile_paths"))
+        boundary = paths.get("boundary_action_risk", [])
+        boundary_max = (
+            max((_number(value) for value in boundary), default=0.0)
+            if isinstance(boundary, (list, tuple))
+            else 0.0
+        )
+        trigger = (
+            wave >= self.wave_threshold
+            and enemy_count >= self.enemy_threshold
+            and boundary_max >= self.boundary_threshold
+        )
+        if self.remaining <= 0 and trigger:
+            self.remaining = self.hold_steps
+        if self.remaining <= 0:
+            return SafetyDecision(requested, requested, boundary_max, boundary_max)
+        self.remaining -= 1
+        return SafetyDecision(
+            requested,
+            self._center_action(state),
+            boundary_max,
+            0.0,
+        )
+
+
 class CombatHeuristicTeacher:
     """Potential-field teacher used for data collection, not final game strategy."""
 

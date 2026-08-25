@@ -10,6 +10,7 @@ from v3.bridge_server import BridgeServer
 from v3.combat_policy import (
     CombatDecisionLogger,
     CombatSafetyShield,
+    CrowdRecoveryGuard,
     EnemyContactGuard,
     SafetyDecision,
     movement_transition_metrics,
@@ -65,6 +66,7 @@ class BrotatoApiEnv(gym.Env):
                 getattr(self.vectorizer, "enemy_contact_guard_margin", 0.08)
             ),
         )
+        self.crowd_recovery_guard = CrowdRecoveryGuard(enabled=True)
         self.combat_logger = CombatDecisionLogger(cfg.combat_decision_log)
         self.ui_controller = AutoUiController(
             max_shop_buys=cfg.max_shop_buys,
@@ -109,6 +111,7 @@ class BrotatoApiEnv(gym.Env):
             except Exception as exc:
                 print(f"[v3-env] reset request not delivered: {exc}")
         self.ui_controller.reset_episode()
+        self.crowd_recovery_guard.reset()
         print("[v3-env] waiting for combat; structured menu automation is active")
         state = self.server.wait_for_state(
             timeout_sec=self.cfg.reset_timeout_sec,
@@ -157,19 +160,22 @@ class BrotatoApiEnv(gym.Env):
         shield_decision = self.safety_shield.apply(
             previous_state, contact_decision.applied_action
         )
+        crowd_decision = self.crowd_recovery_guard.apply(
+            previous_state, shield_decision.applied_action
+        )
         if contact_decision.overridden:
             decision = SafetyDecision(
                 requested,
-                shield_decision.applied_action,
+                crowd_decision.applied_action,
                 contact_decision.requested_risk,
-                contact_decision.applied_risk,
+                crowd_decision.applied_risk,
             )
         else:
             decision = SafetyDecision(
                 requested,
-                shield_decision.applied_action,
+                crowd_decision.applied_action,
                 shield_decision.requested_risk,
-                shield_decision.applied_risk,
+                crowd_decision.applied_risk,
             )
         normalized = decision.applied_action
         previous_paths = (self.last_state or {}).get("projectile_paths", {})
@@ -320,6 +326,8 @@ class BrotatoApiEnv(gym.Env):
             "enemy_contact_requested_risk": contact_decision.requested_risk,
             "enemy_contact_applied_risk": contact_decision.applied_risk,
             "enemy_contact_override_penalty": contact_override_penalty,
+            "crowd_recovery_overridden": crowd_decision.overridden,
+            "crowd_recovery_active": self.crowd_recovery_guard.remaining > 0,
             "requested_risk": decision.requested_risk,
             "applied_risk": decision.applied_risk,
             "materials": int(state.get("counters", {}).get("materials", 0)),

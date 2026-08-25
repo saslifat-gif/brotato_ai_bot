@@ -15,6 +15,7 @@ from v3.combat_policy import (
     CombatHeuristicTeacher,
     CombatPolicyBase,
     CombatSafetyShield,
+    CrowdRecoveryGuard,
     EnemyContactGuard,
     HumanCombatDecisionLogger,
     SemanticHumanCombatDecisionLogger,
@@ -634,6 +635,20 @@ def test_enemy_contact_guard_vetoes_only_high_confidence_contact_path():
     ordinary = guard.apply(state, requested_action=5)
     assert not ordinary.overridden
     assert ordinary.applied_action == 5
+
+
+def test_crowd_recovery_guard_holds_center_escape_in_late_dense_wave():
+    state = _state(wave=19)
+    state["player"]["position"] = {"x": 80.0, "y": 300.0}
+    state["enemies"] = [{"position": {"x": 400.0, "y": 300.0}} for _ in range(32)]
+    state["projectile_paths"] = {
+        "boundary_action_risk": [0.1, 0.2, 0.2, 0.9, 0.1, 0.1, 0.2, 0.2, 0.2]
+    }
+    guard = CrowdRecoveryGuard()
+    decision = guard.apply(state, requested_action=3)
+    assert decision.overridden
+    assert decision.applied_action == 4
+    assert guard.remaining == 7
 
 
 def test_combat_teacher_moves_toward_a_safe_distant_enemy():

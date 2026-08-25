@@ -178,6 +178,10 @@ class CombatTensorboardCallback(BaseCallback):
                 "movement/enemy_contact_override_penalty",
                 float(info.get("enemy_contact_override_penalty", 0.0)),
             )
+            self.logger.record_mean(
+                "movement/crowd_recovery_override_rate",
+                float(bool(info.get("crowd_recovery_overridden"))),
+            )
             self.logger.record_mean("combat/health_fraction", float(info.get("health_fraction", 0.0)))
             self.logger.record_mean("combat/materials", float(info.get("materials", 0)))
             self.logger.record_mean("combat/enemy_count", float(info.get("enemy_count", 0)))
