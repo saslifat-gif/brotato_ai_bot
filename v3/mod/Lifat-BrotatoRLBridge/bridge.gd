@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.14"
+const MOD_VERSION := "0.3.15"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
@@ -1171,6 +1171,7 @@ func _entity_state(entity) -> Dictionary:
 		["cooldown_remaining", "time_left", "_cooldown", "attack_cooldown"],
 		0.0
 	))
+	var attack_method := _infer_attack_method(attack_token)
 	return {
 		"id": static_data["id"],
 		"type": static_data["type"],
@@ -1201,8 +1202,25 @@ func _entity_state(entity) -> Dictionary:
 		"attack_target": _vector_json(target_position),
 		"attack_cooldown_remaining": max(0.0, cooldown_remaining),
 		"attack_type": attack_token,
+		"attack_method": attack_method,
+		"attack_method_confidence": 1.0 if attack_method != "unknown" else 0.0,
 		"movement_type": _script_token(movement_behavior)
 	}
+
+
+func _infer_attack_method(token: String) -> String:
+	var value := token.to_lower()
+	if value.find("charg") >= 0 or value.find("dash") >= 0:
+		return "charge"
+	if value.find("summon") >= 0 or value.find("spawn") >= 0:
+		return "summon"
+	if value.find("projectile") >= 0 or value.find("bullet") >= 0 or value.find("shoot") >= 0 or value.find("ranged") >= 0:
+		return "projectile"
+	if value.find("aoe") >= 0 or value.find("circle") >= 0 or value.find("slash") >= 0 or value.find("area") >= 0:
+		return "area"
+	if value.find("melee") >= 0 or value.find("contact") >= 0 or value.find("attack") >= 0:
+		return "contact"
+	return "unknown"
 
 
 func _collect_projectiles(main, output: Array, maximum: int, all_nodes: Array) -> void:
