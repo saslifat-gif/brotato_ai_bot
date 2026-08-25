@@ -670,7 +670,7 @@ def test_crowd_recovery_guard_starts_before_wave_18_on_one_hazard():
     }
     decision = CrowdRecoveryGuard().apply(state, requested_action=0)
     assert decision.overridden
-    assert decision.applied_action != int(MoveAction.IDLE)
+    assert decision.applied_action != 0
 
 
 def test_combat_teacher_moves_toward_a_safe_distant_enemy():
