@@ -82,6 +82,7 @@ var _last_human_input_ms := 0
 var _last_attack_indicators := []
 var _indicator_scan_nodes := 0
 var _indicator_scan_seen := {}
+var _projectile_scan_nodes := 0
 var _logged_semantic_probes := {}
 var _last_indicator_scan_tick := -999999
 var _requested_state_hz := 24.0
@@ -1207,6 +1208,41 @@ func _collect_projectiles(main, output: Array, maximum: int, all_nodes: Array) -
 	for group_name in ["projectiles", "enemy_projectiles", "bullets", "shots"]:
 		for projectile in get_tree().get_nodes_in_group(group_name):
 			_append_projectile(projectile, output, maximum, seen, all_nodes)
+	# Some boss attacks are spawned beneath a generic entity container and are
+	# neither in a projectile group nor under one of the conventional paths.
+	# Discover those nodes by stable script/resource tokens as a bounded fallback.
+	if output.empty():
+		_projectile_scan_nodes = 0
+		_collect_projectiles_recursive(main, output, maximum, seen, all_nodes, 0)
+
+
+func _collect_projectiles_recursive(
+	node,
+	output: Array,
+	maximum: int,
+	seen: Dictionary,
+	all_nodes: Array,
+	depth: int
+) -> void:
+	if node == null or output.size() >= maximum or depth > 12 or _projectile_scan_nodes >= 800:
+		return
+	_projectile_scan_nodes += 1
+	if _looks_like_projectile(_script_token(node)):
+		_append_projectile(node, output, maximum, seen, all_nodes)
+	if output.size() >= maximum:
+		return
+	for child in node.get_children():
+		_collect_projectiles_recursive(child, output, maximum, seen, all_nodes, depth + 1)
+
+
+func _looks_like_projectile(token: String) -> bool:
+	for term in [
+		"projectile", "enemy_bullet", "enemybullet", "bullet", "missile",
+		"shot", "orb", "fireball", "rocket", "laser"
+	]:
+		if token.find(term) >= 0:
+			return true
+	return false
 
 
 func _append_projectiles(
