@@ -231,12 +231,22 @@ class CombatSafetyShield:
                 )
 
         enemies = _items(state.get("enemies"))
+        wave_data = _mapping(state.get("wave"))
+        wave_number = int(_number(wave_data.get("number"), 0.0))
         boss_present = any(
             bool(enemy.get("is_boss"))
             or any(term in f"{enemy.get('id', '')} {enemy.get('type', '')} {enemy.get('name', '')}".lower()
                    for term in ("boss", "summoner", "召唤"))
             for enemy in enemies
         )
+        # Brotato's final wave is the boss encounter.  Some bridge versions
+        # omit the boss flag, so active hazards on wave 20 must still enable
+        # the boss-spacing and projectile-avoidance behavior.
+        if not boss_present and wave_number >= 20:
+            boss_present = bool(
+                _items(state.get("attack_indicators"))
+                or _items(state.get("projectiles"))
+            )
         if boss_present:
             # During boss attacks, remaining in melee range is more dangerous
             # than the normal crowd estimate suggests.
