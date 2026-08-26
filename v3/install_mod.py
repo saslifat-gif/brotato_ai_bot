@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 
@@ -99,6 +100,37 @@ def default_profile_path() -> Path | None:
     return Path(appdata) / "Brotato" / "mod_user_profiles.json"
 
 
+def rotate_stale_godot_log() -> Path | None:
+    """Move a prior mod-load error aside so Brotato can retry mod startup.
+
+    Brotato's crash-recovery path can disable all mods when the previous
+    ``godot.log`` contains a script error mentioning ``mods-unpacked``. Keep
+    the log for diagnosis, but do not let a fixed bridge remain blocked by the
+    old error on the next launch.
+    """
+
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    log_path = Path(appdata) / "Brotato" / "logs" / "godot.log"
+    if not log_path.is_file():
+        return None
+    try:
+        contents = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if "mods-unpacked" not in contents or "SCRIPT ERROR" not in contents:
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = log_path.with_name(f"godot.before-mod-retry-{stamp}.log")
+    try:
+        log_path.replace(backup)
+    except OSError as exc:
+        print(f"[v3-install] could not rotate stale Godot log: {exc}")
+        return None
+    return backup
+
+
 def activate_mod_profile(profile_path: Path, package: Path) -> bool:
     """Enable the bridge in the current ModLoader profile, preserving a backup."""
 
@@ -169,7 +201,10 @@ def main() -> int:
         print("[v3-install] cancelled")
         return 1
     package = install_mod(selected)
+    rotated_log = rotate_stale_godot_log()
     print(f"[v3-install] package={package}")
+    if rotated_log is not None:
+        print(f"[v3-install] preserved stale crash log={rotated_log}")
     print(
         "[v3-install] editable_copy="
         f"{package.parent.parent / 'mods-unpacked' / MOD_DIR_NAME}"
