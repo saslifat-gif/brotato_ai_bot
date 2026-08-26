@@ -28,7 +28,11 @@ const BULLET_GRID_CHANNELS := 10
 const BULLET_GRID_WIDTH := 1600.0
 const BULLET_GRID_HEIGHT := 900.0
 const BULLET_PATH_HORIZONS := [0.0, 0.25, 0.5, 0.75, 1.0]
-const PROJECTILE_PATH_REFRESH_TICKS := 2
+# Path risk is deliberately refreshed less often than the control state.  The
+# full state still publishes every requested tick, while this bounded forecast
+# is allowed to be up to ~167 ms old at 24 Hz.
+const PROJECTILE_PATH_REFRESH_TICKS := 4
+const ARENA_GRID_REFRESH_TICKS := 2
 const BULLET_ACTION_VECTORS := [
 	Vector2.ZERO,
 	Vector2(0, -1),
@@ -92,6 +96,9 @@ var _logged_semantic_probes := {}
 var _last_indicator_scan_tick := -999999
 var _last_projectile_path_tick := -999999
 var _last_projectile_paths := {}
+var _last_arena_grid_tick := -999999
+var _last_arena_enemy_grid := []
+var _last_state_profile_tick := -999999
 var _requested_state_hz := 24.0
 var _property_name_cache := {}
 var _training_paused := false
@@ -380,9 +387,21 @@ func _send_ui_result(sequence: int, target: String, ok: bool, error: String) -> 
 
 
 func _publish_state() -> void:
+	var started_ms := OS.get_ticks_msec()
 	_tick += 1
 	var state := _build_state()
 	_send(state)
+	var elapsed_ms := OS.get_ticks_msec() - started_ms
+	if elapsed_ms >= 30 and _tick - _last_state_profile_tick >= 24:
+		_last_state_profile_tick = _tick
+		print(
+			"[BrotatoRLBridge] slow_state_ms=%d enemies=%d projectiles=%d indicators=%d" % [
+				elapsed_ms,
+				state.get("enemies", []).size(),
+				state.get("projectiles", []).size(),
+				state.get("attack_indicators", []).size()
+			]
+		)
 
 
 func _publish_raw_state() -> void:
@@ -531,12 +550,19 @@ func _build_state() -> Dictionary:
 		_last_indicator_scan_tick = -999999
 		_last_projectile_paths = {}
 		_last_projectile_path_tick = -999999
+		_last_arena_enemy_grid = []
+		_last_arena_grid_tick = -999999
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
 	if _reset_kills_on_combat and phase == "combat":
 		_kills_this_wave = 0
 		_reset_kills_on_combat = false
+	var arena_enemy_grid := _cached_arena_enemy_grid(
+		spawned_enemies,
+		arena_size,
+		player_state
+	)
 	return {
 		"type": "state",
 		"session": _session_id,
@@ -562,7 +588,7 @@ func _build_state() -> Dictionary:
 		},
 		"enemies": enemies,
 		"arena_grid": {
-			"enemy": _full_arena_enemy_grid(spawned_enemies, arena_size, player_state)
+			"enemy": arena_enemy_grid
 		},
 		"projectiles": projectiles,
 		"projectile_paths": _cached_projectile_path_state(
@@ -653,6 +679,17 @@ func _full_arena_enemy_grid(spawned_enemies, arena_size: Vector2, player_state: 
 	for index in range(output.size()):
 		output[index] = clamp(float(output[index]), -1.0, 1.0)
 	return output
+
+
+func _cached_arena_enemy_grid(spawned_enemies, arena_size: Vector2, player_state: Dictionary) -> Array:
+	if _tick - _last_arena_grid_tick >= ARENA_GRID_REFRESH_TICKS:
+		_last_arena_enemy_grid = _full_arena_enemy_grid(
+			spawned_enemies,
+			arena_size,
+			player_state
+		)
+		_last_arena_grid_tick = _tick
+	return _last_arena_enemy_grid
 
 
 func _collect_ui_actions(node, output: Array, phase: String) -> void:
