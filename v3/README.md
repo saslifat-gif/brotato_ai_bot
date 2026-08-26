@@ -217,8 +217,10 @@ Live training requests a true 24 Hz at every wave and writes checkpoints under
 curves to TensorBoard under `V4TemporalPPO`.
 `train_v4_temporal_scheduled.bat` is the unattended launcher: after a restart
 it automatically selects the newest V4 checkpoint, falling back to the
-verified bootstrap when no live checkpoint exists yet. Bridge 0.3.17 removes
-the former late-wave 12 Hz cap. TensorBoard's `control/effective_state_hz`
+verified bootstrap when no live checkpoint exists yet. Bridge 0.3.18 removes
+the former late-wave 12 Hz cap and adds temporal projectile trajectory
+prediction with swept multi-horizon action risk. TensorBoard's
+`control/effective_state_hz`
 curve reports the measured control stream separately from SB3's slower
 training-throughput `time/fps` curve.
 

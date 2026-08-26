@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.17"
+const MOD_VERSION := "0.3.18"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RAW_RECORD_PORT := 4243
