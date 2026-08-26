@@ -729,6 +729,15 @@ def test_crowd_recovery_guard_holds_center_escape_in_late_dense_wave():
     assert guard.remaining == 7
 
 
+def test_crowd_recovery_guard_does_not_pull_safe_center_to_exact_center():
+    state = _state(wave=19)
+    state["player"]["position"] = {"x": 500.0, "y": 300.0}
+    assert CrowdRecoveryGuard._center_action(state) == 0
+
+    state["player"]["position"] = {"x": 80.0, "y": 300.0}
+    assert CrowdRecoveryGuard._center_action(state) == 4
+
+
 def test_crowd_recovery_guard_starts_before_wave_18_on_one_hazard():
     state = _state(wave=14)
     state["enemies"] = [{"position": {"x": 450.0, "y": 300.0}} for _ in range(20)]

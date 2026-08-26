@@ -450,15 +450,19 @@ class CrowdRecoveryGuard:
 
     @staticmethod
     def _center_action(state: Mapping[str, Any]) -> int:
+        """Return an inward action only when outside the safe arena band."""
+
         player = _mapping(state.get("player"))
         arena = _mapping(state.get("arena"))
         px, py = _xy(player.get("position"))
         width = max(1.0, _number(arena.get("width"), 1920.0))
         height = max(1.0, _number(arena.get("height"), 1080.0))
-        dx = width * 0.5 - px
-        dy = height * 0.5 - py
-        horizontal = 1 if dx > width * 0.06 else -1 if dx < -width * 0.06 else 0
-        vertical = 1 if dy > height * 0.06 else -1 if dy < -height * 0.06 else 0
+        safe_x = min(max(px, width * 0.25), width * 0.75)
+        safe_y = min(max(py, height * 0.25), height * 0.75)
+        dx = safe_x - px
+        dy = safe_y - py
+        horizontal = 1 if dx > width * 0.02 else -1 if dx < -width * 0.02 else 0
+        vertical = 1 if dy > height * 0.02 else -1 if dy < -height * 0.02 else 0
         if horizontal == 0 and vertical == 0:
             return int(MoveAction.IDLE)
         if horizontal < 0 and vertical < 0:
@@ -486,8 +490,10 @@ class CrowdRecoveryGuard:
         px, py = _xy(player.get("position"))
         width = max(1.0, _number(arena.get("width"), 1920.0))
         height = max(1.0, _number(arena.get("height"), 1080.0))
-        dx = width * 0.5 - px
-        dy = height * 0.5 - py
+        safe_x = min(max(px, width * 0.25), width * 0.75)
+        safe_y = min(max(py, height * 0.25), height * 0.75)
+        dx = safe_x - px
+        dy = safe_y - py
         center_length = max(1.0, math.hypot(dx, dy))
         center_vector = (dx / center_length, dy / center_length)
         scored = []
@@ -495,10 +501,10 @@ class CrowdRecoveryGuard:
             if action == int(MoveAction.IDLE):
                 continue
             risk = shield.risk(state, action)
-            toward_center = movement[0] * center_vector[0] + movement[1] * center_vector[1]
-            # Prefer the center direction only when it is comparably safe.
+            toward_safe_band = movement[0] * center_vector[0] + movement[1] * center_vector[1]
+            # Prefer an inward direction only when outside the safe band.
             center_bias = 0.08 if action == center_action else 0.0
-            scored.append((risk - 0.12 * toward_center - center_bias, action))
+            scored.append((risk - 0.12 * toward_safe_band - center_bias, action))
         return min(scored, key=lambda row: (row[0], row[1]))[1]
 
     def apply(self, state: Mapping[str, Any], requested_action: int) -> SafetyDecision:

@@ -265,8 +265,10 @@ class HierarchicalCombatVectorizer:
             urgency = 0.35
         else:
             objective = OBJECTIVE_REPOSITION
-            output[-3] = np.clip((width * 0.5 - px) / width, -1.0, 1.0)
-            output[-2] = np.clip((height * 0.5 - py) / height, -1.0, 1.0)
+            # Do not turn the arena center into a permanent attractor.  The
+            # safety shield already protects the edges, while the movement
+            # reward handles genuine stalling.
+            output[-3:-1] = 0.0
             urgency = 0.2
         output[objective] = 1.0
         if target is not None:
