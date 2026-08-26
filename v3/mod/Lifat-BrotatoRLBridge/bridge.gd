@@ -563,6 +563,19 @@ func _build_state() -> Dictionary:
 		arena_size,
 		player_state
 	)
+	var arena_grid_payload := {}
+	if _tick == _last_arena_grid_tick:
+		arena_grid_payload = {"enemy": arena_enemy_grid}
+	var projectile_path_state := _cached_projectile_path_state(
+		projectile_nodes,
+		spawned_enemies,
+		player_state,
+		combat_state,
+		arena_size
+	)
+	var projectile_path_payload := {}
+	if _tick == _last_projectile_path_tick:
+		projectile_path_payload = projectile_path_state
 	return {
 		"type": "state",
 		"session": _session_id,
@@ -587,17 +600,9 @@ func _build_state() -> Dictionary:
 			"kills": _kills_this_wave
 		},
 		"enemies": enemies,
-		"arena_grid": {
-			"enemy": arena_enemy_grid
-		},
+		"arena_grid": arena_grid_payload,
 		"projectiles": projectiles,
-		"projectile_paths": _cached_projectile_path_state(
-			projectile_nodes,
-			spawned_enemies,
-			player_state,
-			combat_state,
-			arena_size
-		),
+		"projectile_paths": projectile_path_payload,
 		"pickups": pickups,
 		"attack_indicators": attack_indicators,
 		"combat": combat_state,

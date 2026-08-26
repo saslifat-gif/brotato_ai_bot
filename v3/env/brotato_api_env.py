@@ -86,6 +86,29 @@ class BrotatoApiEnv(gym.Env):
         self.training_paused = False
         self._last_published_ms: Optional[int] = None
         self._effective_state_hz = 0.0
+        self._cached_projectile_paths: dict[str, Any] = {}
+        self._cached_arena_grid: dict[str, Any] = {}
+
+    def _merge_cached_spatial_state(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """Reuse large bridge payloads when the bridge sends a lightweight tick."""
+        merged = dict(state)
+        if state.get("phase") != "combat":
+            self._cached_projectile_paths = {}
+            self._cached_arena_grid = {}
+            return merged
+
+        projectile_paths = state.get("projectile_paths")
+        if isinstance(projectile_paths, Mapping) and projectile_paths:
+            self._cached_projectile_paths = dict(projectile_paths)
+        elif self._cached_projectile_paths:
+            merged["projectile_paths"] = self._cached_projectile_paths
+
+        arena_grid = state.get("arena_grid")
+        if isinstance(arena_grid, Mapping) and arena_grid.get("enemy"):
+            self._cached_arena_grid = dict(arena_grid)
+        elif self._cached_arena_grid:
+            merged["arena_grid"] = self._cached_arena_grid
+        return merged
 
     def _observe_state_rate(self, state: Mapping[str, Any]) -> float:
         try:
@@ -165,6 +188,9 @@ class BrotatoApiEnv(gym.Env):
                 after_tick=int(state.get("tick", -1)),
                 combat_only=True,
             )
+        self._cached_projectile_paths = {}
+        self._cached_arena_grid = {}
+        state = self._merge_cached_spatial_state(state)
         self.last_state = state
         self._last_published_ms = None
         self._effective_state_hz = 0.0
@@ -264,6 +290,7 @@ class BrotatoApiEnv(gym.Env):
             after_tick=previous_tick,
             minimum_sequence=self.sequence,
         )
+        state = self._merge_cached_spatial_state(state)
         effective_state_hz = self._observe_state_rate(state)
         movement = movement_transition_metrics(
             previous_state,
@@ -337,6 +364,7 @@ class BrotatoApiEnv(gym.Env):
             state = result.state
             ui_sent = result.sent_roles
             ui_confirmed = result.confirmed_roles
+            state = self._merge_cached_spatial_state(state)
             terminated = bool(state.get("dead") or state.get("victory"))
         truncated = not terminated and state.get("phase") != "combat"
         self.last_state = state
