@@ -882,6 +882,14 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "func _full_arena_enemy_grid(" in bridge
     assert "func _projectile_path_state(" in bridge
     assert "func _splat_projectile_path(" in bridge
+    assert "const PROJECTILE_HISTORY_SAMPLES := 6" in bridge
+    assert "func _update_projectile_motion_history(projectile_nodes: Array)" in bridge
+    assert "func _projectile_motion_estimate(runtime_id: String)" in bridge
+    assert "func _swept_projectile_action_risk(" in bridge
+    assert "func _distance_to_segment(point: Vector2, start: Vector2, end: Vector2)" in bridge
+    assert '"motion_model": "temporal_constant_acceleration"' in bridge
+    assert '"temporal_count": temporal_count' in bridge
+    assert '"acceleration_count": acceleration_count' in bridge
     assert '"enemy_action_risk"' in bridge
     assert '"boundary_action_risk"' in bridge
     assert '"configurable_state_rate"' in bridge

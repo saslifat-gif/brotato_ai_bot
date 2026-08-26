@@ -32,6 +32,12 @@ const BULLET_PATH_HORIZONS := [0.0, 0.25, 0.5, 0.75, 1.0]
 # full state still publishes every requested tick, while this bounded forecast
 # is allowed to be up to ~167 ms old at 24 Hz.
 const PROJECTILE_PATH_REFRESH_TICKS := 4
+# Keep a short per-projectile history so the forecast can react to homing,
+# curved and accelerating attacks instead of assuming the latest velocity is
+# valid for the whole one-second horizon.
+const PROJECTILE_HISTORY_SAMPLES := 6
+const PROJECTILE_HISTORY_MAX_AGE_MS := 1000
+const PROJECTILE_MAX_ACCELERATION := 6000.0
 const ARENA_GRID_REFRESH_TICKS := 2
 const BULLET_ACTION_VECTORS := [
 	Vector2.ZERO,
@@ -96,6 +102,7 @@ var _logged_semantic_probes := {}
 var _last_indicator_scan_tick := -999999
 var _last_projectile_path_tick := -999999
 var _last_projectile_paths := {}
+var _projectile_motion_history := {}
 var _last_arena_grid_tick := -999999
 var _last_arena_enemy_grid := []
 var _last_state_profile_tick := -999999
@@ -538,6 +545,9 @@ func _build_state() -> Dictionary:
 		_collect_ui_actions(get_tree().current_scene, ui_actions, phase)
 	elif phase == "combat":
 		combat_state = _combat_summary(player, run_data)
+		# Track hostile projectiles at the control-state cadence.  The richer
+		# forecast is refreshed less often, but its motion model stays current.
+		_update_projectile_motion_history(projectile_nodes)
 		# Warning-node discovery is more expensive than the normal entity export.
 		# Four scans/second at early-wave rate is responsive without worsening the
 		# late-wave frame drops that motivated the adaptive state interval.
@@ -550,6 +560,7 @@ func _build_state() -> Dictionary:
 		_last_indicator_scan_tick = -999999
 		_last_projectile_paths = {}
 		_last_projectile_path_tick = -999999
+		_projectile_motion_history.clear()
 		_last_arena_enemy_grid = []
 		_last_arena_grid_tick = -999999
 	if wave_number != _last_wave_number:
@@ -1483,6 +1494,104 @@ func _cached_projectile_path_state(
 	return _last_projectile_paths
 
 
+func _projectile_motion_sample(projectile) -> Dictionary:
+	var position = _first_property(
+		projectile,
+		["global_position", "position"],
+		Vector2.ZERO
+	)
+	if typeof(position) != TYPE_VECTOR2:
+		return {}
+	var velocity = _first_property(
+		projectile,
+		["linear_velocity", "velocity", "current_velocity"],
+		Vector2.ZERO
+	)
+	if typeof(velocity) != TYPE_VECTOR2:
+		velocity = Vector2.ZERO
+	var direction = _first_property(projectile, ["direction", "_direction"], Vector2.ZERO)
+	if velocity.length_squared() < 0.01 and typeof(direction) == TYPE_VECTOR2:
+		velocity = direction * float(_first_property(
+			projectile,
+			["speed", "current_speed"],
+			0.0
+		))
+	return {
+		"position": position,
+		"velocity": velocity,
+		"acceleration": Vector2.ZERO,
+		"time_ms": OS.get_ticks_msec()
+	}
+
+
+func _update_projectile_motion_history(projectile_nodes: Array) -> void:
+	var now_ms := OS.get_ticks_msec()
+	for projectile in projectile_nodes:
+		if projectile == null or not is_instance_valid(projectile):
+			continue
+		if not _is_hostile_projectile(projectile):
+			continue
+		var sample := _projectile_motion_sample(projectile)
+		if sample.empty():
+			continue
+		var runtime_id := str(projectile.get_instance_id())
+		var samples := []
+		var previous_track = _projectile_motion_history.get(runtime_id, null)
+		if typeof(previous_track) == TYPE_DICTIONARY:
+			var previous_samples = previous_track.get("samples", [])
+			if typeof(previous_samples) == TYPE_ARRAY:
+				samples = previous_samples.duplicate()
+		var acceleration := Vector2.ZERO
+		if samples.size() > 0:
+			var previous = samples[samples.size() - 1]
+			if typeof(previous) == TYPE_DICTIONARY:
+				var previous_position = previous.get("position", sample["position"])
+				var previous_time := int(previous.get("time_ms", now_ms))
+				var dt := max(0.001, float(now_ms - previous_time) / 1000.0)
+				if typeof(previous_position) == TYPE_VECTOR2:
+					var measured_velocity: Vector2 = (sample["position"] - previous_position) / dt
+					var reported_velocity: Vector2 = sample["velocity"]
+					# Some projectiles expose a stale velocity while their position
+					# is updated by a steering script. Blend both observations.
+					if reported_velocity.length_squared() < 1.0:
+						sample["velocity"] = measured_velocity
+					else:
+						sample["velocity"] = reported_velocity * 0.65 + measured_velocity * 0.35
+					var previous_velocity = previous.get("velocity", Vector2.ZERO)
+					if typeof(previous_velocity) != TYPE_VECTOR2:
+						previous_velocity = Vector2.ZERO
+					acceleration = (sample["velocity"] - previous_velocity) / dt
+					if acceleration.length() > PROJECTILE_MAX_ACCELERATION:
+						acceleration = acceleration.normalized() * PROJECTILE_MAX_ACCELERATION
+		sample["acceleration"] = acceleration
+		sample["time_ms"] = now_ms
+		samples.append(sample)
+		while samples.size() > PROJECTILE_HISTORY_SAMPLES:
+			samples.remove(0)
+		_projectile_motion_history[runtime_id] = {
+			"samples": samples,
+			"last_seen_ms": now_ms
+		}
+	var stale_ids := []
+	for runtime_id in _projectile_motion_history.keys():
+		var track = _projectile_motion_history[runtime_id]
+		if typeof(track) == TYPE_DICTIONARY and now_ms - int(track.get("last_seen_ms", 0)) > PROJECTILE_HISTORY_MAX_AGE_MS:
+			stale_ids.append(runtime_id)
+	for runtime_id in stale_ids:
+		_projectile_motion_history.erase(runtime_id)
+
+
+func _projectile_motion_estimate(runtime_id: String) -> Dictionary:
+	var track = _projectile_motion_history.get(runtime_id, null)
+	if typeof(track) != TYPE_DICTIONARY:
+		return {}
+	var samples = track.get("samples", [])
+	if typeof(samples) != TYPE_ARRAY or samples.size() == 0:
+		return {}
+	var latest = samples[samples.size() - 1]
+	return latest if typeof(latest) == TYPE_DICTIONARY else {}
+
+
 func _projectile_path_state(
 	projectile_nodes: Array,
 	spawned_enemies,
@@ -1504,6 +1613,8 @@ func _projectile_path_state(
 	var max_health := max(1.0, float(player_state.get("max_health", 1.0)))
 	var player_speed := max(150.0, float(combat_state.get("move_speed", 300.0)))
 	var hostile_count := 0
+	var temporal_count := 0
+	var acceleration_count := 0
 	for projectile in projectile_nodes:
 		if projectile == null or not is_instance_valid(projectile):
 			continue
@@ -1531,47 +1642,59 @@ func _projectile_path_state(
 				["speed", "current_speed"],
 				0.0
 			))
+		var acceleration := Vector2.ZERO
+		var motion_estimate := _projectile_motion_estimate(str(projectile.get_instance_id()))
+		if not motion_estimate.empty():
+			temporal_count += 1
+			var estimated_velocity = motion_estimate.get("velocity", velocity)
+			if typeof(estimated_velocity) == TYPE_VECTOR2:
+				velocity = estimated_velocity
+			var estimated_acceleration = motion_estimate.get("acceleration", Vector2.ZERO)
+			if typeof(estimated_acceleration) == TYPE_VECTOR2:
+				acceleration = estimated_acceleration
+				if acceleration.length_squared() > 1.0:
+					acceleration_count += 1
 		var static_data := _projectile_static_data(projectile)
 		var radius := max(4.0, float(static_data.get("radius", 12.0))) + 36.0
 		var damage := max(0.0, float(static_data.get("damage", 0.0)))
 		var relative: Vector2 = position - player_position
 		for horizon_index in range(BULLET_PATH_HORIZONS.size()):
 			var horizon := float(BULLET_PATH_HORIZONS[horizon_index])
+			var predicted_relative := (
+				relative
+				+ velocity * horizon
+				+ acceleration * 0.5 * horizon * horizon
+			)
+			var predicted_velocity := velocity + acceleration * horizon
 			_splat_projectile_path(
 				grid,
-				relative + velocity * horizon,
+				predicted_relative,
 				radius,
 				horizon_index,
-				velocity,
+				predicted_velocity,
 				damage / max_health
 			)
 			if horizon_index > 0:
 				var previous_horizon := float(BULLET_PATH_HORIZONS[horizon_index - 1])
+				var midpoint := (previous_horizon + horizon) * 0.5
 				_splat_projectile_path(
 					grid,
-					relative + velocity * ((previous_horizon + horizon) * 0.5),
+					relative + velocity * midpoint + acceleration * 0.5 * midpoint * midpoint,
 					radius,
 					horizon_index,
-					velocity,
+					velocity + acceleration * midpoint,
 					damage / max_health
 				)
 		for action_index in range(BULLET_ACTION_VECTORS.size()):
 			var player_velocity: Vector2 = BULLET_ACTION_VECTORS[action_index] * player_speed
-			var relative_velocity: Vector2 = velocity - player_velocity
-			var speed_squared := relative_velocity.length_squared()
-			var closest_time := 0.0
-			if speed_squared > 1.0:
-				closest_time = clamp(
-					-relative.dot(relative_velocity) / speed_squared,
-					0.0,
-					0.8
-				)
-			var miss_distance := (relative + relative_velocity * closest_time).length()
-			if miss_distance < radius:
-				action_risk[action_index] += (
-					(radius - miss_distance) / radius
-					* (1.0 + min(2.0, damage / max_health))
-				)
+			action_risk[action_index] += _swept_projectile_action_risk(
+				relative,
+				velocity,
+				acceleration,
+				player_velocity,
+				radius,
+				damage / max_health
+			)
 	for index in range(grid.size()):
 		grid[index] = clamp(float(grid[index]), 0.0, 1.0)
 	for index in range(action_risk.size()):
@@ -1670,8 +1793,58 @@ func _projectile_path_state(
 		"enemy_action_risk": enemy_action_risk,
 		"boundary_action_risk": boundary_action_risk,
 		"count": hostile_count,
-		"enemy_count": enemy_count
+		"enemy_count": enemy_count,
+		"temporal_count": temporal_count,
+		"acceleration_count": acceleration_count,
+		"prediction_horizon_sec": float(BULLET_PATH_HORIZONS[BULLET_PATH_HORIZONS.size() - 1]),
+		"motion_model": "temporal_constant_acceleration"
 	}
+
+
+func _swept_projectile_action_risk(
+	relative: Vector2,
+	velocity: Vector2,
+	acceleration: Vector2,
+	player_velocity: Vector2,
+	radius: float,
+	damage_fraction: float
+) -> float:
+	var risk := 0.0
+	var previous_relative := relative
+	var damage_weight := 1.0 + min(2.0, damage_fraction)
+	if previous_relative.length() < radius:
+		risk = damage_weight
+	for horizon_index in range(1, BULLET_PATH_HORIZONS.size()):
+		var horizon := float(BULLET_PATH_HORIZONS[horizon_index])
+		var relative_velocity := velocity - player_velocity
+		var current_relative := (
+			relative
+			+ relative_velocity * horizon
+			+ acceleration * 0.5 * horizon * horizon
+		)
+		var miss_distance := _distance_to_segment(
+			Vector2.ZERO,
+			previous_relative,
+			current_relative
+		)
+		if miss_distance < radius:
+			var overlap := (radius - miss_distance) / radius
+			var urgency := 1.0 - horizon / max(
+				0.001,
+				float(BULLET_PATH_HORIZONS[BULLET_PATH_HORIZONS.size() - 1])
+			)
+			risk = max(risk, overlap * (0.45 + 0.55 * urgency) * damage_weight)
+		previous_relative = current_relative
+	return risk
+
+
+func _distance_to_segment(point: Vector2, start: Vector2, end: Vector2) -> float:
+	var segment := end - start
+	var length_squared := segment.length_squared()
+	if length_squared < 0.0001:
+		return point.distance_to(start)
+	var projection := clamp((point - start).dot(segment) / length_squared, 0.0, 1.0)
+	return point.distance_to(start + segment * projection)
 
 
 func _splat_projectile_path(
