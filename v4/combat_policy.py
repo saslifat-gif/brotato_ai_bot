@@ -150,9 +150,12 @@ class HierarchicalCombatVectorizer:
     observation_size = V4_OBSERVATION_SIZE
     path_risk_reward_scale = 0.10
     boundary_risk_reward_scale = 0.08
-    idle_reward_scale = 0.02
-    reversal_reward_scale = 0.004
-    low_motion_reward_scale = 0.006
+    # The previous values were too small relative to the per-step survival
+    # reward.  The policy learned to alternate directions near spawn center,
+    # producing low displacement without paying a meaningful cost.
+    idle_reward_scale = 0.03
+    reversal_reward_scale = 0.008
+    low_motion_reward_scale = 0.02
     enemy_contact_guard = True
     enemy_contact_guard_threshold = 0.22
     enemy_contact_guard_margin = 0.08
