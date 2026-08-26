@@ -22,7 +22,7 @@ if defined LATEST_MODEL set "RESUME_MODEL=%MODEL_DIR%\v4_temporal_checkpoints\%L
 
 echo [v4-scheduled] resume=%RESUME_MODEL%
 echo [v4-scheduled] launch_token=%V4_LAUNCH_TOKEN% >> "%MODEL_DIR%\v4_temporal_train.log"
-"%PYTHON%" -u -m v4.train_temporal_hierarchical --resume "%RESUME_MODEL%" --state-hz 24 --torch-threads 1 --device cuda --timesteps 1000000 >> "%MODEL_DIR%\v4_temporal_train.log" 2>&1
+"%PYTHON%" -u -m v4.train_temporal_hierarchical --resume "%RESUME_MODEL%" --raw-cache-only --state-hz 24 --torch-threads 1 --device cuda --timesteps 1000000 >> "%MODEL_DIR%\v4_temporal_train.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [v4-scheduled] trainer exited with code %EXIT_CODE%. See %MODEL_DIR%\v4_temporal_train.log
 if not "%EXIT_CODE%"=="0" pause

@@ -14,7 +14,7 @@ exit /b 2
 :start_trainer
 set "TRAIN_TOKEN=%RANDOM%_%RANDOM%"
 set "V4_LAUNCH_TOKEN=%TRAIN_TOKEN%"
-echo [train] Starting trainer and waiting for its data cache...
+echo [train] Starting trainer; raw-cache refresh will run in the background...
 for /f %%P in ('powershell -NoProfile -Command "$p=Start-Process -FilePath $env:ComSpec -ArgumentList '/d','/c','call C:\ml\brotato\train_v4_temporal_scheduled.bat' -WorkingDirectory 'C:\ml\brotato' -WindowStyle Normal -PassThru; $p.Id"') do set "TRAINER_PID=%%P"
 echo [train] trainer_pid=%TRAINER_PID%
 
@@ -30,7 +30,11 @@ goto wait_for_trainer
 echo [train] Starting 60 Hz raw recorder in a separate window...
 for /f %%P in ('powershell -NoProfile -Command "$p=Start-Process -FilePath $env:ComSpec -ArgumentList '/d','/c','call C:\ml\brotato\record_v4_raw.bat' -WindowStyle Minimized -PassThru; $p.Id"') do set "RECORDER_PID=%%P"
 echo [train] recorder_pid=%RECORDER_PID%
-echo [train] Trainer cache loaded; new recordings will be used next launch.
+echo [train] Control bridge is ready; training is running immediately.
+
+echo [train] Starting background raw-cache refresh...
+for /f %%P in ('powershell -NoProfile -Command "$p=Start-Process -FilePath $env:ComSpec -ArgumentList '/d','/c','call C:\ml\brotato\build_v4_raw_cache.bat' -WorkingDirectory 'C:\ml\brotato' -WindowStyle Minimized -PassThru; $p.Id"') do set "CACHE_PID=%%P"
+echo [train] cache_refresh_pid=%CACHE_PID%
 
 :wait_for_training
 timeout /t 5 /nobreak >nul

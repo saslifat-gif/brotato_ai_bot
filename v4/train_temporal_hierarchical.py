@@ -223,8 +223,14 @@ def load_raw_anchor_arrays(
     root: Path,
     max_records: int = 50_000,
     stride: int = 3,
+    cache_only: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Convert bounded, action-labelled 60 Hz snapshots into V4 anchors."""
+    """Convert bounded, action-labelled 60 Hz snapshots into V4 anchors.
+
+    Live training can use the last completed cache while a separate process
+    refreshes it.  A cache miss therefore returns an empty auxiliary dataset
+    instead of delaying the control bridge while large JSONL files are read.
+    """
     empty = (
         np.zeros((0, V4_OBSERVATION_SIZE), dtype=np.float32),
         np.zeros((0,), dtype=np.int64),
@@ -243,12 +249,22 @@ def load_raw_anchor_arrays(
     signature = "|".join(signature_parts)
     if cache_path.is_file():
         try:
-            cached = np.load(cache_path, allow_pickle=False)
-            if str(cached["signature"].item()) == signature:
-                print(f"[v4] raw anchor cache hit={cache_path}")
-                return cached["features"].astype(np.float32), cached["actions"].astype(np.int64)
+            with np.load(cache_path, allow_pickle=False) as cached:
+                features = cached["features"].astype(np.float32)
+                actions = cached["actions"].astype(np.int64)
+                if str(cached["signature"].item()) == signature:
+                    print(f"[v4] raw anchor cache hit={cache_path}")
+                    return features, actions
+                if cache_only:
+                    print(
+                        f"[v4] raw anchor cache stale; using existing cache while it refreshes={cache_path}"
+                    )
+                    return features, actions
         except (OSError, KeyError, ValueError):
             pass
+    if cache_only:
+        print(f"[v4] raw anchor cache unavailable; starting without raw anchors={cache_path}")
+        return empty
     vectorizer = HierarchicalCombatVectorizer()
     features: list[np.ndarray] = []
     actions: list[int] = []
@@ -340,6 +356,11 @@ def main() -> int:
     )
     parser.add_argument("--raw-max-records", type=int, default=50_000)
     parser.add_argument("--raw-stride", type=int, default=3)
+    parser.add_argument(
+        "--raw-cache-only",
+        action="store_true",
+        help="use the existing raw-anchor cache without scanning JSONL recordings",
+    )
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--timesteps", type=int, default=cfg.total_timesteps)
     parser.add_argument("--device", default="auto")
@@ -396,6 +417,7 @@ def main() -> int:
         args.raw_dataset,
         max_records=max(0, int(args.raw_max_records)),
         stride=max(1, int(args.raw_stride)),
+        cache_only=args.raw_cache_only,
     )
     if len(raw_actions):
         raw_limit = min(len(raw_actions), max(1, len(anchor_actions) // 3))
