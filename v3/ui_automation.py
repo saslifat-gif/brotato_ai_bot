@@ -12,6 +12,7 @@ from v3.protocol import ui_action_message
 from v3.ui_build_policy import (
     LearnedUiBuildPolicy,
     RankedUiAction,
+    RangedSmgTeacher,
     StickMeleeTeacher,
     UiDecisionLogger,
 )
@@ -76,7 +77,7 @@ class AutoUiController:
         max_shop_buys: int = 4,
         max_shop_rerolls: int = 1,
         *,
-        build_profile: str = "stick_melee",
+        build_profile: str = "ranged_smg",
         ui_model_path: Path | None = None,
         decision_log_path: Path | None = None,
     ):
@@ -92,7 +93,11 @@ class AutoUiController:
         self._attempted: set[tuple[str, int]] = set()
         self._upgrade_clicks: dict[int, int] = {}
         self._item_claims: dict[int, int] = {}
-        self._teacher = StickMeleeTeacher() if build_profile == "stick_melee" else None
+        teachers = {
+            "stick_melee": StickMeleeTeacher(),
+            "ranged_smg": RangedSmgTeacher(),
+        }
+        self._teacher = teachers.get(str(build_profile).strip().lower())
         self._learned = LearnedUiBuildPolicy(ui_model_path) if ui_model_path else None
         self._decision_logger = UiDecisionLogger(decision_log_path)
 

@@ -4,6 +4,9 @@ cd /d "%~dp0"
 
 set "PYTHON=C:\Users\lifat\miniconda3\envs\ml\python.exe"
 set "MODEL_DIR=C:\ml\brotato\models\version_3"
+set "BROTATO_V3_UI_BUILD_PROFILE=ranged_smg"
+set "BROTATO_V3_UI_MODEL="
+set "BROTATO_V3_UI_DATASET=%MODEL_DIR%\ui_decisions_ranged_smg_v1.jsonl"
 
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 4242 -State Listen -ErrorAction SilentlyContinue) { exit 1 }"
 if not errorlevel 1 goto trainer_start

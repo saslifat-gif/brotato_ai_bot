@@ -51,6 +51,7 @@ CATEGORY_NAMES = ("item", "weapon", "upgrade")
 ID_BUCKETS = 1024
 ID_EMBEDDING_SIZE = 8
 STICK_MELEE_TEACHER_VERSION = 3
+RANGED_SMG_TEACHER_VERSION = 1
 CONTEXT_SIZE = 4 + len(STAT_KEYS) + 4
 CHOICE_SIZE = 5 + len(CATEGORY_NAMES) + 3 + len(ROLE_NAMES) + len(STAT_KEYS)
 
@@ -201,6 +202,192 @@ class StickMeleeTeacher:
         )
 
 
+class RangedSmgTeacher:
+    """Rule teacher for a focused Well-Rounded ranged build.
+
+    The policy fills the six weapon slots with SMGs whenever possible and
+    uses a Shredder as a controlled crowd-clear fallback.  It deliberately
+    keeps the legacy Stick teacher above so old datasets and experiments
+    remain reproducible.
+    """
+
+    stat_weights = {
+        "stat_ranged_damage": 8.0,
+        "stat_attack_speed": 5.0,
+        "stat_percent_damage": 4.0,
+        "stat_lifesteal": 4.5,
+        "stat_armor": 3.5,
+        "stat_max_hp": 3.0,
+        "stat_speed": 2.5,
+        "stat_dodge": 2.2,
+        "stat_hp_regeneration": 1.5,
+        "stat_range": 1.5,
+        "stat_crit_chance": 1.25,
+        "stat_luck": 1.0,
+        "stat_harvesting": 1.0,
+        "stat_melee_damage": -6.0,
+        "stat_elemental_damage": -5.0,
+        "stat_engineering": -6.0,
+    }
+
+    @staticmethod
+    def _choice_text(choice: Mapping[str, Any]) -> str:
+        values = [
+            choice.get("id", ""),
+            choice.get("base_id", ""),
+            choice.get("name_key", ""),
+            choice.get("display_name", ""),
+        ]
+        for key in ("tags", "sets"):
+            value = choice.get(key, [])
+            if isinstance(value, Iterable) and not isinstance(value, (str, bytes, Mapping)):
+                values.extend(value)
+        return " ".join(str(value).lower() for value in values)
+
+    @classmethod
+    def _is_smg(cls, choice: Mapping[str, Any]) -> bool:
+        text = cls._choice_text(choice)
+        return (
+            "weapon_smg" in text
+            or " smg" in f" {text}"
+            or "submachine" in text
+        )
+
+    @classmethod
+    def _is_shredder(cls, choice: Mapping[str, Any]) -> bool:
+        text = cls._choice_text(choice)
+        return "weapon_shredder" in text or "shredder" in text
+
+    @classmethod
+    def _is_ranged_weapon(cls, choice: Mapping[str, Any]) -> bool:
+        if str(choice.get("category", "")).lower() != "weapon":
+            return False
+        if int(_number(choice.get("weapon_type"), -1)) == 1:
+            return True
+        text = cls._choice_text(choice)
+        return any(token in text for token in ("ranged", "gun", "pistol", "shotgun"))
+
+    @classmethod
+    def _weapon_counts(cls, state: Mapping[str, Any]) -> tuple[int, int, int]:
+        build = _mapping(state.get("build"))
+        weapons = build.get("weapons", [])
+        if not isinstance(weapons, list):
+            return 0, 0, 0
+        smg = sum(1 for item in weapons if cls._is_smg(_mapping(item)))
+        shredder = sum(1 for item in weapons if cls._is_shredder(_mapping(item)))
+        return smg, shredder, len(weapons)
+
+    @classmethod
+    def _keyword_bonus(cls, choice: Mapping[str, Any], wave: int) -> float:
+        text = cls._choice_text(choice)
+        score = 0.0
+        if any(token in text for token in ("sharp_bullet", "bandana", "pumpkin", "pierc")):
+            score += 36.0
+        if any(token in text for token in ("baby_with_a_beard", "cyberball", "baby_elephant")):
+            score += 22.0
+        if any(token in text for token in ("turret", "engineering", "mine")):
+            score -= 28.0
+        if any(token in text for token in ("elemental", "burn", "wand", "lightning")):
+            score -= 18.0
+        if wave >= 12 and "harvest" in text:
+            score -= 8.0
+        return score
+
+    def score_choice(
+        self,
+        choice: Mapping[str, Any],
+        wave: int,
+        state: Mapping[str, Any] | None = None,
+    ) -> float:
+        if not choice:
+            return float("-inf")
+        category = str(choice.get("category", "item")).lower()
+        base_id = str(choice.get("base_id", "")).lower()
+        item_id = str(choice.get("id", "")).lower()
+        score = _number(choice.get("tier")) * 1.5 + self._keyword_bonus(choice, wave)
+        if category == "weapon":
+            smg_count, shredder_count, weapon_count = self._weapon_counts(state or {})
+            if weapon_count >= 6:
+                return -120.0
+            if self._is_smg(choice):
+                score += 180.0 + (6 - smg_count) * 12.0
+            elif self._is_shredder(choice):
+                score += 105.0 + (2 - min(shredder_count, 2)) * 8.0
+                if wave < 8 and smg_count < 4:
+                    score -= 28.0
+            elif self._is_ranged_weapon(choice):
+                # Keep a run alive when the preferred weapons do not appear,
+                # but never let an unrelated gun displace the core plan.
+                score += 28.0 if smg_count == 0 and shredder_count == 0 else -72.0
+            else:
+                return -120.0
+        elif base_id in {"upgrade_ranged_damage", "upgrade_projectile_damage"} or item_id.startswith(
+            "upgrade_ranged_damage_"
+        ):
+            score += 92.0
+        elif base_id in {"upgrade_attack_speed", "upgrade_speed"} or item_id.startswith(
+            "upgrade_attack_speed_"
+        ):
+            score += 68.0
+        elif base_id in {"upgrade_percent_damage", "upgrade_damage"}:
+            score += 48.0
+        elif base_id in {"upgrade_lifesteal", "upgrade_armor", "upgrade_health"}:
+            score += 44.0
+        elif base_id in {"upgrade_dodge", "upgrade_speed", "upgrade_range"}:
+            score += 30.0
+        totals = effect_totals(choice)
+        for key, value in totals.items():
+            weight = self.stat_weights.get(key, 0.0)
+            if key in {"stat_luck", "stat_harvesting"} and wave >= 12:
+                weight *= 0.3
+            if key in {"stat_armor", "stat_max_hp", "stat_lifesteal", "stat_speed"} and wave >= 12:
+                weight *= 1.35
+            score += weight * value
+        return score
+
+    def select(
+        self,
+        state: Mapping[str, Any],
+        actions: Sequence[Mapping[str, Any]],
+    ) -> RankedUiAction | None:
+        candidates = [dict(action) for action in actions if choice_data(action)]
+        if not candidates:
+            return None
+        wave = int(_number(_mapping(state.get("wave")).get("number"), 0))
+        materials = _number(_mapping(state.get("counters")).get("materials"), 0)
+        rich_shop = wave >= 8 or materials >= 300
+        ranked: list[tuple[float, dict[str, Any]]] = []
+        for action in candidates:
+            role = str(action.get("role", ""))
+            choice = choice_data(action)
+            base_score = self.score_choice(choice, wave, state)
+            if role == "buy":
+                price = max(0.0, _number(choice.get("price")))
+                if choice.get("affordable") is False or price > materials:
+                    continue
+                score = base_score - (price / max(20.0, materials)) * 8.0
+                minimum_buy_score = 0.0 if rich_shop else 4.0
+                if score < minimum_buy_score:
+                    continue
+            elif role == "take_item":
+                score = base_score + 4.0
+            elif role == "recycle_item":
+                score = -base_score
+            elif role == "upgrade_choice":
+                score = base_score
+            else:
+                continue
+            ranked.append((score, action))
+        if not ranked:
+            return None
+        score, action = max(ranked, key=lambda item: item[0])
+        return RankedUiAction(
+            action=action,
+            score=float(score),
+            source=f"ranged_smg_teacher_v{RANGED_SMG_TEACHER_VERSION}",
+        )
+
+
 @dataclass(frozen=True)
 class UiFeatureRow:
     context: np.ndarray
@@ -220,6 +407,8 @@ class UiChoiceVectorizer:
         weapons = build.get("weapons", []) if isinstance(build.get("weapons"), list) else []
         items = build.get("items", []) if isinstance(build.get("items"), list) else []
         stick_count = sum(1 for item in weapons if StickMeleeTeacher._is_stick(_mapping(item)))
+        smg_count = sum(1 for item in weapons if RangedSmgTeacher._is_smg(_mapping(item)))
+        focus_weapon_count = max(stick_count, smg_count)
         context_values = [
             np.clip(_number(wave.get("number")) / 20.0, 0.0, 2.0),
             np.clip(_number(wave.get("time_left")) / 60.0, 0.0, 1.0),
@@ -227,7 +416,7 @@ class UiChoiceVectorizer:
             1.0 if state.get("phase") != "combat" else 0.0,
             *[np.clip(_number(stats.get(key)) / 100.0, -5.0, 5.0) for key in STAT_KEYS],
             np.clip(len(weapons) / 6.0, 0.0, 2.0),
-            np.clip(stick_count / 6.0, 0.0, 2.0),
+            np.clip(focus_weapon_count / 6.0, 0.0, 2.0),
             np.clip(len(items) / 100.0, 0.0, 2.0),
             1.0,
         ]
@@ -241,7 +430,9 @@ class UiChoiceVectorizer:
             np.clip(_number(choice.get("price")) / 500.0, -1.0, 4.0),
             np.clip(_number(choice.get("base_value")) / 500.0, -1.0, 4.0),
             1.0 if choice.get("affordable", True) else 0.0,
-            1.0 if StickMeleeTeacher._is_stick(choice) else 0.0,
+            1.0
+            if StickMeleeTeacher._is_stick(choice) or RangedSmgTeacher._is_smg(choice)
+            else 0.0,
             *[1.0 if category == name else 0.0 for name in CATEGORY_NAMES],
             *[1.0 if weapon_type == value else 0.0 for value in (-1, 0, 1)],
             *[1.0 if role == name else 0.0 for name in ROLE_NAMES],

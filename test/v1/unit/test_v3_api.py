@@ -53,6 +53,7 @@ from v3.ui_automation import AutoUiController, available_actions, shop_budget_li
 from v3.ui_build_policy import (
     CHOICE_SIZE,
     CONTEXT_SIZE,
+    RangedSmgTeacher,
     StickMeleeTeacher,
     UiBuildBase,
     UiChoiceVectorizer,
@@ -978,9 +979,10 @@ def test_ui_automation_prioritizes_one_manual_merge_per_shop():
     state = dict(_state(wave=12, materials=100), phase="shop")
     state["ui"] = {"actions": [
         {"id": "/root/Shop/MergeButton", "role": "merge", "enabled": True},
-        {"id": "/root/Shop/Stick/BuyButton", "role": "buy", "enabled": True,
-         "choice": {"id": "weapon_stick_1", "base_id": "weapon_stick",
-                     "category": "weapon", "price": 20, "affordable": True}},
+        {"id": "/root/Shop/SMG/BuyButton", "role": "buy", "enabled": True,
+         "choice": {"id": "weapon_smg_1", "base_id": "weapon_smg",
+                     "category": "weapon", "weapon_type": 1,
+                     "price": 20, "affordable": True}},
     ]}
     controller = AutoUiController()
     action = controller.choose(state)
@@ -1123,6 +1125,104 @@ def test_stick_melee_teacher_prioritizes_stick_and_melee_upgrade():
         },
     )
     assert teacher.select(upgrade, [elemental, melee]).action["id"] == melee["id"]
+
+
+def test_ranged_smg_teacher_builds_a_focused_gun_plan():
+    teacher = RangedSmgTeacher()
+    shop = dict(_state(wave=4, materials=100), phase="shop")
+    smg = {
+        "id": "/root/Shop/SMG/BuyButton",
+        "role": "buy",
+        "enabled": True,
+        "choice": {
+            "id": "weapon_smg_1",
+            "base_id": "weapon_smg",
+            "category": "weapon",
+            "weapon_type": 1,
+            "price": 30,
+            "affordable": True,
+            "tier": 0,
+            "effects": [],
+        },
+    }
+    stick = dict(
+        smg,
+        id="/root/Shop/Stick/BuyButton",
+        choice={
+            "id": "weapon_stick_1",
+            "base_id": "weapon_stick",
+            "category": "weapon",
+            "weapon_type": 0,
+            "price": 10,
+            "affordable": True,
+            "tier": 0,
+            "effects": [],
+        },
+    )
+    assert teacher.select(shop, [stick, smg]).action["id"] == smg["id"]
+
+    late_shop = dict(shop, wave={"number": 10, "time_left": 30, "duration": 60})
+    late_shop["build"] = {
+        "weapons": [
+            {"id": f"weapon_smg_{index}", "base_id": "weapon_smg"}
+            for index in range(1, 5)
+        ]
+    }
+    shredder = dict(
+        smg,
+        id="/root/Shop/Shredder/BuyButton",
+        choice={
+            "id": "weapon_shredder_1",
+            "base_id": "weapon_shredder",
+            "category": "weapon",
+            "weapon_type": 1,
+            "price": 40,
+            "affordable": True,
+            "tier": 0,
+            "effects": [],
+        },
+    )
+    assert teacher.select(late_shop, [stick, shredder]).action["id"] == shredder["id"]
+
+
+def test_ranged_smg_teacher_prioritizes_ranged_stats_and_recycles_conflicts():
+    teacher = RangedSmgTeacher()
+    upgrade = dict(_state(wave=14), phase="upgrade")
+    ranged = {
+        "id": "/root/Upgrade/Ranged",
+        "role": "upgrade_choice",
+        "choice": {
+            "id": "upgrade_ranged_damage_2",
+            "base_id": "upgrade_ranged_damage",
+            "category": "upgrade",
+            "tier": 1,
+            "effects": [{"key": "stat_ranged_damage", "value": 4}],
+        },
+    }
+    melee = dict(
+        ranged,
+        id="/root/Upgrade/Melee",
+        choice={
+            "id": "upgrade_melee_damage_2",
+            "base_id": "upgrade_melee_damage",
+            "category": "upgrade",
+            "tier": 1,
+            "effects": [{"key": "stat_melee_damage", "value": 4}],
+        },
+    )
+    assert teacher.select(upgrade, [melee, ranged]).action["id"] == ranged["id"]
+
+    found = dict(_state(wave=14), phase="item_found")
+    choice = {
+        "id": "item_engineering_coil",
+        "base_id": "item_engineering_coil",
+        "category": "item",
+        "tier": 0,
+        "effects": [{"key": "stat_engineering", "value": 2}],
+    }
+    take = {"id": "/root/Item/Take", "role": "take_item", "choice": choice}
+    recycle = {"id": "/root/Item/Recycle", "role": "recycle_item", "choice": choice}
+    assert teacher.select(found, [take, recycle]).action["role"] == "recycle_item"
 
 
 def test_ui_build_base_is_small_and_has_stable_features():

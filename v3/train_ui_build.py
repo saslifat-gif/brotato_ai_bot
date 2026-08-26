@@ -12,6 +12,7 @@ import torch
 from torch.nn import functional as F
 
 from v3.ui_build_policy import (
+    RANGED_SMG_TEACHER_VERSION,
     STICK_MELEE_TEACHER_VERSION,
     UiBuildBase,
     UiChoiceVectorizer,
@@ -65,7 +66,7 @@ def main() -> int:
     parser.add_argument("--min-records", type=int, default=200)
     parser.add_argument(
         "--policy-source",
-        default=f"stick_melee_teacher_v{STICK_MELEE_TEACHER_VERSION}",
+        default=f"ranged_smg_teacher_v{RANGED_SMG_TEACHER_VERSION}",
     )
     args = parser.parse_args()
     records = load_records(args.dataset, args.policy_source)

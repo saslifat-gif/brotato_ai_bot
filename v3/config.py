@@ -32,16 +32,24 @@ def load_config() -> V3Config:
     output = Path(os.environ.get("BROTATO_V3_OUTPUT_DIR", root / "models" / "version_3"))
     if not output.is_absolute():
         output = (root / output).resolve()
+    ui_build_profile = os.environ.get("BROTATO_V3_UI_BUILD_PROFILE", "ranged_smg").strip().lower()
     ui_model_value = os.environ.get("BROTATO_V3_UI_MODEL", "").strip()
     if ui_model_value:
         ui_model_path = Path(ui_model_value).resolve()
     else:
-        trained_ui_candidate = output / "ui_build_base_v3_candidate.pt"
+        candidate_names = [f"ui_build_base_{ui_build_profile}_candidate.pt"]
+        if ui_build_profile == "stick_melee":
+            # Preserve the old experiment when that profile is explicitly selected.
+            candidate_names.append("ui_build_base_v3_candidate.pt")
+        trained_ui_candidate = next(
+            (output / name for name in candidate_names if (output / name).exists()),
+            None,
+        )
         ui_model_path = (
-            trained_ui_candidate.resolve() if trained_ui_candidate.exists() else None
+            trained_ui_candidate.resolve() if trained_ui_candidate is not None else None
         )
     ui_log_value = os.environ.get(
-        "BROTATO_V3_UI_DATASET", str(output / "ui_decisions_stick_melee_v3.jsonl")
+        "BROTATO_V3_UI_DATASET", str(output / f"ui_decisions_{ui_build_profile}_v1.jsonl")
     ).strip()
     ui_decision_log = (
         None
@@ -65,9 +73,7 @@ def load_config() -> V3Config:
         not in {"0", "false", "no", "off"},
         max_shop_buys=max(0, int(os.environ.get("BROTATO_V3_MAX_SHOP_BUYS", "4"))),
         max_shop_rerolls=max(0, int(os.environ.get("BROTATO_V3_MAX_SHOP_REROLLS", "1"))),
-        ui_build_profile=os.environ.get("BROTATO_V3_UI_BUILD_PROFILE", "stick_melee")
-        .strip()
-        .lower(),
+        ui_build_profile=ui_build_profile,
         ui_model_path=ui_model_path,
         ui_decision_log=ui_decision_log,
         safety_shield=os.environ.get("BROTATO_V3_SAFETY_SHIELD", "0").strip().lower()

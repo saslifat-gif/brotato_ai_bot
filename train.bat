@@ -2,6 +2,9 @@
 setlocal
 cd /d "%~dp0"
 set "BROTATO_V3_LATE_WAVE_FOCUS=1"
+set "BROTATO_V3_UI_BUILD_PROFILE=ranged_smg"
+set "BROTATO_V3_UI_MODEL="
+set "BROTATO_V3_UI_DATASET=%~dp0models\version_3\ui_decisions_ranged_smg_v1.jsonl"
 
 echo [train] Checking trainer port...
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 4242 -State Listen -ErrorAction SilentlyContinue) { exit 1 }"
