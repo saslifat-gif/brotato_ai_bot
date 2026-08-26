@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
@@ -218,6 +219,106 @@ def balanced_anchor_arrays(records: list[dict]) -> tuple[np.ndarray, np.ndarray,
     return features, actions, idle_fraction
 
 
+def load_raw_anchor_arrays(
+    root: Path,
+    max_records: int = 50_000,
+    stride: int = 3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert bounded, action-labelled 60 Hz snapshots into V4 anchors."""
+    empty = (
+        np.zeros((0, V4_OBSERVATION_SIZE), dtype=np.float32),
+        np.zeros((0,), dtype=np.int64),
+    )
+    if not root.exists() or max_records <= 0:
+        return empty
+    files = sorted(root.rglob("*.jsonl"), key=lambda path: path.stat().st_mtime)
+    cache_path = root / "v4_raw_anchor_cache.npz"
+    signature_parts = [f"max={max_records}", f"stride={stride}"]
+    for path in files:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        signature_parts.append(f"{path}:{stat.st_size}:{stat.st_mtime_ns}")
+    signature = "|".join(signature_parts)
+    if cache_path.is_file():
+        try:
+            cached = np.load(cache_path, allow_pickle=False)
+            if str(cached["signature"].item()) == signature:
+                print(f"[v4] raw anchor cache hit={cache_path}")
+                return cached["features"].astype(np.float32), cached["actions"].astype(np.int64)
+        except (OSError, KeyError, ValueError):
+            pass
+    vectorizer = HierarchicalCombatVectorizer()
+    features: list[np.ndarray] = []
+    actions: list[int] = []
+    previous_session = ""
+    previous_tick = -1
+    previous_action = 0
+    seen = 0
+    for path in files:
+        try:
+            handle = path.open("r", encoding="utf-8")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                if len(features) >= max_records:
+                    break
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                action = int(record.get("action", -1))
+                if not 0 <= action < 9:
+                    continue
+                session = str(record.get("session", ""))
+                tick = int(record.get("tick", -1))
+                if session != previous_session or tick <= previous_tick:
+                    vectorizer.reset()
+                    previous_action = action
+                state = {
+                    "session": session,
+                    "tick": tick,
+                    "player": record.get("player", {}),
+                    "enemies": record.get("enemies", []),
+                    "wave": {"number": int(record.get("wave", 0))},
+                    "arena": {"width": 1920.0, "height": 1080.0},
+                    "projectiles": [],
+                    "projectile_paths": {},
+                    "attack_indicators": [],
+                    "pickups": [],
+                    "combat": {},
+                }
+                observation = vectorizer.build(state, previous_action)
+                if seen % max(1, stride) == 0:
+                    features.append(observation)
+                    actions.append(action)
+                seen += 1
+                previous_session = session
+                previous_tick = tick
+                previous_action = action
+        if len(features) >= max_records:
+            break
+    if not features:
+        return empty
+    feature_array = np.asarray(features, dtype=np.float32)
+    action_array = np.asarray(actions, dtype=np.int64)
+    try:
+        temporary = cache_path.with_name(cache_path.name + ".tmp.npz")
+        np.savez_compressed(
+            temporary,
+            signature=np.asarray(signature),
+            features=feature_array,
+            actions=action_array,
+        )
+        temporary.replace(cache_path)
+        print(f"[v4] raw anchor cache saved={cache_path}")
+    except OSError as exc:
+        print(f"[v4] raw anchor cache unavailable: {exc}")
+    return feature_array, action_array
+
+
 def main() -> int:
     cfg = load_config()
     parser = argparse.ArgumentParser(description="Train V4 temporal hierarchical movement")
@@ -231,6 +332,14 @@ def main() -> int:
         type=Path,
         default=cfg.output_dir / "human_semantic_combat_v2.jsonl",
     )
+    parser.add_argument(
+        "--raw-dataset",
+        type=Path,
+        default=cfg.output_dir / "raw_records",
+        help="optional 60 Hz raw-recording library used as bounded auxiliary anchors",
+    )
+    parser.add_argument("--raw-max-records", type=int, default=50_000)
+    parser.add_argument("--raw-stride", type=int, default=3)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--timesteps", type=int, default=cfg.total_timesteps)
     parser.add_argument("--device", default="auto")
@@ -283,6 +392,16 @@ def main() -> int:
     if len(records) < 1_000:
         raise RuntimeError(f"only {len(records)} semantic records in {args.dataset}")
     anchor_features, anchor_actions, idle_fraction = balanced_anchor_arrays(records)
+    raw_features, raw_actions = load_raw_anchor_arrays(
+        args.raw_dataset,
+        max_records=max(0, int(args.raw_max_records)),
+        stride=max(1, int(args.raw_stride)),
+    )
+    if len(raw_actions):
+        raw_limit = min(len(raw_actions), max(1, len(anchor_actions) // 3))
+        raw_indices = np.linspace(0, len(raw_actions) - 1, raw_limit, dtype=np.int64)
+        anchor_features = np.concatenate((anchor_features, raw_features[raw_indices]), axis=0)
+        anchor_actions = np.concatenate((anchor_actions, raw_actions[raw_indices]), axis=0)
     env = OfflineV4Env() if args.bootstrap_only else Monitor(BrotatoApiEnv(
         cfg,
         vectorizer=HierarchicalCombatVectorizer(),
@@ -334,6 +453,7 @@ def main() -> int:
     print(
         f"[v4] observation={V4_OBSERVATION_SIZE} history={HISTORY_STEPS}x{HISTORY_FEATURES} "
         f"anchor_records={len(anchor_actions)} anchor_idle={idle_fraction:.3f} "
+        f"raw_anchor_records={len(raw_actions)} raw_dataset={args.raw_dataset} "
         f"transfer_diff={difference} state_hz={args.state_hz:g} "
         f"torch_threads={args.torch_threads}"
     )

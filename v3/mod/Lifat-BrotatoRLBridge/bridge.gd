@@ -4,6 +4,8 @@ const PROTOCOL_VERSION := 1
 const MOD_VERSION := "0.3.17"
 const HOST := "127.0.0.1"
 const PORT := 4242
+const RAW_RECORD_PORT := 4243
+const RAW_RECORD_HZ := 60.0
 const RECONNECT_MS := 1000
 const ACTION_STALE_MS := 1500
 const DEFAULT_STATE_HZ := 24.0
@@ -26,6 +28,7 @@ const BULLET_GRID_CHANNELS := 10
 const BULLET_GRID_WIDTH := 1600.0
 const BULLET_GRID_HEIGHT := 900.0
 const BULLET_PATH_HORIZONS := [0.0, 0.25, 0.5, 0.75, 1.0]
+const PROJECTILE_PATH_REFRESH_TICKS := 2
 const BULLET_ACTION_VECTORS := [
 	Vector2.ZERO,
 	Vector2(0, -1),
@@ -57,6 +60,10 @@ const BUILD_STAT_KEYS := [
 ]
 
 var _stream: StreamPeerTCP = StreamPeerTCP.new()
+var _raw_server: TCP_Server = TCP_Server.new()
+var _raw_stream: StreamPeerTCP = null
+var _raw_state_elapsed := 0.0
+var _raw_record_connected := false
 var _receive_buffer := ""
 var _last_status: int = 0
 var _next_connect_ms := 0
@@ -83,6 +90,8 @@ var _indicator_scan_seen := {}
 var _projectile_scan_nodes := 0
 var _logged_semantic_probes := {}
 var _last_indicator_scan_tick := -999999
+var _last_projectile_path_tick := -999999
+var _last_projectile_paths := {}
 var _requested_state_hz := 24.0
 var _property_name_cache := {}
 var _training_paused := false
@@ -95,10 +104,20 @@ const BRIDGE_RESTART_WAVE_ACTION := "bridge://restart_wave"
 func _ready() -> void:
 	set_pause_mode(PAUSE_MODE_PROCESS)
 	_next_connect_ms = 0
+	var raw_error := _raw_server.listen(RAW_RECORD_PORT, HOST)
+	if raw_error == OK:
+		print("[BrotatoRLBridge] raw recorder listening on %s:%d" % [HOST, RAW_RECORD_PORT])
+	else:
+		print("[BrotatoRLBridge] raw recorder disabled; listen error=%d" % raw_error)
 	print("[BrotatoRLBridge] ready; waiting for trainer at %s:%d" % [HOST, PORT])
 
 
 func _process(delta: float) -> void:
+	_poll_raw_recorder()
+	_raw_state_elapsed += delta
+	if _raw_state_elapsed >= 1.0 / RAW_RECORD_HZ:
+		_raw_state_elapsed = fmod(_raw_state_elapsed, 1.0 / RAW_RECORD_HZ)
+		_publish_raw_state()
 	_poll_connection()
 	if not _connected:
 		return
@@ -110,7 +129,6 @@ func _process(delta: float) -> void:
 	if _state_elapsed >= interval:
 		_state_elapsed = max(0.0, _state_elapsed - interval)
 		_publish_state()
-
 
 func _state_interval_sec() -> float:
 	# Respect the trainer's requested control rate at every wave. The previous
@@ -147,6 +165,22 @@ func _poll_connection() -> void:
 	var error := _stream.connect_to_host(HOST, PORT)
 	if error != OK:
 		_connected = false
+
+
+func _poll_raw_recorder() -> void:
+	if _raw_server.is_connection_available():
+		if _raw_record_connected and _raw_stream != null:
+			_raw_stream.disconnect_from_host()
+		_raw_stream = _raw_server.take_connection()
+		_raw_record_connected = _raw_stream != null
+		if _raw_record_connected:
+			print("[BrotatoRLBridge] raw recorder connected")
+	if not _raw_record_connected or _raw_stream == null:
+		return
+	if _raw_stream.get_status() != _raw_stream.STATUS_CONNECTED:
+		_raw_record_connected = false
+		_raw_stream = null
+		print("[BrotatoRLBridge] raw recorder disconnected")
 
 
 func _read_messages() -> void:
@@ -351,6 +385,50 @@ func _publish_state() -> void:
 	_send(state)
 
 
+func _publish_raw_state() -> void:
+	if not _raw_record_connected or _raw_stream == null:
+		return
+	var payload := _build_raw_state()
+	payload["protocol"] = PROTOCOL_VERSION
+	var data := (to_json(payload) + "\n").to_utf8()
+	if _raw_stream.put_data(data) != OK:
+		_raw_record_connected = false
+		_raw_stream = null
+
+
+func _build_raw_state() -> Dictionary:
+	var root := get_tree().get_root()
+	var main = root.get_node_or_null("Main")
+	var player = _find_player(root, main)
+	var enemies := []
+	var spawner = main.get_node_or_null("EntitySpawner") if main != null else null
+	var spawned = _property(spawner, "enemies", [])
+	if typeof(spawned) == TYPE_ARRAY:
+		for enemy in spawned:
+			if enemies.size() >= MAX_ENEMIES or not is_instance_valid(enemy):
+				break
+			enemies.append({
+				"runtime_id": str(enemy.get_instance_id()),
+				"position": _vector_json(_first_property(enemy, ["global_position", "position"], Vector2.ZERO)),
+				"velocity": _vector_json(_property(enemy, "linear_velocity", Vector2.ZERO)),
+				"boss": bool(_property(enemy, "is_boss", false))
+			})
+	var player_state := _player_state(player)
+	var wave_number := int(_first_property(root.get_node_or_null("RunData"), ["current_wave", "wave"], 0))
+	return {
+		"type": "raw_state",
+		"session": _session_id,
+		"tick": _tick,
+		"published_at_ms": OS.get_ticks_msec(),
+		"action": _latest_action,
+		"action_sequence": _last_sequence,
+		"phase": str(get_tree().current_scene.name) if get_tree().current_scene != null else "",
+		"wave": wave_number,
+		"player": player_state,
+		"enemies": enemies
+	}
+
+
 func _resume_game() -> void:
 	get_tree().set_pause(false)
 
@@ -451,13 +529,14 @@ func _build_state() -> Dictionary:
 	else:
 		_last_attack_indicators = []
 		_last_indicator_scan_tick = -999999
+		_last_projectile_paths = {}
+		_last_projectile_path_tick = -999999
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
 	if _reset_kills_on_combat and phase == "combat":
 		_kills_this_wave = 0
 		_reset_kills_on_combat = false
-
 	return {
 		"type": "state",
 		"session": _session_id,
@@ -486,7 +565,7 @@ func _build_state() -> Dictionary:
 			"enemy": _full_arena_enemy_grid(spawned_enemies, arena_size, player_state)
 		},
 		"projectiles": projectiles,
-		"projectile_paths": _projectile_path_state(
+		"projectile_paths": _cached_projectile_path_state(
 			projectile_nodes,
 			spawned_enemies,
 			player_state,
@@ -1341,6 +1420,25 @@ func _append_projectile(
 		)),
 		"kind": "projectile"
 	})
+
+
+func _cached_projectile_path_state(
+	projectile_nodes: Array,
+	spawned_enemies,
+	player_state: Dictionary,
+	combat_state: Dictionary,
+	arena_size: Vector2
+) -> Dictionary:
+	if _tick - _last_projectile_path_tick >= PROJECTILE_PATH_REFRESH_TICKS:
+		_last_projectile_paths = _projectile_path_state(
+			projectile_nodes,
+			spawned_enemies,
+			player_state,
+			combat_state,
+			arena_size
+		)
+		_last_projectile_path_tick = _tick
+	return _last_projectile_paths
 
 
 func _projectile_path_state(
