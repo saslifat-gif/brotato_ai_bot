@@ -1660,7 +1660,7 @@ func _projectile_path_state(
 		var relative: Vector2 = position - player_position
 		for horizon_index in range(BULLET_PATH_HORIZONS.size()):
 			var horizon := float(BULLET_PATH_HORIZONS[horizon_index])
-			var predicted_relative := (
+			var predicted_relative: Vector2 = (
 				relative
 				+ velocity * horizon
 				+ acceleration * 0.5 * horizon * horizon
@@ -1817,7 +1817,7 @@ func _swept_projectile_action_risk(
 	for horizon_index in range(1, BULLET_PATH_HORIZONS.size()):
 		var horizon := float(BULLET_PATH_HORIZONS[horizon_index])
 		var relative_velocity := velocity - player_velocity
-		var current_relative := (
+		var current_relative: Vector2 = (
 			relative
 			+ relative_velocity * horizon
 			+ acceleration * 0.5 * horizon * horizon
