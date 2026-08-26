@@ -149,6 +149,48 @@ def _nearest(items: list[Mapping[str, Any]], px: float, py: float):
     return sorted(items, key=lambda item: sum(v * v for v in _relative(item, px, py)))
 
 
+def _enemy_is_boss(enemy: Mapping[str, Any]) -> bool:
+    token = f"{enemy.get('id', '')} {enemy.get('type', '')} {enemy.get('name', '')}".lower()
+    return bool(enemy.get("is_boss")) or any(
+        term in token for term in ("boss", "summoner", "\u53ec\u5524")
+    )
+
+
+def _enemy_runtime_index(enemies: list[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(enemy.get("runtime_id")): enemy
+        for enemy in enemies
+        if str(enemy.get("runtime_id", ""))
+    }
+
+
+def _owner_threat_code(
+    attack: Mapping[str, Any],
+    enemies_by_runtime: Mapping[str, Mapping[str, Any]],
+) -> float:
+    """Encode an attack's observed owner without hashing unstable node names."""
+
+    owner = enemies_by_runtime.get(str(attack.get("owner_runtime_id", "")))
+    if owner is None:
+        return 0.0
+    return 1.0 if _enemy_is_boss(owner) else 0.5
+
+
+_ATTACK_METHOD_EMBEDDINGS = {
+    "contact": (-1.0, 0.0),
+    "charge": (-0.5, 0.8660254),
+    "summon": (0.5, 0.8660254),
+    "projectile": (1.0, 0.0),
+    "area": (0.0, -1.0),
+    "unknown": (0.0, 0.0),
+}
+
+
+def _attack_method_embedding(enemy: Mapping[str, Any]) -> tuple[float, float]:
+    method = str(enemy.get("attack_method", "")).strip().lower()
+    return _ATTACK_METHOD_EMBEDDINGS.get(method, _ATTACK_METHOD_EMBEDDINGS["unknown"])
+
+
 def projectile_time_to_impact(
     projectile: Mapping[str, Any],
     player_position: tuple[float, float],
@@ -215,30 +257,35 @@ class CombatSafetyShield:
         if edge_distance < edge_margin:
             risk += ((edge_margin - edge_distance) / edge_margin) ** 2 * 4.0
 
-        for enemy in _nearest(_items(state.get("enemies")), px, py)[:24]:
+        enemies = _items(state.get("enemies"))
+        enemies_by_runtime = _enemy_runtime_index(enemies)
+        for enemy in _nearest(enemies, px, py)[:24]:
             ex, ey = _xy(enemy.get("position"))
             evx, evy = _xy(enemy.get("velocity"))
             predicted_x = ex + evx * 0.45
             predicted_y = ey + evy * 0.45
             distance = math.hypot(predicted_x - future_x, predicted_y - future_y)
             radius = max(25.0, _number(enemy.get("radius"), 40.0))
-            danger = radius + (210.0 if enemy.get("is_charging") else 100.0)
-            if enemy.get("is_boss"):
+            attack_method = str(enemy.get("attack_method", "unknown")).lower()
+            charging = bool(enemy.get("is_charging")) or attack_method == "charge"
+            method_buffer = {
+                "charge": 240.0,
+                "area": 190.0,
+                "contact": 120.0,
+                "summon": 110.0,
+                "projectile": 90.0,
+            }.get(attack_method, 100.0)
+            danger = radius + method_buffer
+            if _enemy_is_boss(enemy):
                 danger += 60.0
             if distance < danger:
                 risk += ((danger - distance) / danger) ** 2 * (
-                    5.0 if enemy.get("is_charging") else 2.0
+                    6.0 if charging else 2.0
                 )
 
-        enemies = _items(state.get("enemies"))
         wave_data = _mapping(state.get("wave"))
         wave_number = int(_number(wave_data.get("number"), 0.0))
-        boss_present = any(
-            bool(enemy.get("is_boss"))
-            or any(term in f"{enemy.get('id', '')} {enemy.get('type', '')} {enemy.get('name', '')}".lower()
-                   for term in ("boss", "summoner", "召唤"))
-            for enemy in enemies
-        )
+        boss_present = any(_enemy_is_boss(enemy) for enemy in enemies)
         # Brotato's final wave is the boss encounter.  Some bridge versions
         # omit the boss flag, so active hazards on wave 20 must still enable
         # the boss-spacing and projectile-avoidance behavior.
@@ -252,8 +299,7 @@ class CombatSafetyShield:
             # than the normal crowd estimate suggests.
             player_radius = max(18.0, _number(player.get("radius"), 28.0))
             for enemy in enemies:
-                token = f"{enemy.get('id', '')} {enemy.get('type', '')} {enemy.get('name', '')}".lower()
-                if not (enemy.get("is_boss") or any(term in token for term in ("boss", "summoner", "召唤"))):
+                if not _enemy_is_boss(enemy):
                     continue
                 ex, ey = _xy(enemy.get("position"))
                 boss_distance = math.hypot(ex - future_x, ey - future_y)
@@ -263,7 +309,6 @@ class CombatSafetyShield:
                 separation = max(480.0, boss_radius + player_radius + 300.0)
                 if boss_distance < separation:
                     risk += ((separation - boss_distance) / separation) ** 2 * 10.0
-                break
 
         for projectile in _nearest(_items(state.get("projectiles")), px, py)[:32]:
             tti, miss_distance = projectile_time_to_impact(
@@ -273,10 +318,15 @@ class CombatSafetyShield:
             qvx, qvy = _xy(projectile.get("velocity"))
             stationary = qvx * qvx + qvy * qvy < 100.0
             danger = radius * (2.3 if stationary else 1.5)
+            owner_is_boss = _owner_threat_code(projectile, enemies_by_runtime) >= 1.0
             if miss_distance < danger:
                 urgency = 1.0 if stationary else 1.0 - min(1.0, tti / 0.8)
                 risk += ((danger - miss_distance) / danger) ** 2 * (
-                    (6.0 + 8.0 * urgency) if boss_present else (3.0 + 5.0 * urgency)
+                    (7.0 + 10.0 * urgency)
+                    if owner_is_boss
+                    else (6.0 + 8.0 * urgency)
+                    if boss_present
+                    else (3.0 + 5.0 * urgency)
                 )
 
         # Boss telegraphs are stationary warning zones rather than moving
@@ -284,7 +334,8 @@ class CombatSafetyShield:
         # melee policy cannot keep farming loot inside overlapping red circles.
         for indicator in _nearest(_items(state.get("attack_indicators")), px, py)[:32]:
             token = f"{indicator.get('id', '')} {indicator.get('type', '')}".lower()
-            if not boss_present and not any(term in token for term in ("aoe", "warning", "circle", "boss")):
+            owner_is_boss = _owner_threat_code(indicator, enemies_by_runtime) >= 1.0
+            if not owner_is_boss and not boss_present and not any(term in token for term in ("aoe", "warning", "circle", "boss")):
                 continue
             ix, iy = _xy(indicator.get("position"))
             half_width = max(35.0, _number(indicator.get("width"), 80.0) * 0.5) + 45.0
@@ -295,7 +346,7 @@ class CombatSafetyShield:
             time_to_activate = max(0.0, _number(indicator.get("time_to_activate"), 5.0))
             imminent = bool(indicator.get("active")) or time_to_activate <= 1.25
             if inside:
-                risk += 14.0 if imminent else 7.0
+                risk += (18.0 if imminent else 9.0) if owner_is_boss else (14.0 if imminent else 7.0)
             else:
                 gap_x = max(0.0, dx - half_width)
                 gap_y = max(0.0, dy - half_height)
@@ -558,6 +609,7 @@ class RichCombatVectorizer:
         enemies = _items(state.get("enemies"))
         projectiles = _items(state.get("projectiles"))
         pickups = _items(state.get("pickups"))
+        enemies_by_runtime = _enemy_runtime_index(enemies)
         output[:16] = np.asarray([
             np.clip(px / width * 2.0 - 1.0, -1.0, 1.0),
             np.clip(py / height * 2.0 - 1.0, -1.0, 1.0),
@@ -610,11 +662,13 @@ class RichCombatVectorizer:
             vx, vy = _xy(projectile.get("velocity"))
             tti, miss = projectile_time_to_impact(projectile, (px, py))
             radius = _number(projectile.get("radius"), 12.0)
+            owner_code = _owner_threat_code(projectile, enemies_by_runtime)
             output[cursor:cursor + 8] = (
                 np.clip(dx / width, -1.0, 1.0), np.clip(dy / height, -1.0, 1.0),
                 np.clip(vx / 1000.0, -1.0, 1.0), np.clip(vy / 1000.0, -1.0, 1.0),
                 np.clip(radius / 300.0, 0.0, 1.0), np.clip(tti / 0.8, 0.0, 1.0),
-                np.clip(miss / 500.0, 0.0, 1.0), 1.0 if vx * vx + vy * vy < 100.0 else 0.0,
+                np.clip(miss / 500.0, 0.0, 1.0),
+                owner_code if owner_code > 0.0 else (-1.0 if vx * vx + vy * vy < 100.0 else 0.0),
             )
             cursor += 8
 
@@ -660,8 +714,7 @@ class SemanticCombatVectorizer:
 
         for enemy in _nearest(_items(state.get("enemies")), px, py)[:RICH_MAX_ENEMIES]:
             identity = _hash_pair(enemy.get("id"), enemy.get("type"))
-            attack_hash = _hash_pair(enemy.get("attack_type"))[0]
-            movement_hash = _hash_pair(enemy.get("movement_type"))[0]
+            attack_method = _attack_method_embedding(enemy)
             output[cursor:cursor + 10] = (
                 identity[0], identity[1],
                 np.clip(_number(enemy.get("width"), 80.0) / width, 0.0, 1.0),
@@ -670,8 +723,8 @@ class SemanticCombatVectorizer:
                 np.clip(_number(enemy.get("attack_cooldown_remaining")) / 5.0, 0.0, 1.0),
                 1.0 if enemy.get("is_attacking") else 0.0,
                 1.0 if enemy.get("is_elite") else 0.0,
-                attack_hash,
-                movement_hash,
+                attack_method[0],
+                attack_method[1],
             )
             cursor += 10
 
@@ -718,13 +771,15 @@ class SemanticCombatVectorizer:
             + RICH_MAX_PICKUPS * 11
             + SEMANTIC_MAX_WEAPONS * 10
         )
+        enemies = _items(state.get("enemies"))
+        enemies_by_runtime = _enemy_runtime_index(enemies)
         indicators = _nearest(_items(state.get("attack_indicators")), px, py)
         for indicator in indicators[:SEMANTIC_MAX_INDICATORS]:
-            token_hash = _hash_pair(indicator.get("id"), indicator.get("type"))[0]
+            owner_code = _owner_threat_code(indicator, enemies_by_runtime)
             dx, dy = _relative(indicator, px, py)
             direction_x, direction_y = _xy(indicator.get("direction"))
             output[cursor:cursor + 10] = (
-                token_hash,
+                owner_code,
                 np.clip(dx / width, -1.0, 1.0),
                 np.clip(dy / height, -1.0, 1.0),
                 np.clip(direction_x, -1.0, 1.0),

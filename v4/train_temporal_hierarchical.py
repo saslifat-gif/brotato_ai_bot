@@ -236,7 +236,18 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--state-hz", type=float, default=20.0)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
-    parser.add_argument("--ent-coef", type=float, default=0.0002)
+    parser.add_argument(
+        "--ent-coef",
+        type=float,
+        default=0.001,
+        help="entropy regularization; raised for boss-wave exploration",
+    )
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=1,
+        help="CPU threads used by PyTorch inference; one avoids small-model thread overhead",
+    )
     parser.add_argument("--bc-coefficient", type=float, default=0.10)
     parser.add_argument("--bc-batches", type=int, default=2)
     parser.add_argument(
@@ -253,6 +264,14 @@ def main() -> int:
     args = parser.parse_args()
     if not 8.0 <= args.state_hz <= 24.0:
         parser.error("--state-hz must be between 8 and 24")
+    if args.torch_threads < 1:
+        parser.error("--torch-threads must be at least 1")
+    torch.set_num_threads(int(args.torch_threads))
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        # PyTorch only permits this setting before its first parallel operation.
+        pass
     run_name = args.run_name or f"V4TemporalPPO_{datetime.now():%Y%m%d_%H%M%S}"
 
     # Keep the hard safety shield on for live training.  The old trainer
@@ -315,7 +334,8 @@ def main() -> int:
     print(
         f"[v4] observation={V4_OBSERVATION_SIZE} history={HISTORY_STEPS}x{HISTORY_FEATURES} "
         f"anchor_records={len(anchor_actions)} anchor_idle={idle_fraction:.3f} "
-        f"transfer_diff={difference} state_hz={args.state_hz:g}"
+        f"transfer_diff={difference} state_hz={args.state_hz:g} "
+        f"torch_threads={args.torch_threads}"
     )
     if args.bootstrap_only:
         env.close()

@@ -84,6 +84,26 @@ class BrotatoApiEnv(gym.Env):
             decision_log_path=cfg.ui_decision_log,
         )
         self.training_paused = False
+        self._last_published_ms: Optional[int] = None
+        self._effective_state_hz = 0.0
+
+    def _observe_state_rate(self, state: Mapping[str, Any]) -> float:
+        try:
+            published_ms = int(state.get("published_at_ms", -1))
+        except (TypeError, ValueError):
+            published_ms = -1
+        if published_ms < 0:
+            return self._effective_state_hz
+        previous = self._last_published_ms
+        self._last_published_ms = published_ms
+        if previous is None or published_ms <= previous:
+            return self._effective_state_hz
+        instantaneous = 1000.0 / max(1.0, float(published_ms - previous))
+        if self._effective_state_hz <= 0.0:
+            self._effective_state_hz = instantaneous
+        else:
+            self._effective_state_hz = 0.90 * self._effective_state_hz + 0.10 * instantaneous
+        return self._effective_state_hz
 
     def set_training_paused(self, paused: bool) -> None:
         """Freeze game simulation while PPO updates its network weights."""
@@ -146,6 +166,9 @@ class BrotatoApiEnv(gym.Env):
                 combat_only=True,
             )
         self.last_state = state
+        self._last_published_ms = None
+        self._effective_state_hz = 0.0
+        self._observe_state_rate(state)
         self.previous_action = int(MoveAction.IDLE)
         self.reward_engine.reset(state)
         reset_vectorizer = getattr(self.vectorizer, "reset", None)
@@ -158,6 +181,7 @@ class BrotatoApiEnv(gym.Env):
             "wave": state.get("wave", {}).get("number", 0),
             "ui_sent": ui_sent,
             "ui_confirmed": ui_confirmed,
+            "effective_state_hz": self._effective_state_hz,
         }
 
     def step(self, action):
@@ -240,6 +264,7 @@ class BrotatoApiEnv(gym.Env):
             after_tick=previous_tick,
             minimum_sequence=self.sequence,
         )
+        effective_state_hz = self._observe_state_rate(state)
         movement = movement_transition_metrics(
             previous_state,
             state,
@@ -381,6 +406,7 @@ class BrotatoApiEnv(gym.Env):
             "selected_path_risk_penalty": selected_path_risk,
             "late_wave_focus": late_focus,
             "late_threat_scale": threat_scale,
+            "effective_state_hz": effective_state_hz,
             "movement_distance": float(movement["distance"]),
             "movement_efficiency": float(movement["efficiency"]),
             "movement_reversal": bool(movement["reversal"]),

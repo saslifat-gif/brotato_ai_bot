@@ -227,6 +227,10 @@ class CombatTensorboardCallback(BaseCallback):
                 float(info.get("selected_path_risk_penalty", 0.0)),
             )
             self.logger.record_mean(
+                "control/effective_state_hz",
+                float(info.get("effective_state_hz", 0.0)),
+            )
+            self.logger.record_mean(
                 "movement/distance",
                 float(info.get("movement_distance", 0.0)),
             )

@@ -1,14 +1,12 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.16"
+const MOD_VERSION := "0.3.17"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RECONNECT_MS := 1000
 const ACTION_STALE_MS := 1500
-const EARLY_STATE_INTERVAL_SEC := 1.0 / 24.0
-const MID_STATE_INTERVAL_SEC := 1.0 / 16.0
-const LATE_STATE_INTERVAL_SEC := 1.0 / 12.0
+const DEFAULT_STATE_HZ := 24.0
 # The rich policy consumes at most 20 enemies, 20 projectiles and 8 pickups.
 # Keep generous headroom without reflecting and serializing hundreds of nodes
 # on Godot's main thread every frame in dense late waves.
@@ -108,21 +106,17 @@ func _process(delta: float) -> void:
 	if _training_paused:
 		return
 	_state_elapsed += delta
-	if _state_elapsed >= _state_interval_sec():
-		_state_elapsed = 0.0
+	var interval := _state_interval_sec()
+	if _state_elapsed >= interval:
+		_state_elapsed = max(0.0, _state_elapsed - interval)
 		_publish_state()
 
 
 func _state_interval_sec() -> float:
-	# Combat actions remain active between observations. Human demonstrations are
-	# sampled at 8 Hz, so lowering only the structured state rate in dense waves
-	# preserves control while leaving substantially more time for the game.
-	var adaptive_interval := EARLY_STATE_INTERVAL_SEC
-	if _last_wave_number >= 10:
-		adaptive_interval = LATE_STATE_INTERVAL_SEC
-	elif _last_wave_number >= 6:
-		adaptive_interval = MID_STATE_INTERVAL_SEC
-	return max(adaptive_interval, 1.0 / max(4.0, _requested_state_hz))
+	# Respect the trainer's requested control rate at every wave. The previous
+	# adaptive cap silently reduced late-wave control to 12 Hz exactly when boss
+	# projectiles require the fastest reaction loop.
+	return 1.0 / max(4.0, _requested_state_hz)
 
 
 func _poll_connection() -> void:
@@ -468,6 +462,7 @@ func _build_state() -> Dictionary:
 		"type": "state",
 		"session": _session_id,
 		"tick": _tick,
+		"published_at_ms": OS.get_ticks_msec(),
 		"sequence": _last_sequence,
 		"phase": phase,
 		"scene": scene_name,

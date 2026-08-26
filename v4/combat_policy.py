@@ -11,6 +11,9 @@ from v3.combat_policy import (
     ACTION_VECTORS,
     BULLET_HELL_OBSERVATION_SIZE,
     BulletHellCombatVectorizer,
+    _enemy_is_boss,
+    _enemy_runtime_index,
+    _owner_threat_code,
 )
 from v3.protocol import MoveAction
 
@@ -58,6 +61,82 @@ def _risk_vector(paths: Mapping[str, Any], key: str) -> np.ndarray:
 
 def _maximum(values: np.ndarray) -> float:
     return float(np.max(values)) if values.size else 0.0
+
+
+def _items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _boss_escape_risk(
+    state: Mapping[str, Any],
+    combined: np.ndarray,
+) -> tuple[np.ndarray, bool, float]:
+    """Add boss bodies and boss-owned telegraphs to per-action path risk."""
+
+    player = _mapping(state.get("player"))
+    px, py = _xy(player.get("position"))
+    combat = _mapping(state.get("combat"))
+    speed = max(150.0, _number(combat.get("move_speed"), 300.0))
+    player_radius = max(
+        18.0,
+        _number(player.get("radius"), 28.0),
+        _number(player.get("width"), 0.0) * 0.5,
+        _number(player.get("height"), 0.0) * 0.5,
+    )
+    enemies = _items(state.get("enemies"))
+    enemies_by_runtime = _enemy_runtime_index(enemies)
+    bosses = [enemy for enemy in enemies if _enemy_is_boss(enemy)]
+    indicators = _items(state.get("attack_indicators"))
+    projectiles = _items(state.get("projectiles"))
+    boss_owned_attacks = sum(
+        _owner_threat_code(attack, enemies_by_runtime) >= 1.0
+        for attack in (*indicators, *projectiles)
+    )
+    wave = int(_number(_mapping(state.get("wave")).get("number"), 0.0))
+    boss_mode = bool(bosses) or (wave >= 20 and bool(indicators or projectiles))
+    if not boss_mode:
+        return combined, False, 0.0
+
+    risks = np.asarray(combined, dtype=np.float32).copy()
+    proximity = 0.0
+    for action, movement in ACTION_VECTORS.items():
+        future_x = px + movement[0] * speed * 0.55
+        future_y = py + movement[1] * speed * 0.55
+        action_risk = float(risks[int(action)])
+        for boss in bosses:
+            bx, by = _xy(boss.get("position"))
+            boss_radius = max(
+                45.0,
+                _number(boss.get("radius"), 55.0),
+                _number(boss.get("width"), 0.0) * 0.5,
+                _number(boss.get("height"), 0.0) * 0.5,
+            )
+            method = str(boss.get("attack_method", "unknown")).lower()
+            method_buffer = 360.0 if method in {"charge", "area"} else 300.0
+            separation = boss_radius + player_radius + method_buffer
+            distance = np.hypot(bx - future_x, by - future_y)
+            if distance < separation:
+                body_risk = float((separation - distance) / separation)
+                action_risk += body_risk
+                proximity = max(proximity, body_risk)
+        for indicator in indicators:
+            if _owner_threat_code(indicator, enemies_by_runtime) < 1.0:
+                continue
+            ix, iy = _xy(indicator.get("position"))
+            half_width = max(35.0, _number(indicator.get("width"), 80.0) * 0.5) + player_radius
+            half_height = max(35.0, _number(indicator.get("height"), 80.0) * 0.5) + player_radius
+            dx = abs(future_x - ix)
+            dy = abs(future_y - iy)
+            if dx <= half_width and dy <= half_height:
+                imminent = bool(indicator.get("active")) or _number(
+                    indicator.get("time_to_activate"), 5.0
+                ) <= 1.25
+                action_risk += 1.0 if imminent else 0.55
+        risks[int(action)] = np.clip(action_risk, 0.0, 1.0)
+    owner_urgency = min(1.0, boss_owned_attacks / 6.0)
+    return risks, True, max(proximity, owner_urgency)
 
 
 class HierarchicalCombatVectorizer:
@@ -155,6 +234,7 @@ class HierarchicalCombatVectorizer:
         enemy_risk = _risk_vector(paths, "enemy_action_risk")
         boundary_risk = _risk_vector(paths, "boundary_action_risk")
         combined = np.clip(projectile_risk + enemy_risk + boundary_risk, 0.0, 1.0)
+        combined, boss_mode, boss_urgency = _boss_escape_risk(state, combined)
         threat = _maximum(combined)
         pickups = state.get("pickups", [])
         healing = [
@@ -163,11 +243,11 @@ class HierarchicalCombatVectorizer:
         ] if isinstance(pickups, (list, tuple)) else []
         target = None
         urgency = 0.0
-        if threat >= 0.35:
+        if boss_mode or threat >= 0.35:
             objective = OBJECTIVE_EVADE
             safest = int(np.argmin(combined))
             output[-3:-1] = ACTION_VECTORS[MoveAction(safest)]
-            urgency = threat
+            urgency = max(threat, boss_urgency)
         elif health < 0.65 and healing:
             objective = OBJECTIVE_HEAL
             target = self._nearest(healing, px, py)

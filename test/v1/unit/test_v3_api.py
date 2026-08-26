@@ -190,6 +190,7 @@ def test_semantic_vector_and_model_preserve_old_actor_with_new_api_fields(tmp_pa
         "max_health": 30,
         "radius": 70,
         "id": "enemy_charger",
+        "runtime_id": "boss-1",
         "type": "charger",
         "width": 140,
         "height": 90,
@@ -197,8 +198,17 @@ def test_semantic_vector_and_model_preserve_old_actor_with_new_api_fields(tmp_pa
         "attack_cooldown_remaining": 0.3,
         "is_attacking": True,
         "is_elite": True,
+        "is_boss": True,
         "attack_type": "charge",
+        "attack_method": "charge",
         "movement_type": "follow_player",
+    }]
+    state["projectiles"] = [{
+        "id": "boss_bullet",
+        "owner_runtime_id": "boss-1",
+        "position": {"x": 650, "y": 300},
+        "velocity": {"x": -200, "y": 0},
+        "radius": 12,
     }]
     state["pickups"] = [{
         "id": "fruit",
@@ -234,12 +244,21 @@ def test_semantic_vector_and_model_preserve_old_actor_with_new_api_fields(tmp_pa
         "time_to_activate": 0.5,
         "damage": 15,
         "active": False,
+        "owner_runtime_id": "boss-1",
     }]
     vectorizer = SemanticCombatVectorizer()
     features = vectorizer.build(state, previous_action=4)
     assert features.shape == (SEMANTIC_OBSERVATION_SIZE,)
     assert np.isfinite(features).all()
     assert np.count_nonzero(features[RICH_OBSERVATION_SIZE:]) > 20
+    rich_projectile_owner = 32 + 20 * 8 + 7
+    assert features[rich_projectile_owner] == pytest.approx(1.0)
+    semantic_enemy = RICH_OBSERVATION_SIZE
+    assert features[semantic_enemy + 8:semantic_enemy + 10] == pytest.approx(
+        [-0.5, 0.8660254]
+    )
+    semantic_indicator = RICH_OBSERVATION_SIZE + 20 * 10 + 8 * 11 + 6 * 10
+    assert features[semantic_indicator] == pytest.approx(1.0)
     old = CombatPolicyBase()
     semantic = SemanticCombatPolicyBase(old)
     assert semantic.parameter_count < 100_000
@@ -485,6 +504,19 @@ def test_movement_transition_detects_reversal_and_failed_displacement():
     assert moving["efficiency"] == pytest.approx(1.0)
 
 
+def test_environment_reports_bridge_control_rate_separately_from_training_fps():
+    pytest.importorskip("gymnasium")
+    from v3.env.brotato_api_env import BrotatoApiEnv
+
+    env = object.__new__(BrotatoApiEnv)
+    env._last_published_ms = None
+    env._effective_state_hz = 0.0
+    assert env._observe_state_rate({"published_at_ms": 1_000}) == 0.0
+    assert env._observe_state_rate({"published_at_ms": 1_042}) == pytest.approx(
+        1000.0 / 42.0
+    )
+
+
 def test_bullet_hell_ppo_transfer_preserves_trained_full_arena_logits():
     gym = pytest.importorskip("gymnasium")
     pytest.importorskip("stable_baselines3")
@@ -631,6 +663,40 @@ def test_safety_shield_honors_advertised_boundary_path_risk():
     assert decision.applied_risk < decision.requested_risk
 
 
+def test_safety_shield_weights_boss_owned_attacks_and_all_boss_hitboxes():
+    state = _state(wave=20)
+    state["player"].update({"radius": 28, "width": 56, "height": 56})
+    state["enemies"] = [
+        {
+            "runtime_id": "left-boss",
+            "id": "boss_left",
+            "is_boss": True,
+            "attack_method": "area",
+            "position": {"x": 250, "y": 300},
+            "velocity": {"x": 0, "y": 0},
+            "radius": 80,
+        },
+        {
+            "runtime_id": "right-boss",
+            "id": "boss_right",
+            "is_boss": True,
+            "attack_method": "projectile",
+            "position": {"x": 780, "y": 300},
+            "velocity": {"x": 0, "y": 0},
+            "radius": 80,
+        },
+    ]
+    state["attack_indicators"] = [{
+        "owner_runtime_id": "right-boss",
+        "position": {"x": 650, "y": 300},
+        "width": 160,
+        "height": 160,
+        "time_to_activate": 0.2,
+    }]
+    shield = CombatSafetyShield()
+    assert shield.risk(state, 4) > shield.risk(state, 1)
+
+
 def test_enemy_contact_guard_vetoes_only_high_confidence_contact_path():
     state = _state()
     state["projectile_paths"] = {
@@ -710,13 +776,13 @@ def test_reward_components_make_outcomes_dominate_shaping():
     engine = ApiRewardEngine()
     engine.reset(_state(wave=17))
     death = engine.step(dict(_state(wave=17), dead=True))
-    assert death <= -160.0
-    assert engine.last_components["death"] < -160.0
+    assert death <= -60.0
+    assert engine.last_components["death"] < -60.0
 
     engine.reset(_state(wave=19))
     victory = engine.step(dict(_state(wave=19), victory=True, phase="victory"))
-    assert victory >= 300.0
-    assert engine.last_components["victory"] == pytest.approx(300.0)
+    assert victory >= 180.0
+    assert engine.last_components["victory"] == pytest.approx(180.0)
 
     engine.reset(_state())
     shaping = engine.step(_state(materials=5, kills=4))
@@ -784,9 +850,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "RunData.resume_from_state(restored_state)" in bridge
     assert "get_tree().change_scene(MenuData.shop_scene)" in bridge
     assert '"realtime_control"' in bridge
-    assert "const EARLY_STATE_INTERVAL_SEC := 1.0 / 24.0" in bridge
-    assert "const MID_STATE_INTERVAL_SEC := 1.0 / 16.0" in bridge
-    assert "const LATE_STATE_INTERVAL_SEC := 1.0 / 12.0" in bridge
+    assert "const DEFAULT_STATE_HZ := 24.0" in bridge
+    assert "return 1.0 / max(4.0, _requested_state_hz)" in bridge
+    assert '"published_at_ms": OS.get_ticks_msec()' in bridge
     assert "const MAX_ENEMIES := 64" in bridge
     assert "const MAX_PROJECTILES := 64" in bridge
     assert "const MAX_PICKUPS := 32" in bridge
@@ -1508,7 +1574,7 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.16.zip"
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.17.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())
@@ -1588,6 +1654,46 @@ def test_v4_vector_preserves_v3_prefix_and_records_real_transition():
     macro = second[history_start + HISTORY_SIZE:]
     assert macro[OBJECTIVE_EVADE] == pytest.approx(1.0)
     assert macro[-1] == pytest.approx(0.9)
+
+
+def test_v4_macro_uses_boss_hitbox_and_owned_telegraph_for_escape():
+    from v4.combat_policy import (
+        HISTORY_SIZE,
+        OBJECTIVE_EVADE,
+        HierarchicalCombatVectorizer,
+    )
+
+    state = _state(wave=20)
+    state["session"] = "boss-run"
+    state["player"].update({"radius": 28, "width": 56, "height": 56})
+    state["combat"] = {"move_speed": 300}
+    state["enemies"] = [{
+        "runtime_id": "boss-1",
+        "id": "boss_final",
+        "is_boss": True,
+        "attack_method": "area",
+        "position": {"x": 680, "y": 300},
+        "radius": 90,
+        "width": 180,
+        "height": 180,
+    }]
+    state["attack_indicators"] = [{
+        "owner_runtime_id": "boss-1",
+        "position": {"x": 650, "y": 300},
+        "width": 220,
+        "height": 180,
+        "time_to_activate": 0.1,
+    }]
+    state["projectile_paths"] = {
+        "action_risk": [0.0] * 9,
+        "enemy_action_risk": [0.0] * 9,
+        "boundary_action_risk": [0.0] * 9,
+    }
+    observation = HierarchicalCombatVectorizer().build(state)
+    macro = observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    assert macro[OBJECTIVE_EVADE] == pytest.approx(1.0)
+    assert macro[-3] < 0.0
+    assert macro[-1] > 0.0
 
 
 def test_v4_anchor_balancing_limits_idle_to_ten_percent():

@@ -32,10 +32,13 @@ class ApiRewardEngine:
     KILL_REWARD = 0.10
     WAVE_ADVANCE_BASE = 25.0
     WAVE_ADVANCE_SCALE = 2.0
-    WAVE_CLEAR_REWARD = 30.0
-    DEATH_PENALTY_BASE = 100.0
-    DEATH_PENALTY_SCALE = 4.0
-    VICTORY_REWARD = 300.0
+    WAVE_CLEAR_REWARD = 40.0
+    # Keep terminal outcomes dominant without producing the 4,000+ value loss
+    # observed in the wave-20 curriculum. The old -270 spike made the critic
+    # effectively constant and stopped useful policy updates.
+    DEATH_PENALTY_BASE = 40.0
+    DEATH_PENALTY_SCALE = 1.5
+    VICTORY_REWARD = 180.0
 
     def __init__(self, *, late_wave_focus: bool = False):
         self.previous: Optional[Mapping[str, Any]] = None
@@ -101,7 +104,7 @@ class ApiRewardEngine:
         if state.get("dead"):
             components["death"] -= (
                 self.DEATH_PENALTY_BASE + min(20.0, wave_number) * self.DEATH_PENALTY_SCALE
-            ) * (1.5 if focused else 1.0)
+            ) * (1.25 if focused else 1.0)
         if state.get("victory"):
             components["victory"] += self.VICTORY_REWARD
         self.previous = state
