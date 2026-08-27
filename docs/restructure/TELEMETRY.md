@@ -47,8 +47,8 @@ otherwise, callback values named *_rate or *_share are dump-window means.
 
 - TTI and miss distance use -1 only when no hostile projectile exists.
   Conditional metrics use only valid exposures and never average sentinel values.
-- `combat/projectile_tti_exposure_rate` and
-  `combat/projectile_predicted_hazard_exposure_rate` identify conditional
+- `combat/proj_tti_exp_rate` and
+  `combat/proj_hazard_exp_rate` identify conditional
   hazard windows; conditional damage and miss-distance tags are emitted
   separately.
 - Path metrics are split into pre-action and post-action fields in the

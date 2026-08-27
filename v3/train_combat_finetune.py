@@ -193,7 +193,7 @@ class HumanAnchoredPPO(PPO):
                     mask = validation_targets == action
                     if bool(mask.any()):
                         self.logger.record(
-                            f"human_bc/validation_accuracy_action_{action}",
+                            f"human_bc/val_acc_a{action}",
                             float(
                                 (validation_prediction[mask] == action)
                                 .float().mean().cpu().item()
@@ -483,32 +483,32 @@ class CombatTensorboardCallback(BaseCallback):
                 if condition:
                     self.conditional_counts[key] = self.conditional_counts.get(key, 0) + 1
                     self.conditional_sums[key] = self.conditional_sums.get(key, 0.0) + value
-            self.logger.record("combat/projectile_visible_exposure_count",
+            self.logger.record("combat/proj_visible_exp_count",
                                self.conditional_counts.get("visible", 0))
-            self.logger.record("combat/projectile_tti_exposure_count",
+            self.logger.record("combat/proj_tti_exp_count",
                                self.conditional_counts.get("tti", 0))
-            self.logger.record("combat/projectile_predicted_hazard_exposure_count",
+            self.logger.record("combat/proj_hazard_exp_count",
                                self.conditional_counts.get("predicted_hazard", 0))
             self.logger.record_mean(
-                "combat/projectile_tti_exposure_rate",
+                "combat/proj_tti_exp_rate",
                 float(bool(0.0 <= tti <= 0.8)),
             )
             self.logger.record_mean(
-                "combat/projectile_predicted_hazard_exposure_rate",
+                "combat/proj_hazard_exp_rate",
                 float(predicted),
             )
             self.logger.record_mean(
-                "combat/projectile_tti_conditional_damage",
+                "combat/proj_tti_cond_damage",
                 self.conditional_sums.get("tti", 0.0)
                 / max(1, self.conditional_counts.get("tti", 0)),
             )
             self.logger.record_mean(
-                "combat/projectile_hazard_conditional_damage",
+                "combat/proj_hazard_cond_damage",
                 self.conditional_sums.get("predicted_hazard", 0.0)
                 / max(1, self.conditional_counts.get("predicted_hazard", 0)),
             )
             self.logger.record_mean(
-                "combat/projectile_conditional_miss_distance",
+                "combat/proj_cond_miss",
                 self.conditional_sums.get("miss_distance", 0.0)
                 / max(1, self.conditional_counts.get("miss_distance", 0)),
             )
