@@ -434,6 +434,10 @@ class BrotatoApiEnv(gym.Env):
                 getattr(self.vectorizer, "center_stagnation_threat_exemption", 0.0)
             ),
         ) and not decision_trace.recovery_active
+        dense_scale = reward_time_scale(
+            self._last_state_interval_ms,
+            self.state_hz or 24.0,
+        )
         idle_penalty = (
             float(getattr(self.vectorizer, "idle_reward_scale", 0.0)) * dense_scale
             if movement["active"] and normalized == int(MoveAction.IDLE)
@@ -458,10 +462,6 @@ class BrotatoApiEnv(gym.Env):
             float(getattr(self.vectorizer, "center_stagnation_reward_scale", 0.0)) * dense_scale
             if center_stagnation
             else 0.0
-        )
-        dense_scale = reward_time_scale(
-            self._last_state_interval_ms,
-            self.state_hz or 24.0,
         )
         reward = self.reward_engine.step(state, dense_scale=dense_scale)
         reward_components = dict(self.reward_engine.last_components)
