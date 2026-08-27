@@ -36,6 +36,23 @@ def markdown_report(report: Mapping[str, Any]) -> str:
                 f"- Shield direction-switch delta (on minus off): {shield.get('direction_switch_delta', 0)}.",
             ]
         )
+    tactical = report.get("tactical_comparison", {})
+    if tactical:
+        baseline = tactical.get("baseline_unified", {})
+        persistent = tactical.get("persistent_tactical", {})
+        rows.extend(
+            [
+                "",
+                "### Tactical escape A/B",
+                "",
+                f"- Escape entries: baseline {baseline.get('escape_entries', 0)}, persistent {persistent.get('escape_entries', 0)}.",
+                f"- Post-escape re-entry rate: baseline {baseline.get('post_escape_reentry_rate', 0.0):.1%}, persistent {persistent.get('post_escape_reentry_rate', 0.0):.1%}.",
+                f"- Escape direction reversals: baseline {baseline.get('escape_direction_reversals', 0)}, persistent {persistent.get('escape_direction_reversals', 0)}.",
+                f"- Mean enemy separation: baseline {baseline.get('mean_enemy_separation', 0.0):.1f}, persistent {persistent.get('mean_enemy_separation', 0.0):.1f}.",
+                "",
+                "The tactical comparison is a geometric replay A/B; it does not claim the fixed recording actually followed the counterfactual actions.",
+            ]
+        )
     damage = report["observed_outcomes"]
     rows.extend(
         [

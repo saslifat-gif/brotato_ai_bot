@@ -487,6 +487,39 @@ class HierarchicalCombatVectorizer:
         elif state.get("enemies"):
             objective = OBJECTIVE_ENGAGE
             target = self._nearest(state.get("enemies"), px, py)
+            # Keep combat intent (engage) separate from movement intent.  A
+            # ranged build should approach a stand-off point or orbit it, not
+            # steer directly into the enemy center.
+            combat = _mapping(state.get("combat"))
+            ranged_count = _number(combat.get("ranged_count"), 0.0)
+            melee_count = _number(combat.get("melee_count"), 0.0)
+            weapon_range = _number(combat.get("weapon_range"), 0.0)
+            if (
+                target is not None
+                and ranged_count > melee_count
+                and weapon_range > 0.0
+            ):
+                tx, ty = _xy(target.get("position"))
+                away_x, away_y = px - tx, py - ty
+                distance = max(1.0, float(np.hypot(away_x, away_y)))
+                stand_off = max(180.0, min(420.0, weapon_range * 0.55))
+                if distance < stand_off * 0.92:
+                    # At the band, use a tangent waypoint to keep motion
+                    # flowing around the target instead of reversing into it.
+                    tangent_x, tangent_y = -away_y / distance, away_x / distance
+                    target = {
+                        "position": {
+                            "x": px + tangent_x * 180.0,
+                            "y": py + tangent_y * 180.0,
+                        }
+                    }
+                else:
+                    target = {
+                        "position": {
+                            "x": tx + away_x / distance * stand_off,
+                            "y": ty + away_y / distance * stand_off,
+                        }
+                    }
             urgency = 0.35
         else:
             objective = OBJECTIVE_REPOSITION

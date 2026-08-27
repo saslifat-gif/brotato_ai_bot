@@ -71,33 +71,30 @@ def _owner_threat_code(
     return 1.0 if _enemy_is_boss(owner) else 0.5
 
 
-def ranged_spacing_diagnostics(
+def enemy_separation_diagnostics(
     state: Mapping[str, Any] | StateSnapshot,
     action: int,
     *,
     horizon_seconds: float = 0.45,
-    enabled: bool = True,
-) -> dict[str, float | bool]:
-    '''Return transparent ranged-spacing diagnostics for one candidate action.'''
+) -> dict[str, float | bool | str]:
+    """Shared moving-enemy separation estimate for scoring and tactical control."""
 
-    empty = {
+    empty: dict[str, float | bool | str] = {
         "active": False,
-        "risk": 0.0,
-        "target_distance": 0.0,
+        "ranged_active": False,
+        "current_distance": 0.0,
         "predicted_distance": 0.0,
+        "target_distance": 0.0,
         "closing_rate": 0.0,
-        "spacing_error": 0.0,
+        "radial_dot": 0.0,
+        "enemy_runtime_id": "",
     }
-    if not enabled:
-        return empty
     payload = state.to_dict() if isinstance(state, StateSnapshot) else state
     combat = _mapping(payload.get("combat"))
     ranged_count = _number(combat.get("ranged_count"), 0.0)
     melee_count = _number(combat.get("melee_count"), 0.0)
     weapon_range = _number(combat.get("weapon_range"), 0.0)
-    if ranged_count <= 0.0 or ranged_count <= melee_count or weapon_range <= 0.0:
-        return empty
-
+    ranged_active = ranged_count > 0.0 and ranged_count > melee_count and weapon_range > 0.0
     player = _mapping(payload.get("player"))
     px, py = _xy(player.get("position"))
     player_radius = max(
@@ -110,44 +107,90 @@ def ranged_spacing_diagnostics(
     movement = ACTION_VECTORS[MoveAction(int(action))]
     future_x = px + movement[0] * speed * horizon_seconds
     future_y = py + movement[1] * speed * horizon_seconds
-
-    candidates: list[tuple[float, float, float, float, float, float]] = []
+    candidates: list[tuple[float, float, float, float, Mapping[str, Any]]] = []
     for enemy in _items(payload.get("enemies")):
         if bool(enemy.get("dead")):
             continue
         ex, ey = _xy(enemy.get("position"))
         evx, evy = _xy(enemy.get("velocity"))
-        predicted_x = ex + evx * horizon_seconds
-        predicted_y = ey + evy * horizon_seconds
+        predicted_distance = math.hypot(
+            ex + evx * horizon_seconds - future_x,
+            ey + evy * horizon_seconds - future_y,
+        )
         current_distance = math.hypot(ex - px, ey - py)
-        predicted_distance = math.hypot(predicted_x - future_x, predicted_y - future_y)
         enemy_radius = max(25.0, _number(enemy.get("radius"), 40.0))
         contact_clearance = player_radius + enemy_radius + 80.0
-        target_distance = max(
-            contact_clearance,
-            min(420.0, max(180.0, weapon_range * 0.55)),
-        )
+        target_distance = contact_clearance
+        if ranged_active:
+            target_distance = max(
+                contact_clearance,
+                min(420.0, max(180.0, weapon_range * 0.55)),
+            )
         candidates.append(
             (
                 predicted_distance,
                 current_distance,
                 target_distance,
                 max(0.0, current_distance - predicted_distance),
-                predicted_x,
-                predicted_y,
+                enemy,
             )
         )
     if not candidates:
+        empty["ranged_active"] = ranged_active
         return empty
-
-    predicted_distance, current_distance, target_distance, closing_distance, _, _ = min(
-        candidates,
-        key=lambda row: (row[0], row[1]),
+    predicted_distance, current_distance, target_distance, closing_distance, enemy = min(
+        candidates, key=lambda row: (row[0], row[1])
     )
-    spacing_error = max(0.0, target_distance - predicted_distance) / target_distance
-    closing_rate = closing_distance / target_distance
+    ex, ey = _xy(enemy.get("position"))
+    away_x, away_y = px - ex, py - ey
+    away_length = max(1.0, math.hypot(away_x, away_y))
+    radial_dot = (
+        movement[0] * away_x / away_length
+        + movement[1] * away_y / away_length
+    )
+    closing_rate = closing_distance / max(1.0, target_distance)
     if predicted_distance > target_distance * 1.40:
         closing_rate = 0.0
+    return {
+        "active": True,
+        "ranged_active": ranged_active,
+        "current_distance": float(current_distance),
+        "predicted_distance": float(predicted_distance),
+        "target_distance": float(target_distance),
+        "closing_rate": float(closing_rate),
+        "radial_dot": float(radial_dot),
+        "enemy_runtime_id": str(enemy.get("runtime_id", "")),
+    }
+
+
+def ranged_spacing_diagnostics(
+    state: Mapping[str, Any] | StateSnapshot,
+    action: int,
+    *,
+    horizon_seconds: float = 0.45,
+    enabled: bool = True,
+) -> dict[str, float | bool]:
+    """Return transparent ranged-spacing diagnostics for one candidate action."""
+
+    empty = {
+        "active": False,
+        "risk": 0.0,
+        "target_distance": 0.0,
+        "predicted_distance": 0.0,
+        "closing_rate": 0.0,
+        "spacing_error": 0.0,
+    }
+    if not enabled:
+        return empty
+    diagnostic = enemy_separation_diagnostics(
+        state, action, horizon_seconds=horizon_seconds
+    )
+    if not diagnostic["active"] or not diagnostic["ranged_active"]:
+        return empty
+    target_distance = float(diagnostic["target_distance"])
+    predicted_distance = float(diagnostic["predicted_distance"])
+    spacing_error = max(0.0, target_distance - predicted_distance) / max(1.0, target_distance)
+    closing_rate = float(diagnostic["closing_rate"])
     risk = min(
         2.0,
         1.25 * spacing_error * spacing_error
@@ -156,9 +199,9 @@ def ranged_spacing_diagnostics(
     return {
         "active": True,
         "risk": float(risk),
-        "target_distance": float(target_distance),
-        "predicted_distance": float(predicted_distance),
-        "closing_rate": float(closing_rate),
+        "target_distance": target_distance,
+        "predicted_distance": predicted_distance,
+        "closing_rate": closing_rate,
         "spacing_error": float(spacing_error),
     }
 

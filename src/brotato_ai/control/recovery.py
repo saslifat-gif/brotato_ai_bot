@@ -1,11 +1,11 @@
-"""Explicit crowd/edge emergency mode that reuses unified hazard scores."""
+"""Persistent tactical movement state for the active V4 controller."""
 
 from __future__ import annotations
 
 import math
 from typing import Any, Iterable, Mapping
 
-from brotato_ai.control.hazards import UnifiedHazardScorer
+from brotato_ai.control.hazards import UnifiedHazardScorer, enemy_separation_diagnostics
 from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
 from brotato_ai.domain.decisions import HazardRisk, SafetyDecision
 from brotato_ai.domain.state import StateSnapshot
@@ -34,8 +34,11 @@ def _xy(value: Any) -> tuple[float, float]:
     return _number(item.get("x")), _number(item.get("y"))
 
 
-class CrowdRecoveryGuard:
-    """Force a short low-risk escape only under explicit emergency conditions."""
+class TacticalMovementController:
+    """Persistent NORMAL/ESCAPE controller with hysteresis and lateral escape."""
+
+    NORMAL = "normal"
+    ESCAPE = "escape"
 
     def __init__(
         self,
@@ -46,82 +49,164 @@ class CrowdRecoveryGuard:
         boundary_threshold: float = 0.45,
         hold_steps: int = 8,
         shield: UnifiedHazardScorer | None = None,
+        escape_enter_risk: float = 0.28,
+        escape_exit_risk: float = 0.16,
+        release_margin: float = 1.15,
+        side_hold_steps: int = 6,
     ):
         self.enabled = bool(enabled)
         self.wave_threshold = int(wave_threshold)
         self.enemy_threshold = int(enemy_threshold)
         self.boundary_threshold = float(boundary_threshold)
         self.hold_steps = max(1, int(hold_steps))
-        self.remaining = 0
+        self.escape_enter_risk = max(0.0, float(escape_enter_risk))
+        self.escape_exit_risk = max(0.0, float(escape_exit_risk))
+        self.release_margin = max(1.0, float(release_margin))
+        self.side_hold_steps = max(1, int(side_hold_steps))
         self.shield = shield if shield is not None else UnifiedHazardScorer(enabled=True)
+        self.state = self.NORMAL
+        self.remaining = 0
+        self.escape_side = 0
+        self._age = 0
+        self._side_age = 0
+        self._last_escape_action: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.state == self.ESCAPE
+
+    @property
+    def state_name(self) -> str:
+        return self.state
+
+    def reset(self) -> None:
+        self.state = self.NORMAL
+        self.remaining = 0
+        self.escape_side = 0
+        self._age = 0
+        self._side_age = 0
+        self._last_escape_action = None
 
     @staticmethod
     def _payload(state: Mapping[str, Any] | StateSnapshot) -> Mapping[str, Any]:
         return state.to_dict() if isinstance(state, StateSnapshot) else state
 
-    def reset(self) -> None:
-        self.remaining = 0
-
     @staticmethod
-    def _center_action(state: Mapping[str, Any] | StateSnapshot) -> int:
-        state = CrowdRecoveryGuard._payload(state)
-        player = _mapping(state.get("player"))
-        arena = _mapping(state.get("arena"))
-        px, py = _xy(player.get("position"))
-        width = max(1.0, _number(arena.get("width"), 1920.0))
-        height = max(1.0, _number(arena.get("height"), 1080.0))
-        safe_x = min(max(px, width * 0.25), width * 0.75)
-        safe_y = min(max(py, height * 0.25), height * 0.75)
-        dx = safe_x - px
-        dy = safe_y - py
-        horizontal = 1 if dx > width * 0.02 else -1 if dx < -width * 0.02 else 0
-        vertical = 1 if dy > height * 0.02 else -1 if dy < -height * 0.02 else 0
-        if horizontal == 0 and vertical == 0:
-            return int(MoveAction.IDLE)
-        if horizontal < 0 and vertical < 0:
-            return int(MoveAction.UP_LEFT)
-        if horizontal > 0 and vertical < 0:
-            return int(MoveAction.UP_RIGHT)
-        if horizontal < 0 and vertical > 0:
-            return int(MoveAction.DOWN_LEFT)
-        if horizontal > 0 and vertical > 0:
-            return int(MoveAction.DOWN_RIGHT)
-        if horizontal < 0:
-            return int(MoveAction.LEFT)
-        if horizontal > 0:
-            return int(MoveAction.RIGHT)
-        return int(MoveAction.UP if vertical < 0 else MoveAction.DOWN)
-
-    @staticmethod
-    def _safest_escape_action(
-        state: Mapping[str, Any] | StateSnapshot,
-        shield: UnifiedHazardScorer | None = None,
-    ) -> int:
-        payload = CrowdRecoveryGuard._payload(state)
-        center_action = CrowdRecoveryGuard._center_action(payload)
-        shield = shield if shield is not None else UnifiedHazardScorer(
-            enabled=True, override_margin=0.0
-        )
+    def _enemy_frame(payload: Mapping[str, Any]) -> tuple[tuple[float, float], tuple[float, float], float]:
         player = _mapping(payload.get("player"))
-        arena = _mapping(payload.get("arena"))
         px, py = _xy(player.get("position"))
-        width = max(1.0, _number(arena.get("width"), 1920.0))
-        height = max(1.0, _number(arena.get("height"), 1080.0))
-        safe_x = min(max(px, width * 0.25), width * 0.75)
-        safe_y = min(max(py, height * 0.25), height * 0.75)
-        dx = safe_x - px
-        dy = safe_y - py
-        center_length = max(1.0, math.hypot(dx, dy))
-        center_vector = (dx / center_length, dy / center_length)
-        scored: list[tuple[float, int]] = []
-        for action, movement in ACTION_VECTORS.items():
-            if action == MoveAction.IDLE:
-                continue
-            risk = shield.risk(payload, int(action))
-            toward_safe_band = movement[0] * center_vector[0] + movement[1] * center_vector[1]
-            center_bias = 0.08 if int(action) == center_action else 0.0
-            scored.append((risk - 0.12 * toward_safe_band - center_bias, int(action)))
-        return min(scored, key=lambda row: (row[0], row[1]))[1]
+        enemies = [e for e in _items(payload.get("enemies")) if not bool(e.get("dead"))]
+        if not enemies:
+            return (0.0, 0.0), (0.0, 0.0), 0.0
+        enemy = min(
+            enemies,
+            key=lambda e: math.hypot(_xy(e.get("position"))[0] - px, _xy(e.get("position"))[1] - py),
+        )
+        ex, ey = _xy(enemy.get("position"))
+        away_x, away_y = px - ex, py - ey
+        length = max(1.0, math.hypot(away_x, away_y))
+        return (away_x / length, away_y / length), (-away_y / length, away_x / length), length
+
+    def _legacy_trigger(self, payload: Mapping[str, Any]) -> bool:
+        wave = int(_number(_mapping(payload.get("wave")).get("number"), 0))
+        enemy_count = len(_items(payload.get("enemies")))
+        paths = _mapping(payload.get("projectile_paths"))
+        boundary = paths.get("boundary_action_risk", [])
+        boundary_max = max((_number(v) for v in boundary), default=0.0) if isinstance(boundary, (list, tuple)) else 0.0
+        return boundary_max >= 0.80 or (
+            wave >= self.wave_threshold
+            and (enemy_count >= self.enemy_threshold or boundary_max >= self.boundary_threshold)
+        )
+
+    def _should_enter(self, payload: Mapping[str, Any], requested_risk: HazardRisk, requested_action: int) -> bool:
+        if requested_risk.total >= self.escape_enter_risk or requested_risk.enemy_total >= self.escape_enter_risk:
+            return True
+        if self._legacy_trigger(payload):
+            return True
+        geometry = enemy_separation_diagnostics(payload, requested_action)
+        return bool(
+            geometry["active"]
+            and float(geometry["predicted_distance"]) <= float(geometry["target_distance"]) * 1.08
+            and float(geometry["closing_rate"]) > -0.08
+        )
+
+    def _score_action(
+        self,
+        payload: Mapping[str, Any],
+        risks: Mapping[int, HazardRisk],
+        action: int,
+        *,
+        side: int,
+        previous_action: int | None,
+    ) -> float:
+        movement = ACTION_VECTORS[MoveAction(int(action))]
+        score = float(risks[int(action)].total)
+        geometry = enemy_separation_diagnostics(payload, action)
+        if geometry["active"]:
+            approach = max(0.0, -float(geometry["radial_dot"]))
+            closing = max(0.0, float(geometry["closing_rate"]))
+            score += (0.85 + 1.35 * closing) * approach
+            away, tangent, _ = self._enemy_frame(payload)
+            lateral = movement[0] * tangent[0] + movement[1] * tangent[1]
+            radial = movement[0] * away[0] + movement[1] * away[1]
+            score -= 0.20 * max(0.0, radial)
+            score -= 0.16 * max(0.0, float(side) * lateral)
+            score -= 0.08 * max(0.0, abs(lateral) - abs(radial))
+        if previous_action is not None:
+            previous = ACTION_VECTORS[MoveAction(int(previous_action))]
+            if movement[0] * previous[0] + movement[1] * previous[1] < -0.70:
+                score += 0.16
+        if self._last_escape_action is not None and action != self._last_escape_action:
+            prior = ACTION_VECTORS[MoveAction(self._last_escape_action)]
+            if movement[0] * prior[0] + movement[1] * prior[1] < -0.70:
+                score += 0.20
+        return score
+
+    def _choose_side(self, payload: Mapping[str, Any], risks: Mapping[int, HazardRisk], previous_action: int | None) -> int:
+        enemies = [e for e in _items(payload.get("enemies")) if not bool(e.get("dead"))]
+        if not enemies:
+            player = _mapping(payload.get("player"))
+            arena = _mapping(payload.get("arena"))
+            px, py = _xy(player.get("position"))
+            width = max(1.0, _number(arena.get("width"), 1920.0))
+            height = max(1.0, _number(arena.get("height"), 1080.0))
+            return 1 if px / width < py / height else -1
+        scores = {
+            side: min(
+                self._score_action(payload, risks, int(action), side=side, previous_action=previous_action)
+                for action in MoveAction if action != MoveAction.IDLE
+            )
+            for side in (-1, 1)
+        }
+        return -1 if scores[-1] < scores[1] else 1
+
+    def _escape_action(self, payload: Mapping[str, Any], risks: Mapping[int, HazardRisk], previous_action: int | None) -> int:
+        candidates = [int(action) for action in MoveAction if action != MoveAction.IDLE]
+        return min(
+            candidates,
+            key=lambda action: (
+                self._score_action(
+                    payload,
+                    risks,
+                    action,
+                    side=self.escape_side or 1,
+                    previous_action=previous_action,
+                ),
+                action,
+            ),
+        )
+
+    def _clear_to_normal(self, payload: Mapping[str, Any], requested_action: int, requested_risk: HazardRisk) -> bool:
+        if self._age < self.hold_steps or requested_risk.total > self.escape_exit_risk:
+            return False
+        geometry = enemy_separation_diagnostics(payload, requested_action)
+        if not geometry["active"]:
+            return True
+        return bool(
+            float(geometry["predicted_distance"]) >= float(geometry["target_distance"]) * self.release_margin
+            and float(geometry["closing_rate"]) <= 0.02
+            and float(geometry["radial_dot"]) >= -0.05
+        )
 
     def apply(
         self,
@@ -129,75 +214,42 @@ class CrowdRecoveryGuard:
         requested_action: int,
         *,
         risks: Mapping[int, HazardRisk] | None = None,
+        previous_action: int | None = None,
     ) -> SafetyDecision:
         requested = int(MoveAction(int(requested_action)))
         payload = self._payload(state)
-        if not self.enabled:
-            return SafetyDecision(requested, requested, 0.0, 0.0)
-        wave = int(_number(_mapping(payload.get("wave")).get("number"), 0))
-        enemy_count = len(_items(payload.get("enemies")))
-        boundary = _mapping(payload.get("projectile_paths")).get(
-            "boundary_action_risk", []
-        )
-        boundary_max = (
-            max((_number(value) for value in boundary), default=0.0)
-            if isinstance(boundary, (list, tuple))
-            else 0.0
-        )
-        trigger = (
-            boundary_max >= 0.80
-            or (
-                wave >= self.wave_threshold
-                and (
-                    enemy_count >= self.enemy_threshold
-                    or boundary_max >= self.boundary_threshold
-                )
-            )
-        )
-        if self.remaining <= 0 and trigger:
-            self.remaining = self.hold_steps
-        if self.remaining <= 0:
-            risk = (
-                risks[requested].total
-                if risks is not None
-                else self.shield.risk(payload, requested)
-            )
-            return SafetyDecision(requested, requested, risk, risk)
-        self.remaining -= 1
         if risks is None:
-            escape_action = self._safest_escape_action(payload, self.shield)
-            requested_risk = self.shield.risk(payload, requested)
-            applied_risk = self.shield.risk(payload, escape_action)
-        else:
-            center_action = self._center_action(payload)
-            player = _mapping(payload.get("player"))
-            arena = _mapping(payload.get("arena"))
-            px, py = _xy(player.get("position"))
-            width = max(1.0, _number(arena.get("width"), 1920.0))
-            height = max(1.0, _number(arena.get("height"), 1080.0))
-            safe_x = min(max(px, width * 0.25), width * 0.75)
-            safe_y = min(max(py, height * 0.25), height * 0.75)
-            dx, dy = safe_x - px, safe_y - py
-            length = max(1.0, math.hypot(dx, dy))
-            center_vector = (dx / length, dy / length)
-            escape_action = min(
-                (int(action) for action in MoveAction if action != MoveAction.IDLE),
-                key=lambda action: (
-                    risks[action].total
-                    - 0.12
-                    * (
-                        ACTION_VECTORS[MoveAction(action)][0] * center_vector[0]
-                        + ACTION_VECTORS[MoveAction(action)][1] * center_vector[1]
-                    )
-                    - (0.08 if action == center_action else 0.0),
-                    action,
-                ),
-            )
-            requested_risk = risks[requested].total
-            applied_risk = risks[escape_action].total
-        return SafetyDecision(
-            requested,
-            escape_action,
-            requested_risk,
-            applied_risk,
-        )
+            risks = self.shield.all_risks(payload)
+        requested_risk = risks[requested]
+        if not self.enabled:
+            return SafetyDecision(requested, requested, requested_risk.total, requested_risk.total)
+        if self.state == self.NORMAL and self._should_enter(payload, requested_risk, requested):
+            self.state = self.ESCAPE
+            self.remaining = self.hold_steps
+            self._age = 0
+            self.escape_side = self._choose_side(payload, risks, previous_action)
+            self._side_age = 0
+        elif self.state == self.ESCAPE and self._clear_to_normal(payload, requested, requested_risk):
+            self.reset()
+            return SafetyDecision(requested, requested, requested_risk.total, requested_risk.total)
+        if self.state != self.ESCAPE:
+            return SafetyDecision(requested, requested, requested_risk.total, requested_risk.total)
+        if self._side_age >= self.side_hold_steps:
+            preferred_side = self._choose_side(payload, risks, previous_action)
+            if preferred_side != self.escape_side:
+                current_action = self._escape_action(payload, risks, previous_action)
+                current_score = self._score_action(payload, risks, current_action, side=self.escape_side or 1, previous_action=previous_action)
+                new_score = self._score_action(payload, risks, current_action, side=preferred_side, previous_action=previous_action)
+                if new_score + 0.25 < current_score:
+                    self.escape_side = preferred_side
+                    self._side_age = 0
+        escape_action = self._escape_action(payload, risks, previous_action)
+        self._last_escape_action = escape_action
+        self._age += 1
+        self._side_age += 1
+        self.remaining = max(0, self.hold_steps - self._age)
+        return SafetyDecision(requested, escape_action, requested_risk.total, risks[escape_action].total)
+
+
+# Compatibility name retained for existing callers and tests.
+CrowdRecoveryGuard = TacticalMovementController

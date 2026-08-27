@@ -7,10 +7,11 @@ import hashlib
 from pathlib import Path
 from typing import Callable
 
-from brotato_ai.control.hazards import UnifiedHazardScorer
+from brotato_ai.control.hazards import UnifiedHazardScorer, enemy_separation_diagnostics
+from brotato_ai.control.recovery import TacticalMovementController
 from brotato_ai.data.replay import JsonlReplay
 from brotato_ai.domain.decisions import HazardRisk
-from brotato_ai.evaluation.metrics import DamageMetrics, VariantMetrics
+from brotato_ai.evaluation.metrics import DamageMetrics, TacticalMetrics, VariantMetrics
 from brotato_ai.evaluation.reports import write_json_report, write_markdown_report
 
 
@@ -84,6 +85,9 @@ def compare_recording(
     )
     metrics = {name: VariantMetrics() for name in VARIANT_NAMES}
     spacing_metrics = {"off": VariantMetrics(), "on": VariantMetrics()}
+    tactical_controller = TacticalMovementController(shield=scorer)
+    baseline_tactical = TacticalMetrics()
+    persistent_tactical = TacticalMetrics()
     damage = DamageMetrics()
     records = 0
     for snapshot, requested in JsonlReplay(
@@ -127,6 +131,38 @@ def compare_recording(
             ),
             "noop_analyzer_control": requested,
         }
+        baseline_action = selected["unified"]
+        baseline_escape = (
+            baseline_action != requested
+            and risks[requested].total >= scorer.minimum_risk
+        )
+        baseline_geometry = enemy_separation_diagnostics(snapshot, baseline_action)
+        baseline_tactical.observe(
+            requested_action=requested,
+            selected_action=baseline_action,
+            escape_active=baseline_escape,
+            separation=float(baseline_geometry["predicted_distance"]),
+            target_distance=float(baseline_geometry["target_distance"]),
+            ranged_active=bool(baseline_geometry["ranged_active"]),
+            timestamp_ms=snapshot.timestamp_ms,
+        )
+        persistent_decision = tactical_controller.apply(
+            snapshot,
+            baseline_action,
+            risks=risks,
+            previous_action=persistent_tactical._last_action,
+        )
+        persistent_action = persistent_decision.applied_action
+        persistent_geometry = enemy_separation_diagnostics(snapshot, persistent_action)
+        persistent_tactical.observe(
+            requested_action=requested,
+            selected_action=persistent_action,
+            escape_active=tactical_controller.active,
+            separation=float(persistent_geometry["predicted_distance"]),
+            target_distance=float(persistent_geometry["target_distance"]),
+            ranged_active=bool(persistent_geometry["ranged_active"]),
+            timestamp_ms=snapshot.timestamp_ms,
+        )
         for name, action in selected.items():
             metrics[name].observe(
                 requested_action=requested,
@@ -170,6 +206,23 @@ def compare_recording(
             "direction_switch_delta": (
                 variants["unified"]["direction_switches"]
                 - variants["policy_only"]["direction_switches"]
+            ),
+        },
+        "tactical_comparison": {
+            "baseline_unified": baseline_tactical.to_dict(),
+            "persistent_tactical": persistent_tactical.to_dict(),
+            "post_escape_reentry_rate_delta": (
+                persistent_tactical.to_dict()["post_escape_reentry_rate"]
+                - baseline_tactical.to_dict()["post_escape_reentry_rate"]
+            ),
+            "direction_reversal_delta": (
+                persistent_tactical.escape_direction_reversals
+                - baseline_tactical.escape_direction_reversals
+            ),
+            "interpretation": (
+                "Baseline is the existing stateless unified selector. Persistent "
+                "is the stateful tactical controller applied after that selector. "
+                "These are geometric replay metrics, not alternate game outcomes."
             ),
         },
         "spacing_comparison": {

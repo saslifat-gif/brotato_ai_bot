@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+
+from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
 
 
 @dataclass
@@ -107,4 +110,103 @@ class DamageMetrics:
             "death_events": self.deaths,
             "victory_events": self.victories,
             "maximum_wave": self.maximum_wave,
+        }
+
+
+@dataclass
+class TacticalMetrics:
+    """Replay metrics for persistent escape episodes and enemy re-entry."""
+
+    samples: int = 0
+    escape_entries: int = 0
+    escape_steps: int = 0
+    successful_escapes: int = 0
+    post_escape_reentries: int = 0
+    escape_direction_reversals: int = 0
+    separation_sum: float = 0.0
+    separation_samples: int = 0
+    ranged_distance_sum: float = 0.0
+    ranged_distance_samples: int = 0
+    overrides: int = 0
+    switches: int = 0
+    _was_escape: bool = False
+    _cleared: bool = False
+    _monitor_reentry: bool = False
+    _last_action: int | None = None
+    _last_timestamp_ms: int | None = None
+    _escape_duration_sec: float = 0.0
+    _durations: list[float] = field(default_factory=list)
+
+    def observe(
+        self,
+        *,
+        requested_action: int,
+        selected_action: int,
+        escape_active: bool,
+        separation: float = 0.0,
+        target_distance: float = 0.0,
+        ranged_active: bool = False,
+        timestamp_ms: int = -1,
+    ) -> None:
+        self.samples += 1
+        self.overrides += int(int(selected_action) != int(requested_action))
+        if self._last_action is not None:
+            self.switches += int(int(selected_action) != self._last_action)
+            previous = ACTION_VECTORS[MoveAction(self._last_action)]
+            current = ACTION_VECTORS[MoveAction(int(selected_action))]
+            if previous[0] * current[0] + previous[1] * current[1] < -0.70:
+                self.escape_direction_reversals += int(escape_active)
+        if separation > 0.0 and math.isfinite(separation):
+            self.separation_sum += float(separation)
+            self.separation_samples += 1
+        if ranged_active and separation > 0.0 and math.isfinite(separation):
+            self.ranged_distance_sum += float(separation)
+            self.ranged_distance_samples += 1
+        if escape_active and not self._was_escape:
+            self.escape_entries += 1
+            self._escape_duration_sec = 0.0
+            self._cleared = False
+        if escape_active:
+            self.escape_steps += 1
+            if self._last_timestamp_ms is not None and timestamp_ms >= self._last_timestamp_ms:
+                self._escape_duration_sec += min(1.0, max(0.0, timestamp_ms - self._last_timestamp_ms) / 1000.0)
+            if target_distance > 0.0 and separation >= target_distance * 1.15:
+                self._cleared = True
+        elif self._was_escape:
+            if self._cleared:
+                self.successful_escapes += 1
+                self._monitor_reentry = True
+            self._durations.append(self._escape_duration_sec)
+            self._escape_duration_sec = 0.0
+        if (
+            not escape_active
+            and self._monitor_reentry
+            and target_distance > 0.0
+            and separation < target_distance
+        ):
+            self.post_escape_reentries += 1
+            self._monitor_reentry = False
+        self._was_escape = bool(escape_active)
+        self._last_action = int(selected_action)
+        self._last_timestamp_ms = int(timestamp_ms)
+
+    def to_dict(self) -> dict[str, float | int]:
+        count = max(1, self.samples)
+        separation_count = max(1, self.separation_samples)
+        ranged_count = max(1, self.ranged_distance_samples)
+        return {
+            "samples": self.samples,
+            "escape_entries": self.escape_entries,
+            "escape_steps": self.escape_steps,
+            "successful_escapes": self.successful_escapes,
+            "post_escape_reentries": self.post_escape_reentries,
+            "post_escape_reentry_rate": self.post_escape_reentries / max(1, self.successful_escapes),
+            "escape_direction_reversals": self.escape_direction_reversals,
+            "mean_escape_duration_sec": sum(self._durations) / max(1, len(self._durations)),
+            "mean_enemy_separation": self.separation_sum / separation_count,
+            "mean_ranged_distance": self.ranged_distance_sum / ranged_count if self.ranged_distance_samples else 0.0,
+            "ranged_distance_samples": self.ranged_distance_samples,
+            "override_rate": self.overrides / count,
+            "direction_switches": self.switches,
+            "direction_switch_rate": self.switches / max(1, self.samples - 1),
         }

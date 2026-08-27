@@ -52,7 +52,10 @@ class FinalActionArbiter:
         )
         hazard_risk = risks[hazard_decision.applied_action]
         recovery_decision = self.crowd_recovery_guard.apply(
-            snapshot, hazard_decision.applied_action, risks=risks
+            snapshot,
+            hazard_decision.applied_action,
+            risks=risks,
+            previous_action=previous_action,
         )
         applied_risk = risks[recovery_decision.applied_action]
         decision = SafetyDecision(
@@ -65,7 +68,7 @@ class FinalActionArbiter:
             decision.overridden
             and requested_risk.enemy_total - applied_risk.enemy_total >= 0.08
         )
-        recovery_active = self.crowd_recovery_guard.remaining > 0
+        recovery_active = self.crowd_recovery_guard.active
         source = (
             "crowd_recovery"
             if recovery_active
@@ -89,6 +92,9 @@ class FinalActionArbiter:
             state_interval_ms=max(0.0, float(state_interval_ms)),
             control_interval_ms=max(0.0, float(control_interval_ms)),
             all_risks=dict(risks),
+            tactical_state=self.crowd_recovery_guard.state_name,
+            escape_remaining=int(self.crowd_recovery_guard.remaining),
+            escape_side=int(self.crowd_recovery_guard.escape_side),
         )
 
 

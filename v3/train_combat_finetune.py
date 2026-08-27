@@ -490,6 +490,22 @@ class CombatTensorboardCallback(BaseCallback):
                 float(bool(info.get("crowd_recovery_active"))),
             )
             self.logger.record_mean(
+                "combat/tactical_escape",
+                float(bool(info.get("tactical_escape_active"))),
+            )
+            self.logger.record_mean(
+                "combat/tactical_escape_remaining",
+                float(info.get("tactical_escape_remaining", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/tactical_escape_side",
+                float(info.get("tactical_escape_side", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/tactical_state_entry",
+                float(bool(info.get("tactical_state_entry"))),
+            )
+            self.logger.record_mean(
                 "combat/hazard_state_interval_ms",
                 float(info.get("hazard_state_interval_ms", 0.0)),
             )

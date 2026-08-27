@@ -98,6 +98,9 @@ class DecisionTrace:
     state_interval_ms: float = 0.0
     control_interval_ms: float = 0.0
     all_risks: dict[int, HazardRisk] = field(default_factory=dict)
+    tactical_state: str = "normal"
+    escape_remaining: int = 0
+    escape_side: int = 0
     schema_version: int = DECISION_SCHEMA_VERSION
 
     @property
@@ -121,6 +124,9 @@ class DecisionTrace:
             "override": self.decision.overridden,
             "hazard_override": self.hazard_overridden,
             "recovery_mode": self.recovery_active,
+            "tactical_state": self.tactical_state,
+            "escape_remaining": int(self.escape_remaining),
+            "escape_side": int(self.escape_side),
             "requested_risk": self.requested_risk.to_dict(),
             "applied_risk": self.applied_risk.to_dict(),
             "state_interval_ms": float(self.state_interval_ms),

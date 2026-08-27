@@ -645,6 +645,16 @@ class BrotatoApiEnv(gym.Env):
             "enemy_contact_override_penalty": contact_override_penalty,
             "crowd_recovery_overridden": decision_trace.recovery_overridden,
             "crowd_recovery_active": decision_trace.recovery_active,
+            "tactical_state": decision_trace.tactical_state,
+            "tactical_escape_active": decision_trace.tactical_state == "escape",
+            "tactical_escape_remaining": int(decision_trace.escape_remaining),
+            "tactical_escape_side": int(decision_trace.escape_side),
+            "tactical_state_entry": bool(
+                decision_trace.tactical_state == "escape"
+                and decision_trace.escape_remaining == max(
+                    0, int(getattr(self.crowd_recovery_guard, "hold_steps", 1)) - 1
+                )
+            ),
             "hazard_state_interval_ms": decision_trace.state_interval_ms,
             "hazard_control_interval_ms": decision_trace.control_interval_ms,
             "requested_risk": decision.requested_risk,
