@@ -225,6 +225,225 @@ class SafetyDecision:
         return self.requested_action != self.applied_action
 
 
+@dataclass(frozen=True)
+class HazardRisk:
+    """Inspectable risk breakdown used by the single runtime hazard stage."""
+
+    enemy: float = 0.0
+    projectile: float = 0.0
+    indicator: float = 0.0
+    boundary: float = 0.0
+    enemy_path: float = 0.0
+    projectile_path: float = 0.0
+    boundary_path: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return float(
+            self.enemy
+            + self.projectile
+            + self.indicator
+            + self.boundary
+            + self.enemy_path
+            + self.projectile_path
+            + self.boundary_path
+        )
+
+    @property
+    def path(self) -> float:
+        return float(self.enemy_path + self.projectile_path + self.boundary_path)
+
+    @property
+    def enemy_total(self) -> float:
+        return float(self.enemy + self.enemy_path)
+
+    @property
+    def projectile_total(self) -> float:
+        return float(self.projectile + self.projectile_path)
+
+    @property
+    def boundary_total(self) -> float:
+        return float(self.boundary + self.boundary_path)
+
+
+@dataclass(frozen=True)
+class ProjectileHazardDecision:
+    """Decision and diagnostics for the short-horizon projectile selector."""
+
+    requested_action: int
+    applied_action: int
+    best_action: int
+    requested_score: float
+    applied_score: float
+    best_score: float
+    requested_collision_risk: float
+    applied_collision_risk: float
+    requested_hazard_count: int
+    applied_hazard_count: int
+    nearest_hazard_tti: float
+    overridden: bool
+    held: bool = False
+
+
+class ProjectileHazardSelector:
+    """Override imminent projectile hazards when a materially safer lane exists.
+
+    This is intentionally narrower than CombatSafetyShield.  It uses the raw
+    hostile projectile geometry and only intervenes when a projectile is on a
+    near-term collision course and the score improvement exceeds a margin.
+    """
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        tti_limit: float = 0.40,
+        override_margin: float = 0.05,
+        hold_steps: int = 1,
+        switch_penalty: float = 0.05,
+    ):
+        self.enabled = bool(enabled)
+        self.tti_limit = max(0.0, float(tti_limit))
+        self.override_margin = max(0.0, float(override_margin))
+        self.hold_steps = max(1, int(hold_steps))
+        self.switch_penalty = max(0.0, float(switch_penalty))
+        self._held_action: int | None = None
+        self._hold_remaining = 0
+
+    def reset(self) -> None:
+        self._held_action = None
+        self._hold_remaining = 0
+
+    @staticmethod
+    def _hostile_projectiles(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        return [
+            projectile
+            for projectile in _items(state.get("projectiles"))
+            if "hostile" not in projectile or bool(projectile.get("hostile"))
+        ]
+
+    @staticmethod
+    def _collision_metrics(
+        state: Mapping[str, Any], action: int
+    ) -> dict[str, float | int | None]:
+        player = _mapping(state.get("player"))
+        player_position = _xy(player.get("position"))
+        player_speed = max(
+            150.0,
+            _number(_mapping(state.get("combat")).get("move_speed"), 300.0),
+        )
+        collision = 0.0
+        clearance = 0.0
+        tti_term = 0.0
+        hazards = 0
+        nearest_hazard_tti = None
+        projectiles = ProjectileHazardSelector._hostile_projectiles(state)
+        movement = ACTION_VECTORS[MoveAction(int(action))]
+        for projectile in projectiles:
+            tti, miss_distance = projectile_time_to_impact(
+                projectile,
+                player_position,
+                movement,
+                player_speed,
+            )
+            limit = max(8.0, _number(projectile.get("radius"), 12.0)) + 42.0
+            urgency = max(0.0, 1.0 - tti / 0.8)
+            proximity = max(0.0, 1.0 - miss_distance / limit)
+            near_proximity = max(0.0, 1.0 - miss_distance / (limit * 2.0))
+            collision += urgency * proximity
+            clearance += urgency * near_proximity
+            if miss_distance <= limit * 2.0:
+                tti_term += urgency
+            if tti <= 0.8 and miss_distance <= limit:
+                hazards += 1
+                if nearest_hazard_tti is None or tti < nearest_hazard_tti:
+                    nearest_hazard_tti = float(tti)
+        return {
+            "collision": collision,
+            "clearance": clearance,
+            "tti": tti_term,
+            "hazards": hazards,
+            "nearest_hazard_tti": nearest_hazard_tti,
+        }
+
+    def _score(
+        self,
+        metrics: Mapping[str, float | int | None],
+        action: int,
+        previous_action: int,
+    ) -> float:
+        return (
+            float(metrics["collision"])
+            + 0.35 * float(metrics["clearance"])
+            + 0.15 * float(metrics["tti"])
+            + (self.switch_penalty if int(action) != int(previous_action) else 0.0)
+        )
+
+    def apply(
+        self,
+        state: Mapping[str, Any],
+        requested_action: int,
+        *,
+        previous_action: int,
+    ) -> ProjectileHazardDecision:
+        requested = int(MoveAction(int(requested_action)))
+        previous = int(MoveAction(int(previous_action)))
+        metrics = {
+            int(action): self._collision_metrics(state, int(action))
+            for action in MoveAction
+        }
+        scores = {
+            action: self._score(metrics[action], action, previous)
+            for action in metrics
+        }
+        best_action = min(
+            scores,
+            key=lambda action: (scores[action], action != previous, action == int(MoveAction.IDLE)),
+        )
+        all_ttis = [
+            float(item["nearest_hazard_tti"])
+            for item in metrics.values()
+            if item["nearest_hazard_tti"] is not None
+        ]
+        nearest_tti = min(all_ttis) if all_ttis else -1.0
+        held = False
+        if self._hold_remaining > 0 and self._held_action is not None:
+            chosen = self._held_action
+            self._hold_remaining -= 1
+            held = True
+        else:
+            chosen = requested
+            should_override = (
+                self.enabled
+                and nearest_tti >= 0.0
+                and nearest_tti <= self.tti_limit
+                and best_action != requested
+                and scores[requested] - scores[best_action] > self.override_margin
+            )
+            if should_override:
+                chosen = best_action
+                self._held_action = best_action
+                self._hold_remaining = max(0, self.hold_steps - 1)
+            else:
+                self._held_action = None
+                self._hold_remaining = 0
+        return ProjectileHazardDecision(
+            requested_action=requested,
+            applied_action=int(chosen),
+            best_action=int(best_action),
+            requested_score=float(scores[requested]),
+            applied_score=float(scores[int(chosen)]),
+            best_score=float(scores[best_action]),
+            requested_collision_risk=float(metrics[requested]["collision"]),
+            applied_collision_risk=float(metrics[int(chosen)]["collision"]),
+            requested_hazard_count=int(metrics[requested]["hazards"]),
+            applied_hazard_count=int(metrics[int(chosen)]["hazards"]),
+            nearest_hazard_tti=float(nearest_tti),
+            overridden=int(chosen) != requested,
+            held=held,
+        )
+
+
 class CombatSafetyShield:
     """Override actions that are unsafe geometrically or on API path maps."""
 
@@ -234,12 +453,16 @@ class CombatSafetyShield:
         enabled: bool = True,
         override_margin: float = 0.08,
         hard_risk_threshold: float = 0.65,
+        minimum_risk: float = 0.22,
+        switch_penalty: float = 0.05,
     ):
         self.enabled = bool(enabled)
         self.override_margin = float(override_margin)
         self.hard_risk_threshold = float(hard_risk_threshold)
+        self.minimum_risk = max(0.0, float(minimum_risk))
+        self.switch_penalty = max(0.0, float(switch_penalty))
 
-    def risk(self, state: Mapping[str, Any], action: int) -> float:
+    def risk_breakdown(self, state: Mapping[str, Any], action: int) -> HazardRisk:
         player = _mapping(state.get("player"))
         px, py = _xy(player.get("position"))
         arena = _mapping(state.get("arena"))
@@ -250,12 +473,18 @@ class CombatSafetyShield:
         player_speed = max(150.0, _number(combat.get("move_speed"), 300.0))
         future_x = px + movement[0] * player_speed * 0.45
         future_y = py + movement[1] * player_speed * 0.45
-        risk = 0.0
+        enemy_risk = 0.0
+        projectile_risk = 0.0
+        indicator_risk = 0.0
+        boundary_risk = 0.0
+        projectile_path_risk = 0.0
+        enemy_path_risk = 0.0
+        boundary_path_risk = 0.0
 
         edge_margin = 150.0
         edge_distance = min(future_x, width - future_x, future_y, height - future_y)
         if edge_distance < edge_margin:
-            risk += ((edge_margin - edge_distance) / edge_margin) ** 2 * 4.0
+            boundary_risk += ((edge_margin - edge_distance) / edge_margin) ** 2 * 4.0
 
         enemies = _items(state.get("enemies"))
         enemies_by_runtime = _enemy_runtime_index(enemies)
@@ -279,7 +508,7 @@ class CombatSafetyShield:
             if _enemy_is_boss(enemy):
                 danger += 60.0
             if distance < danger:
-                risk += ((danger - distance) / danger) ** 2 * (
+                enemy_risk += ((danger - distance) / danger) ** 2 * (
                     6.0 if charging else 2.0
                 )
 
@@ -308,7 +537,7 @@ class CombatSafetyShield:
                 # sprite and attack body are larger than the center point.
                 separation = max(480.0, boss_radius + player_radius + 300.0)
                 if boss_distance < separation:
-                    risk += ((separation - boss_distance) / separation) ** 2 * 10.0
+                    enemy_risk += ((separation - boss_distance) / separation) ** 2 * 10.0
 
         for projectile in _nearest(_items(state.get("projectiles")), px, py)[:32]:
             tti, miss_distance = projectile_time_to_impact(
@@ -321,7 +550,7 @@ class CombatSafetyShield:
             owner_is_boss = _owner_threat_code(projectile, enemies_by_runtime) >= 1.0
             if miss_distance < danger:
                 urgency = 1.0 if stationary else 1.0 - min(1.0, tti / 0.8)
-                risk += ((danger - miss_distance) / danger) ** 2 * (
+                projectile_risk += ((danger - miss_distance) / danger) ** 2 * (
                     (7.0 + 10.0 * urgency)
                     if owner_is_boss
                     else (6.0 + 8.0 * urgency)
@@ -346,37 +575,78 @@ class CombatSafetyShield:
             time_to_activate = max(0.0, _number(indicator.get("time_to_activate"), 5.0))
             imminent = bool(indicator.get("active")) or time_to_activate <= 1.25
             if inside:
-                risk += (18.0 if imminent else 9.0) if owner_is_boss else (14.0 if imminent else 7.0)
+                indicator_risk += (18.0 if imminent else 9.0) if owner_is_boss else (14.0 if imminent else 7.0)
             else:
                 gap_x = max(0.0, dx - half_width)
                 gap_y = max(0.0, dy - half_height)
                 distance = math.hypot(gap_x, gap_y)
                 if distance < 180.0:
-                    risk += (1.0 - distance / 180.0) ** 2 * (5.0 if imminent else 2.0)
+                    indicator_risk += (1.0 - distance / 180.0) ** 2 * (5.0 if imminent else 2.0)
 
         # The bridge already predicts enemy, projectile, and boundary paths for
         # every action.  The old shield ignored those vectors, so it could
         # approve an action that the API had explicitly marked dangerous.
         paths = _mapping(state.get("projectile_paths"))
-        for key, scale in (
-            ("action_risk", 1.5),
-            ("enemy_action_risk", 1.5),
-            ("boundary_action_risk", 1.25),
-        ):
+        path_values = (
+            ("action_risk", 1.5, "projectile"),
+            ("enemy_action_risk", 1.5, "enemy"),
+            ("boundary_action_risk", 1.25, "boundary"),
+        )
+        for key, scale, component in path_values:
             values = paths.get(key, [])
-            if isinstance(values, (list, tuple)) and int(action) < len(values):
-                risk += max(0.0, min(1.0, _number(values[int(action)]))) * scale
-        return float(risk)
+            if not isinstance(values, (list, tuple)) or int(action) >= len(values):
+                continue
+            value = max(0.0, min(1.0, _number(values[int(action)]))) * scale
+            if component == "projectile":
+                projectile_path_risk += value
+            elif component == "enemy":
+                enemy_path_risk += value
+            else:
+                boundary_path_risk += value
+        return HazardRisk(
+            enemy=float(enemy_risk),
+            projectile=float(projectile_risk),
+            indicator=float(indicator_risk),
+            boundary=float(boundary_risk),
+            enemy_path=float(enemy_path_risk),
+            projectile_path=float(projectile_path_risk),
+            boundary_path=float(boundary_path_risk),
+        )
 
-    def apply(self, state: Mapping[str, Any], requested_action: int) -> SafetyDecision:
+    def risk(self, state: Mapping[str, Any], action: int) -> float:
+        """Return the total risk used by every runtime decision stage."""
+
+        return self.risk_breakdown(state, action).total
+
+    def apply(
+        self,
+        state: Mapping[str, Any],
+        requested_action: int,
+        *,
+        previous_action: int | None = None,
+    ) -> SafetyDecision:
         requested = int(MoveAction(int(requested_action)))
         if not self.enabled:
             return SafetyDecision(requested, requested, 0.0, 0.0)
         requested_risk = self.risk(state, requested)
-        if requested_risk < 0.30:
+        if requested_risk < self.minimum_risk:
             return SafetyDecision(requested, requested, requested_risk, requested_risk)
-        scored = [(self.risk(state, int(action)), int(action)) for action in MoveAction]
-        best_risk, best_action = min(scored, key=lambda row: (row[0], row[1] == 0))
+        risks = {int(action): self.risk(state, int(action)) for action in MoveAction}
+        previous = (
+            int(MoveAction(int(previous_action)))
+            if previous_action is not None
+            else None
+        )
+        best_action = min(
+            risks,
+            key=lambda action: (
+                risks[action]
+                + (self.switch_penalty if previous is not None and action != previous else 0.0),
+                action == int(MoveAction.IDLE),
+                action,
+            ),
+        )
+        best_risk = risks[best_action]
         if (
             requested_risk < self.hard_risk_threshold
             and requested_risk - best_risk < self.override_margin
@@ -437,6 +707,7 @@ class CrowdRecoveryGuard:
         enemy_threshold: int = 18,
         boundary_threshold: float = 0.45,
         hold_steps: int = 8,
+        shield: CombatSafetyShield | None = None,
     ):
         self.enabled = bool(enabled)
         self.wave_threshold = int(wave_threshold)
@@ -444,6 +715,7 @@ class CrowdRecoveryGuard:
         self.boundary_threshold = float(boundary_threshold)
         self.hold_steps = max(1, int(hold_steps))
         self.remaining = 0
+        self.shield = shield if shield is not None else CombatSafetyShield(enabled=True)
 
     def reset(self) -> None:
         self.remaining = 0
@@ -480,11 +752,13 @@ class CrowdRecoveryGuard:
         return int(MoveAction.UP if vertical < 0 else MoveAction.DOWN)
 
     @staticmethod
-    def _safest_escape_action(state: Mapping[str, Any]) -> int:
+    def _safest_escape_action(
+        state: Mapping[str, Any], shield: CombatSafetyShield | None = None
+    ) -> int:
         """Choose an inward, moving action without walking through a hazard."""
 
         center_action = CrowdRecoveryGuard._center_action(state)
-        shield = CombatSafetyShield(enabled=True, override_margin=0.0)
+        shield = shield if shield is not None else CombatSafetyShield(enabled=True, override_margin=0.0)
         player = _mapping(state.get("player"))
         arena = _mapping(state.get("arena"))
         px, py = _xy(player.get("position"))
@@ -536,14 +810,111 @@ class CrowdRecoveryGuard:
         if self.remaining <= 0 and trigger:
             self.remaining = self.hold_steps
         if self.remaining <= 0:
-            return SafetyDecision(requested, requested, boundary_max, boundary_max)
+            requested_risk = self.shield.risk(state, requested)
+            return SafetyDecision(requested, requested, requested_risk, requested_risk)
         self.remaining -= 1
-        escape_action = self._safest_escape_action(state)
+        escape_action = self._safest_escape_action(state, self.shield)
+        requested_risk = self.shield.risk(state, requested)
+        applied_risk = self.shield.risk(state, escape_action)
         return SafetyDecision(
             requested,
             escape_action,
-            boundary_max,
-            boundary_max,
+            requested_risk,
+            applied_risk,
+        )
+
+
+@dataclass(frozen=True)
+class CombatDecisionTrace:
+    """One auditable record of the active action-resolution pipeline."""
+
+    decision: SafetyDecision
+    hazard_decision: SafetyDecision
+    recovery_decision: SafetyDecision
+    requested_risk: HazardRisk
+    hazard_risk: HazardRisk
+    applied_risk: HazardRisk
+    source: str
+    enemy_contact_overridden: bool
+
+    @property
+    def hazard_overridden(self) -> bool:
+        return self.hazard_decision.overridden
+
+    @property
+    def recovery_overridden(self) -> bool:
+        return self.recovery_decision.overridden
+
+
+class CombatDecisionPipeline:
+    """Resolve one policy action through one unified hazard score.
+
+    The policy proposes an action.  The shared safety shield scores enemy
+    movement/contact, projectiles, telegraphs, and boundaries together.  The
+    crowd guard is an explicit emergency mode that reuses that same shield;
+    it is not a second independent hazard scorer.  This makes precedence and
+    telemetry deterministic: hazard first, recovery second, then send once.
+    """
+
+    def __init__(
+        self,
+        *,
+        safety_shield: CombatSafetyShield,
+        crowd_recovery_guard: CrowdRecoveryGuard,
+    ):
+        self.safety_shield = safety_shield
+        self.crowd_recovery_guard = crowd_recovery_guard
+
+    def reset(self) -> None:
+        self.crowd_recovery_guard.reset()
+
+    def apply(
+        self,
+        state: Mapping[str, Any],
+        requested_action: int,
+        *,
+        previous_action: int | None = None,
+    ) -> CombatDecisionTrace:
+        requested = int(MoveAction(int(requested_action)))
+        requested_risk = self.safety_shield.risk_breakdown(state, requested)
+        hazard_decision = self.safety_shield.apply(
+            state, requested, previous_action=previous_action
+        )
+        hazard_risk = self.safety_shield.risk_breakdown(
+            state, hazard_decision.applied_action
+        )
+        recovery_decision = self.crowd_recovery_guard.apply(
+            state, hazard_decision.applied_action
+        )
+        applied_risk = self.safety_shield.risk_breakdown(
+            state, recovery_decision.applied_action
+        )
+        decision = SafetyDecision(
+            requested,
+            recovery_decision.applied_action,
+            requested_risk.total,
+            applied_risk.total,
+        )
+        enemy_contact_overridden = bool(
+            decision.overridden
+            and requested_risk.enemy_total - applied_risk.enemy_total >= 0.08
+        )
+        source = (
+            "crowd_recovery"
+            if recovery_decision.overridden
+            else "hazard"
+            if hazard_decision.overridden
+            else "policy"
+        )
+        return CombatDecisionTrace(
+            decision=decision,
+            hazard_decision=hazard_decision,
+            recovery_decision=recovery_decision,
+            requested_risk=requested_risk,
+            hazard_risk=hazard_risk,
+            applied_risk=applied_risk,
+            source=source,
+            enemy_contact_overridden=enemy_contact_overridden,
         )
 
 

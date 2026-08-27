@@ -8,6 +8,8 @@ set "BROTATO_V3_OUTPUT_DIR=%MODEL_DIR%"
 set "BROTATO_V3_UI_BUILD_PROFILE=ranged_smg"
 set "BROTATO_V3_UI_MODEL="
 set "BROTATO_V3_UI_DATASET=%MODEL_ROOT%\ui_decisions_ranged_smg_v2.jsonl"
+set "PYTHONPATH=C:\ml\brotato\src;C:\ml\brotato;%PYTHONPATH%"
+if exist "%MODEL_DIR%\v4_stop.request" del /q "%MODEL_DIR%\v4_stop.request"
 
 echo [train] Checking trainer port...
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 4242 -State Listen -ErrorAction SilentlyContinue) { exit 1 }"

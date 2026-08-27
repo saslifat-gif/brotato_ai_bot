@@ -12,11 +12,13 @@ sys.path.insert(0, str(ROOT))
 
 from v3.bridge_server import BridgeServer
 from v3.combat_policy import (
+    CombatDecisionPipeline,
     CombatHeuristicTeacher,
     CombatPolicyBase,
     CombatSafetyShield,
     CrowdRecoveryGuard,
     EnemyContactGuard,
+    ProjectileHazardSelector,
     HumanCombatDecisionLogger,
     SemanticHumanCombatDecisionLogger,
     RICH_OBSERVATION_SIZE,
@@ -651,6 +653,84 @@ def test_safety_shield_sidesteps_an_incoming_projectile():
     assert decision.overridden
     assert decision.applied_action in {1, 2, 5, 7}
     assert decision.applied_risk < decision.requested_risk
+
+
+def test_safety_shield_breakdown_accounts_for_enemy_motion():
+    state = _state()
+    state["enemies"] = [{
+        "position": {"x": 650.0, "y": 300.0},
+        "velocity": {"x": -120.0, "y": 0.0},
+        "radius": 80.0,
+        "attack_method": "contact",
+    }]
+    breakdown = CombatSafetyShield().risk_breakdown(state, 4)
+    assert breakdown.enemy > 0.0
+    assert breakdown.total > breakdown.projectile_total
+
+
+def test_combat_decision_pipeline_has_one_hazard_stage_and_explicit_recovery():
+    state = _state(wave=19)
+    state["enemies"] = [{
+        "position": {"x": 650.0, "y": 300.0},
+        "velocity": {"x": 0.0, "y": 0.0},
+        "radius": 80.0,
+        "attack_method": "contact",
+    }]
+    shield = CombatSafetyShield()
+    pipeline = CombatDecisionPipeline(
+        safety_shield=shield,
+        crowd_recovery_guard=CrowdRecoveryGuard(shield=shield),
+    )
+    trace = pipeline.apply(state, requested_action=4, previous_action=4)
+    assert trace.requested_risk.enemy_total > 0.0
+    assert trace.decision.applied_risk <= trace.decision.requested_risk
+    assert trace.source in {"hazard", "crowd_recovery"}
+
+
+def test_projectile_hazard_selector_overrides_only_for_imminent_material_gain():
+    state = _state()
+    state["combat"] = {"move_speed": 300.0}
+    state["projectiles"] = [{
+        "position": {"x": 650.0, "y": 300.0},
+        "velocity": {"x": -600.0, "y": 0.0},
+        "radius": 15.0,
+        "hostile": True,
+    }]
+    selector = ProjectileHazardSelector(
+        tti_limit=0.40,
+        override_margin=0.05,
+        hold_steps=1,
+        switch_penalty=0.05,
+    )
+    decision = selector.apply(state, requested_action=4, previous_action=4)
+    assert decision.overridden
+    assert decision.applied_action in {1, 2, 5, 7}
+    assert decision.nearest_hazard_tti <= 0.40
+    assert decision.applied_collision_risk < decision.requested_collision_risk
+    assert decision.requested_score - decision.best_score > 0.05
+
+    state["projectiles"][0]["position"] = {"x": 1800.0, "y": 300.0}
+    ordinary = selector.apply(state, requested_action=4, previous_action=4)
+    assert not ordinary.overridden
+    assert ordinary.applied_action == 4
+    assert ordinary.nearest_hazard_tti < 0.0
+
+
+def test_projectile_hazard_selector_ignores_friendly_projectiles():
+    state = _state()
+    state["projectiles"] = [{
+        "position": {"x": 650.0, "y": 300.0},
+        "velocity": {"x": -600.0, "y": 0.0},
+        "radius": 15.0,
+        "hostile": False,
+    }]
+    decision = ProjectileHazardSelector().apply(
+        state,
+        requested_action=4,
+        previous_action=4,
+    )
+    assert not decision.overridden
+    assert decision.nearest_hazard_tti < 0.0
 
 
 def test_safety_shield_honors_advertised_boundary_path_risk():

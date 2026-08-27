@@ -230,12 +230,14 @@ an ordinary enemy or a boss. On the final wave, the macro planner combines
 those links with every boss's exact API hitbox to advertise the safest escape
 direction while the runtime shield gives boss-owned attacks extra weight.
 
-V4 also has a narrow enemy-contact guard. It intervenes only when the bridge's
-all-enemy path predictor rates the requested action at least 0.22 and another
-movement direction improves risk by at least 0.08. Each intervention applies a
-small learning penalty to the originally requested PPO action, so the guard is
-a training scaffold rather than a permanent replacement for learned movement.
-TensorBoard reports its frequency and requested/applied risk under `movement/`.
+V4 resolves movement through one auditable hazard stage. The stage scores
+predicted enemy movement/contact, projectiles, boss telegraphs, and arena
+boundaries together, then applies at most one hazard override. A separate
+crowd-recovery mode is allowed to hold a short escape only when crowd or edge
+pressure is high, and it reuses the same hazard score rather than creating a
+second safety policy. The action source and risk breakdown are recorded in
+TensorBoard under `combat/hazard_*`, while enemy-contact risk remains visible
+under `movement/`.
 
 Fine-tune that human base online without discarding its behavior:
 
@@ -275,7 +277,7 @@ Protocol details are in `v3/PROTOCOL.md`.
 - `BROTATO_V3_UI_BUILD_PROFILE` — structured UI teacher; defaults to `stick_melee`.
 - `BROTATO_V3_UI_DATASET` — JSONL decision log used to train the small UI Build Base.
 - `BROTATO_V3_UI_MODEL` — optional trained UI Build Base checkpoint; the rule teacher remains a fallback.
-- `BROTATO_V3_SAFETY_SHIELD` — imminent-collision override; defaults off during PPO training.
+- `BROTATO_V3_SAFETY_SHIELD` — unified enemy/projectile/telegraph/boundary hazard override; defaults off during PPO training.
 - `BROTATO_V3_COMBAT_DATASET` — optional rich structured combat decision log.
 - `BROTATO_V3_RESUME_LR` — resumed PPO learning rate; defaults to `0.00005`.
 - `BROTATO_V3_RESUME_ENT_COEF` — resumed PPO entropy coefficient; defaults to `0.002`.

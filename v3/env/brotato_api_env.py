@@ -1,26 +1,28 @@
-"""Gymnasium environment backed by the local Brotato mod API."""
+"""Gymnasium compatibility entrypoint backed by the active v4 runtime."""
 
+import time
 from typing import Any, Mapping, Optional
 
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from v3.bridge_server import BridgeServer
-from v3.combat_policy import (
-    ACTION_VECTORS,
-    CombatDecisionLogger,
+from brotato_ai.bridge.client import BridgeClient
+from brotato_ai.control import (
+    CombatDecisionPipeline,
     CombatSafetyShield,
     CrowdRecoveryGuard,
-    EnemyContactGuard,
-    SafetyDecision,
+    FinalActionWriter,
+)
+from brotato_ai.data.recorder import DecisionTraceLogger
+from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
+from brotato_ai.domain.state import normalize_state
+from v3.combat_policy import (
     movement_transition_metrics,
     projectile_time_to_impact,
 )
 from v3.config import V3Config
 from v3.protocol import (
-    MoveAction,
-    action_message,
     configure_message,
     reset_message,
     training_pause_message,
@@ -142,13 +144,13 @@ class BrotatoApiEnv(gym.Env):
     def __init__(
         self,
         cfg: V3Config,
-        server: Optional[BridgeServer] = None,
+        server: Optional[BridgeClient] = None,
         vectorizer=None,
         state_hz: Optional[float] = None,
     ):
         super().__init__()
         self.cfg = cfg
-        self.server = server or BridgeServer(cfg.host, cfg.port)
+        self.server = server or BridgeClient(cfg.host, cfg.port)
         self.server.start()
         self.vectorizer = vectorizer or ApiStateVectorizer()
         self.state_hz = float(state_hz) if state_hz is not None else None
@@ -165,17 +167,18 @@ class BrotatoApiEnv(gym.Env):
         self.previous_action = int(MoveAction.IDLE)
         self.last_state = None
         self.safety_shield = CombatSafetyShield(enabled=cfg.safety_shield)
-        self.enemy_contact_guard = EnemyContactGuard(
-            enabled=bool(getattr(self.vectorizer, "enemy_contact_guard", False)),
-            risk_threshold=float(
-                getattr(self.vectorizer, "enemy_contact_guard_threshold", 0.22)
-            ),
-            improvement_margin=float(
-                getattr(self.vectorizer, "enemy_contact_guard_margin", 0.08)
-            ),
+        self.crowd_recovery_guard = CrowdRecoveryGuard(
+            enabled=True,
+            shield=self.safety_shield,
         )
-        self.crowd_recovery_guard = CrowdRecoveryGuard(enabled=True)
-        self.combat_logger = CombatDecisionLogger(cfg.combat_decision_log)
+        self.decision_pipeline = CombatDecisionPipeline(
+            safety_shield=self.safety_shield,
+            crowd_recovery_guard=self.crowd_recovery_guard,
+        )
+        self.action_writer = FinalActionWriter(
+            self.server, timeout_sec=self.cfg.state_timeout_sec
+        )
+        self.combat_logger = DecisionTraceLogger(cfg.combat_decision_log)
         self.ui_controller = AutoUiController(
             max_shop_buys=cfg.max_shop_buys,
             max_shop_rerolls=cfg.max_shop_rerolls,
@@ -186,6 +189,8 @@ class BrotatoApiEnv(gym.Env):
         self.training_paused = False
         self._last_published_ms: Optional[int] = None
         self._effective_state_hz = 0.0
+        self._last_state_interval_ms = 0.0
+        self._last_control_started: Optional[float] = None
         self._cached_projectile_paths: dict[str, Any] = {}
         self._cached_arena_grid: dict[str, Any] = {}
 
@@ -221,7 +226,8 @@ class BrotatoApiEnv(gym.Env):
         self._last_published_ms = published_ms
         if previous is None or published_ms <= previous:
             return self._effective_state_hz
-        instantaneous = 1000.0 / max(1.0, float(published_ms - previous))
+        self._last_state_interval_ms = max(1.0, float(published_ms - previous))
+        instantaneous = 1000.0 / self._last_state_interval_ms
         if self._effective_state_hz <= 0.0:
             self._effective_state_hz = instantaneous
         else:
@@ -262,7 +268,7 @@ class BrotatoApiEnv(gym.Env):
             except Exception as exc:
                 print(f"[v3-env] reset request not delivered: {exc}")
         self.ui_controller.reset_episode()
-        self.crowd_recovery_guard.reset()
+        self.decision_pipeline.reset()
         print("[v3-env] waiting for combat; structured menu automation is active")
         state = self.server.wait_for_state(
             timeout_sec=self.cfg.reset_timeout_sec,
@@ -291,9 +297,12 @@ class BrotatoApiEnv(gym.Env):
         self._cached_projectile_paths = {}
         self._cached_arena_grid = {}
         state = self._merge_cached_spatial_state(state)
+        state = normalize_state(state)
         self.last_state = state
         self._last_published_ms = None
         self._effective_state_hz = 0.0
+        self._last_state_interval_ms = 0.0
+        self._last_control_started = None
         self._observe_state_rate(state)
         self.previous_action = int(MoveAction.IDLE)
         self.reward_engine.reset(state)
@@ -314,27 +323,21 @@ class BrotatoApiEnv(gym.Env):
         previous_state = self.last_state or {}
         previous_action = self.previous_action
         requested = int(MoveAction(int(action)))
-        contact_decision = self.enemy_contact_guard.apply(previous_state, requested)
-        shield_decision = self.safety_shield.apply(
-            previous_state, contact_decision.applied_action
+        control_started = time.monotonic()
+        control_interval_ms = (
+            0.0
+            if self._last_control_started is None
+            else max(0.0, (control_started - self._last_control_started) * 1000.0)
         )
-        crowd_decision = self.crowd_recovery_guard.apply(
-            previous_state, shield_decision.applied_action
+        self._last_control_started = control_started
+        decision_trace = self.decision_pipeline.apply(
+            previous_state,
+            requested,
+            previous_action=previous_action,
+            state_interval_ms=self._last_state_interval_ms,
+            control_interval_ms=control_interval_ms,
         )
-        if contact_decision.overridden:
-            decision = SafetyDecision(
-                requested,
-                crowd_decision.applied_action,
-                contact_decision.requested_risk,
-                crowd_decision.applied_risk,
-            )
-        else:
-            decision = SafetyDecision(
-                requested,
-                crowd_decision.applied_action,
-                shield_decision.requested_risk,
-                crowd_decision.applied_risk,
-            )
+        decision = decision_trace.decision
         normalized = decision.applied_action
         projectile_diagnostics = _projectile_diagnostics(
             previous_state,
@@ -381,14 +384,9 @@ class BrotatoApiEnv(gym.Env):
             1.0,
             selected_projectile_risk + selected_enemy_risk + selected_boundary_risk,
         )
-        self.combat_logger.record(
-            self.last_state or {},
-            decision,
-            source="policy_with_safety" if decision.overridden else "policy",
-            previous_action=self.previous_action,
-        )
+        self.combat_logger.record(decision_trace)
         self.sequence += 1
-        self.server.send(action_message(normalized, self.sequence), timeout_sec=self.cfg.state_timeout_sec)
+        self.action_writer.write(decision_trace, self.sequence)
         previous_tick = int(self.last_state.get("tick", -1)) if self.last_state else None
         state = self.server.wait_for_state(
             timeout_sec=self.cfg.state_timeout_sec,
@@ -396,6 +394,7 @@ class BrotatoApiEnv(gym.Env):
             minimum_sequence=self.sequence,
         )
         state = self._merge_cached_spatial_state(state)
+        state = normalize_state(state)
         effective_state_hz = self._observe_state_rate(state)
         movement = movement_transition_metrics(
             previous_state,
@@ -425,7 +424,7 @@ class BrotatoApiEnv(gym.Env):
         )
         contact_override_penalty = (
             float(getattr(self.vectorizer, "enemy_contact_override_penalty", 0.0))
-            if contact_decision.overridden
+            if decision_trace.enemy_contact_overridden
             else 0.0
         )
         reward = self.reward_engine.step(state)
@@ -470,6 +469,7 @@ class BrotatoApiEnv(gym.Env):
             ui_sent = result.sent_roles
             ui_confirmed = result.confirmed_roles
             state = self._merge_cached_spatial_state(state)
+            state = normalize_state(state)
             terminated = bool(state.get("dead") or state.get("victory"))
         previous_player = previous_state.get("player", {})
         current_player = state.get("player", {})
@@ -525,12 +525,32 @@ class BrotatoApiEnv(gym.Env):
             "requested_action": requested,
             "applied_action": normalized,
             "safety_overridden": decision.overridden,
-            "enemy_contact_overridden": contact_decision.overridden,
-            "enemy_contact_requested_risk": contact_decision.requested_risk,
-            "enemy_contact_applied_risk": contact_decision.applied_risk,
+            "hazard_overridden": decision_trace.hazard_overridden,
+            "hazard_source": decision_trace.source,
+            "hazard_action": decision_trace.hazard_decision.applied_action,
+            "hazard_requested_risk": decision_trace.requested_risk.total,
+            "hazard_stage_applied_risk": decision_trace.hazard_risk.total,
+            "hazard_applied_risk": decision_trace.applied_risk.total,
+            "hazard_risk_reduction": (
+                decision_trace.requested_risk.total
+                - decision_trace.applied_risk.total
+            ),
+            "hazard_enemy_risk": decision_trace.requested_risk.enemy_total,
+            "hazard_projectile_risk": decision_trace.requested_risk.projectile_total,
+            "hazard_indicator_risk": decision_trace.requested_risk.indicator,
+            "hazard_boundary_risk": decision_trace.requested_risk.boundary_total,
+            "hazard_applied_enemy_risk": decision_trace.applied_risk.enemy_total,
+            "hazard_applied_projectile_risk": decision_trace.applied_risk.projectile_total,
+            "hazard_applied_indicator_risk": decision_trace.applied_risk.indicator,
+            "hazard_applied_boundary_risk": decision_trace.applied_risk.boundary_total,
+            "enemy_contact_overridden": decision_trace.enemy_contact_overridden,
+            "enemy_contact_requested_risk": decision_trace.requested_risk.enemy_total,
+            "enemy_contact_applied_risk": decision_trace.applied_risk.enemy_total,
             "enemy_contact_override_penalty": contact_override_penalty,
-            "crowd_recovery_overridden": crowd_decision.overridden,
-            "crowd_recovery_active": self.crowd_recovery_guard.remaining > 0,
+            "crowd_recovery_overridden": decision_trace.recovery_overridden,
+            "crowd_recovery_active": decision_trace.recovery_active,
+            "hazard_state_interval_ms": decision_trace.state_interval_ms,
+            "hazard_control_interval_ms": decision_trace.control_interval_ms,
             "requested_risk": decision.requested_risk,
             "applied_risk": decision.applied_risk,
             "materials": int(state.get("counters", {}).get("materials", 0)),
@@ -586,6 +606,24 @@ class BrotatoApiEnv(gym.Env):
                 "projectile_path_safe_action": projectile_diagnostics["projectile_path_safe_action"],
                 "projectile_path_risk_margin": projectile_diagnostics["projectile_path_risk_margin"],
                 "projectile_path_action_improved": projectile_diagnostics["projectile_path_action_improved"],
+                "hazard_overridden": decision_trace.hazard_overridden,
+                "hazard_source": decision_trace.source,
+                "hazard_action": decision_trace.hazard_decision.applied_action,
+                "hazard_requested_risk": decision_trace.requested_risk.total,
+                "hazard_stage_applied_risk": decision_trace.hazard_risk.total,
+                "hazard_applied_risk": decision_trace.applied_risk.total,
+                "hazard_risk_reduction": (
+                    decision_trace.requested_risk.total
+                    - decision_trace.applied_risk.total
+                ),
+                "hazard_enemy_risk": decision_trace.requested_risk.enemy_total,
+                "hazard_projectile_risk": decision_trace.requested_risk.projectile_total,
+                "hazard_indicator_risk": decision_trace.requested_risk.indicator,
+                "hazard_boundary_risk": decision_trace.requested_risk.boundary_total,
+                "hazard_applied_enemy_risk": decision_trace.applied_risk.enemy_total,
+                "hazard_applied_projectile_risk": decision_trace.applied_risk.projectile_total,
+                "hazard_applied_indicator_risk": decision_trace.applied_risk.indicator,
+                "hazard_applied_boundary_risk": decision_trace.applied_risk.boundary_total,
                 "projectile_predicted_hazard_count": projectile_diagnostics["projectile_predicted_hazard_count"],
                 "projectile_nearest_tti": projectile_diagnostics["projectile_nearest_tti"],
                 "projectile_nearest_miss_distance": projectile_diagnostics["projectile_nearest_miss_distance"],

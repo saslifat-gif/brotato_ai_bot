@@ -18,6 +18,7 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.utils import get_schedule_fn
 from torch import nn
 
+from brotato_ai.training.callbacks import GracefulStopCallback
 from v3.combat_policy import BULLET_HELL_OBSERVATION_SIZE, SEMANTIC_OBSERVATION_SIZE
 from v3.config import load_config
 from v3.env.brotato_api_env import BrotatoApiEnv
@@ -474,6 +475,7 @@ def main() -> int:
     # disabled it unconditionally, allowing the policy to walk into API-rated
     # enemy and boundary paths.  --no-safety remains available for diagnostics.
     cfg = replace(cfg, safety_shield=not args.no_safety)
+    print(cfg.startup_summary(), flush=True)
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     records = load_semantic_records(args.dataset)
     if len(records) < 1_000:
@@ -558,6 +560,7 @@ def main() -> int:
         ),
         SaveBestRollingRewardCallback(cfg.output_dir / "v4_temporal_best", min_episodes=10),
         V4TensorboardCallback(),
+        GracefulStopCallback(cfg.output_dir / "v4_stop.request"),
     ])
     try:
         model.learn(

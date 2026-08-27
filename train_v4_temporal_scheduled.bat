@@ -2,7 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
-set "PYTHON=C:\Users\lifat\miniconda3\envs\ml\python.exe"
+set "PYTHON=C:\Users\lifat\miniconda3\envs\bota_ai\python.exe"
+set "PYTHONPATH=C:\ml\brotato\src;C:\ml\brotato;%PYTHONPATH%"
 set "MODEL_ROOT=C:\ml\brotato\models\version_3"
 set "MODEL_DIR=%MODEL_ROOT%\ranged_smg_v2"
 set "BROTATO_V3_OUTPUT_DIR=%MODEL_DIR%"
@@ -38,7 +39,7 @@ if defined RESUME_MODEL set "RESUME_OPTION=--resume %RESUME_MODEL%"
 
 if defined RESUME_MODEL (echo [v4-scheduled] resume=%RESUME_MODEL%) else echo [v4-scheduled] resume=fresh-ranged-lineage
 echo [v4-scheduled] launch_token=%V4_LAUNCH_TOKEN% >> "%MODEL_DIR%\v4_temporal_train.log"
-"%PYTHON%" -u -m v4.train_temporal_hierarchical --source-model "%SOURCE_MODEL%" --dataset "%SEMANTIC_DATASET%" --raw-dataset "%RAW_DATASET%" %RESUME_OPTION% --raw-cache-only --state-hz 24 --torch-threads 1 --device cuda --timesteps 1000000 >> "%MODEL_DIR%\v4_temporal_train.log" 2>&1
+"%PYTHON%" -u -m brotato_ai.training.ppo --source-model "%SOURCE_MODEL%" --dataset "%SEMANTIC_DATASET%" --raw-dataset "%RAW_DATASET%" %RESUME_OPTION% --raw-cache-only --state-hz 24 --torch-threads 1 --device cuda --timesteps 1000000 >> "%MODEL_DIR%\v4_temporal_train.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [v4-scheduled] trainer exited with code %EXIT_CODE%. See %MODEL_DIR%\v4_temporal_train.log
 if not "%EXIT_CODE%"=="0" pause

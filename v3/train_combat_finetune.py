@@ -39,6 +39,8 @@ class CombatLayerNormExtractor(BaseFeaturesExtractor):
 
 
 def actor_logits(policy, observations: torch.Tensor) -> torch.Tensor:
+    policy_device = next(policy.parameters()).device
+    observations = observations.to(policy_device)
     features = policy.extract_features(observations)
     if isinstance(features, tuple):
         features = features[0]
@@ -249,6 +251,81 @@ class CombatTensorboardCallback(BaseCallback):
             self.logger.record_mean(
                 "combat/projectile_path_action_improved",
                 float(bool(info.get("projectile_path_action_improved"))),
+            )
+            self.logger.record_mean(
+                "combat/hazard_override_rate",
+                float(bool(info.get("hazard_overridden"))),
+            )
+            self.logger.record_mean(
+                "combat/hazard_requested_risk",
+                float(info.get("hazard_requested_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_stage_applied_risk",
+                float(info.get("hazard_stage_applied_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_applied_risk",
+                float(info.get("hazard_applied_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_risk_reduction",
+                float(info.get("hazard_risk_reduction", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_enemy_risk",
+                float(info.get("hazard_enemy_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_projectile_risk",
+                float(info.get("hazard_projectile_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_indicator_risk",
+                float(info.get("hazard_indicator_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_boundary_risk",
+                float(info.get("hazard_boundary_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_applied_enemy_risk",
+                float(info.get("hazard_applied_enemy_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_applied_projectile_risk",
+                float(info.get("hazard_applied_projectile_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_applied_indicator_risk",
+                float(info.get("hazard_applied_indicator_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_applied_boundary_risk",
+                float(info.get("hazard_applied_boundary_risk", 0.0)),
+            )
+            hazard_source = str(info.get("hazard_source", "policy"))
+            self.logger.record_mean(
+                "combat/hazard_source_policy", float(hazard_source == "policy")
+            )
+            self.logger.record_mean(
+                "combat/hazard_source_hazard", float(hazard_source == "hazard")
+            )
+            self.logger.record_mean(
+                "combat/hazard_source_crowd_recovery",
+                float(hazard_source == "crowd_recovery"),
+            )
+            self.logger.record_mean(
+                "combat/hazard_recovery_active",
+                float(bool(info.get("crowd_recovery_active"))),
+            )
+            self.logger.record_mean(
+                "combat/hazard_state_interval_ms",
+                float(info.get("hazard_state_interval_ms", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/hazard_control_interval_ms",
+                float(info.get("hazard_control_interval_ms", 0.0)),
             )
             self.logger.record_mean(
                 "combat/projectile_predicted_hazard_count",
