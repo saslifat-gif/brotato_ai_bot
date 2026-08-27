@@ -400,6 +400,10 @@ class CombatTensorboardCallback(BaseCallback):
                 float(bool(info.get("movement_low_motion"))),
             )
             self.logger.record_mean(
+                "movement/center_stagnation_rate",
+                float(bool(info.get("movement_center_stagnation"))),
+            )
+            self.logger.record_mean(
                 "movement/idle_penalty",
                 float(info.get("movement_idle_penalty", 0.0)),
             )
@@ -410,6 +414,10 @@ class CombatTensorboardCallback(BaseCallback):
             self.logger.record_mean(
                 "movement/low_motion_penalty",
                 float(info.get("movement_low_motion_penalty", 0.0)),
+            )
+            self.logger.record_mean(
+                "movement/center_stagnation_penalty",
+                float(info.get("movement_center_stagnation_penalty", 0.0)),
             )
             self.logger.record_mean(
                 "reward/total",

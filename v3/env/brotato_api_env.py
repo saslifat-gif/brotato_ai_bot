@@ -18,6 +18,7 @@ from brotato_ai.data.recorder import DecisionTraceLogger
 from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
 from brotato_ai.domain.state import normalize_state
 from v3.combat_policy import (
+    center_stagnation_signal,
     movement_transition_metrics,
     projectile_time_to_impact,
 )
@@ -407,6 +408,21 @@ class BrotatoApiEnv(gym.Env):
             _risk_vector(projectile_risks) + _risk_vector(enemy_risks),
             default=0.0,
         )
+        center_threat_risk = max(
+            threat_max_risk,
+            float(decision_trace.requested_risk.total),
+        )
+        center_stagnation = center_stagnation_signal(
+            previous_state,
+            state,
+            threat_risk=center_threat_risk,
+            radius=float(
+                getattr(self.vectorizer, "center_stagnation_radius", 0.0)
+            ),
+            threat_exemption=float(
+                getattr(self.vectorizer, "center_stagnation_threat_exemption", 0.0)
+            ),
+        ) and not decision_trace.recovery_active
         idle_penalty = (
             float(getattr(self.vectorizer, "idle_reward_scale", 0.0))
             if movement["active"] and normalized == int(MoveAction.IDLE)
@@ -427,6 +443,11 @@ class BrotatoApiEnv(gym.Env):
             if decision_trace.enemy_contact_overridden
             else 0.0
         )
+        center_stagnation_penalty = (
+            float(getattr(self.vectorizer, "center_stagnation_reward_scale", 0.0))
+            if center_stagnation
+            else 0.0
+        )
         reward = self.reward_engine.step(state)
         reward_components = dict(self.reward_engine.last_components)
         late_focus = bool(self.cfg.late_wave_focus and _state_wave(previous_state) >= 18)
@@ -445,11 +466,13 @@ class BrotatoApiEnv(gym.Env):
             + reversal_penalty
             + low_motion_penalty
             + contact_override_penalty
+            + center_stagnation_penalty
         )
         reward_components["idle"] = -idle_penalty
         reward_components["reversal"] = -reversal_penalty
         reward_components["low_motion"] = -low_motion_penalty
         reward_components["contact_override"] = -contact_override_penalty
+        reward_components["center_stagnation"] = -center_stagnation_penalty
         terminated = bool(state.get("dead") or state.get("victory"))
         ui_sent = []
         ui_confirmed = []
@@ -589,6 +612,8 @@ class BrotatoApiEnv(gym.Env):
             "movement_idle_penalty": idle_penalty,
             "movement_reversal_penalty": reversal_penalty,
             "movement_low_motion_penalty": low_motion_penalty,
+            "movement_center_stagnation": bool(center_stagnation),
+            "movement_center_stagnation_penalty": center_stagnation_penalty,
             "reward_total": float(reward),
             "reward_components": reward_components,
         }

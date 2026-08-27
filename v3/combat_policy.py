@@ -117,6 +117,37 @@ def movement_transition_metrics(
     }
 
 
+def center_stagnation_signal(
+    previous_state: Mapping[str, Any],
+    state: Mapping[str, Any],
+    *,
+    threat_risk: float,
+    radius: float = 0.12,
+    threat_exemption: float = 0.45,
+) -> bool:
+    """Detect lingering near the exact arena center when danger is low."""
+
+    if (
+        not isinstance(previous_state, Mapping)
+        or not isinstance(state, Mapping)
+        or previous_state.get("phase") != "combat"
+        or state.get("phase") != "combat"
+        or float(threat_risk) >= float(threat_exemption)
+    ):
+        return False
+    previous_player = _mapping(previous_state.get("player"))
+    current_player = _mapping(state.get("player"))
+    arena = _mapping(state.get("arena"))
+    width = max(1.0, _number(arena.get("width"), 1920.0))
+    height = max(1.0, _number(arena.get("height"), 1080.0))
+    previous_x, previous_y = _xy(previous_player.get("position"))
+    current_x, current_y = _xy(current_player.get("position"))
+    previous_radius = math.hypot(previous_x / width - 0.5, previous_y / height - 0.5)
+    current_radius = math.hypot(current_x / width - 0.5, current_y / height - 0.5)
+    center_radius = max(0.0, float(radius))
+    return previous_radius <= center_radius and current_radius <= center_radius
+
+
 def _number(value: Any, default: float = 0.0) -> float:
     try:
         result = float(value)

@@ -368,6 +368,11 @@ class HierarchicalCombatVectorizer:
     idle_reward_scale = 0.03
     reversal_reward_scale = 0.008
     low_motion_reward_scale = 0.02
+    # Discourage parking in the exact center when the arena is safe, while
+    # leaving true hazard/recovery decisions unconstrained.
+    center_stagnation_reward_scale = 0.012
+    center_stagnation_radius = 0.12
+    center_stagnation_threat_exemption = 0.45
     enemy_contact_guard = True
     enemy_contact_guard_threshold = 0.22
     enemy_contact_guard_margin = 0.08
