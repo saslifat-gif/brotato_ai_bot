@@ -84,9 +84,17 @@ class HumanAnchoredPPO(PPO):
         bc_coefficient: float = 0.20,
         bc_batches: int = 2,
         bc_batch_size: int = 256,
+        bc_final_coefficient: float | None = None,
+        bc_anneal_steps: int = 0,
         **kwargs,
     ):
         self.bc_coefficient = float(bc_coefficient)
+        self.bc_final_coefficient = float(
+            self.bc_coefficient
+            if bc_final_coefficient is None
+            else bc_final_coefficient
+        )
+        self.bc_anneal_steps = max(0, int(bc_anneal_steps))
         self.bc_batches = max(0, int(bc_batches))
         self.bc_batch_size = max(16, int(bc_batch_size))
         self._bc_features = None
@@ -148,9 +156,23 @@ class HumanAnchoredPPO(PPO):
             if paused:
                 env.env_method("set_training_paused", False)
 
+    def _effective_bc_coefficient(self) -> float:
+        if self.bc_anneal_steps <= 0:
+            return max(0.0, self.bc_coefficient)
+        progress = min(
+            1.0,
+            max(0.0, float(self.num_timesteps) / float(self.bc_anneal_steps)),
+        )
+        return max(
+            0.0,
+            self.bc_coefficient
+            + progress * (self.bc_final_coefficient - self.bc_coefficient),
+        )
+
     def _train_while_game_paused(self) -> None:
         super().train()
-        if self._bc_features is None or self.bc_batches <= 0 or self.bc_coefficient <= 0.0:
+        effective_coefficient = self._effective_bc_coefficient()
+        if self._bc_features is None or self.bc_batches <= 0 or effective_coefficient <= 0.0:
             return
         self.policy.set_training_mode(True)
         losses = []
@@ -163,7 +185,7 @@ class HumanAnchoredPPO(PPO):
             logits = actor_logits(self.policy, observations)
             loss = F.cross_entropy(logits, targets)
             self.policy.optimizer.zero_grad()
-            (loss * self.bc_coefficient).backward()
+            (loss * effective_coefficient).backward()
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.policy.optimizer.step()
             losses.append(float(loss.detach().cpu().item()))
@@ -199,7 +221,10 @@ class HumanAnchoredPPO(PPO):
                                 .float().mean().cpu().item()
                             ),
                         )
-        self.logger.record("human_bc/coefficient", self.bc_coefficient)
+        self.logger.record("human_bc/coefficient", effective_coefficient)
+        self.logger.record("human_bc/coefficient_start", self.bc_coefficient)
+        self.logger.record("human_bc/coefficient_final", self.bc_final_coefficient)
+        self.logger.record("human_bc/anneal_steps", self.bc_anneal_steps)
 
 
 class CombatTensorboardCallback(BaseCallback):

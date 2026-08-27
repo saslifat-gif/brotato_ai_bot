@@ -474,6 +474,8 @@ def main() -> int:
         help="CPU threads used by PyTorch inference; one avoids small-model thread overhead",
     )
     parser.add_argument("--bc-coefficient", type=float, default=0.10)
+    parser.add_argument("--bc-coefficient-final", type=float, default=0.0)
+    parser.add_argument("--bc-anneal-steps", type=int, default=0)
     parser.add_argument("--bc-batches", type=int, default=2)
     parser.add_argument(
         "--run-name",
@@ -552,6 +554,8 @@ def main() -> int:
             tensorboard_log=str(cfg.output_dir / "logs"),
             device=args.device,
             bc_coefficient=args.bc_coefficient,
+            bc_final_coefficient=args.bc_coefficient_final,
+            bc_anneal_steps=args.bc_anneal_steps,
             bc_batches=args.bc_batches,
             policy_kwargs={
                 "features_extractor_class": TemporalHierarchicalActorExtractor,
@@ -562,6 +566,8 @@ def main() -> int:
         )
         difference = initialize_v4_from_bullet_ppo(model, source)
     model.bc_coefficient = max(0.0, float(args.bc_coefficient))
+    model.bc_final_coefficient = max(0.0, float(args.bc_coefficient_final))
+    model.bc_anneal_steps = max(0, int(args.bc_anneal_steps))
     model.bc_batches = max(0, int(args.bc_batches))
     model.set_human_anchor(anchor_features, anchor_actions)
     bootstrap = cfg.output_dir / "v4_temporal_bootstrap"
@@ -573,7 +579,9 @@ def main() -> int:
         f"anchor_records={len(anchor_actions)} anchor_idle={idle_fraction:.3f} "
         f"raw_anchor_records={len(raw_actions)} raw_dataset={args.raw_dataset} "
         f"transfer_diff={difference} state_hz={args.state_hz:g} "
-        f"torch_threads={args.torch_threads}"
+        f"torch_threads={args.torch_threads} "
+        f"bc={args.bc_coefficient:g}->{args.bc_coefficient_final:g} "
+        f"bc_anneal_steps={args.bc_anneal_steps}"
     )
     if args.bootstrap_only:
         env.close()

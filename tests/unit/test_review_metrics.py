@@ -36,3 +36,17 @@ def test_history_ablations_only_change_the_declared_slice():
     np.testing.assert_array_equal(variants["history_zeroed"][:, 8:], observations[:, 8:])
     assert np.all(variants["history_zeroed"][:, 4:8] == 0.0)
     assert variants["history_shuffled"].shape == observations.shape
+
+def test_human_anchor_coefficient_anneals_linearly():
+    from v3.train_combat_finetune import HumanAnchoredPPO
+
+    model = object.__new__(HumanAnchoredPPO)
+    model.bc_coefficient = 0.20
+    model.bc_final_coefficient = 0.0
+    model.bc_anneal_steps = 10_000
+    model.num_timesteps = 0
+    assert model._effective_bc_coefficient() == pytest.approx(0.20)
+    model.num_timesteps = 5_000
+    assert model._effective_bc_coefficient() == pytest.approx(0.10)
+    model.num_timesteps = 10_000
+    assert model._effective_bc_coefficient() == pytest.approx(0.0)
