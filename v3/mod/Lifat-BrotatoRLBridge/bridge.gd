@@ -1665,7 +1665,7 @@ func _projectile_path_state(
 				+ velocity * horizon
 				+ acceleration * 0.5 * horizon * horizon
 			)
-			var predicted_velocity := velocity + acceleration * horizon
+			var predicted_velocity: Vector2 = velocity + acceleration * horizon
 			_splat_projectile_path(
 				grid,
 				predicted_relative,
