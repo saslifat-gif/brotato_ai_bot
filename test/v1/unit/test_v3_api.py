@@ -1979,6 +1979,33 @@ def test_v4_raw_anchor_loader_preserves_projectile_fields():
     assert '"attack_indicators": record.get("attack_indicators", [])' in source
 
 
+def test_v4_raw_anchor_cache_pads_legacy_trajectory_width(tmp_path):
+    pytest.importorskip("gymnasium")
+    pytest.importorskip("stable_baselines3")
+    from v4.combat_policy import TRAJECTORY_FEATURES, V4_OBSERVATION_SIZE
+    from v4.train_temporal_hierarchical import load_raw_anchor_arrays
+
+    root = tmp_path / "raw_records"
+    root.mkdir()
+    legacy_width = V4_OBSERVATION_SIZE - TRAJECTORY_FEATURES
+    legacy_features = np.full((2, legacy_width), 0.25, dtype=np.float32)
+    np.savez(
+        root / "v4_raw_anchor_cache.npz",
+        features=legacy_features,
+        actions=np.asarray([1, 2], dtype=np.int64),
+        signature=np.asarray("max=10|stride=1"),
+    )
+
+    features, actions = load_raw_anchor_arrays(
+        root, max_records=10, stride=1, cache_only=True
+    )
+
+    assert features.shape == (2, V4_OBSERVATION_SIZE)
+    assert np.allclose(features[:, :legacy_width], legacy_features)
+    assert np.allclose(features[:, legacy_width:], 0.0)
+    assert np.array_equal(actions, np.asarray([1, 2], dtype=np.int64))
+
+
 def test_v4_anchor_balancing_limits_idle_to_ten_percent():
     pytest.importorskip("gymnasium")
     pytest.importorskip("stable_baselines3")

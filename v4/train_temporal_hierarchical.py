@@ -289,10 +289,32 @@ def load_raw_anchor_arrays(
             with np.load(cache_path, allow_pickle=False) as cached:
                 features = cached["features"].astype(np.float32)
                 actions = cached["actions"].astype(np.int64)
+                if features.ndim == 2 and features.shape[1] == (
+                    V4_OBSERVATION_SIZE - TRAJECTORY_FEATURES
+                ):
+                    padded = np.zeros(
+                        (features.shape[0], V4_OBSERVATION_SIZE), dtype=np.float32
+                    )
+                    padded[:, :features.shape[1]] = features
+                    features = padded
+                    print(
+                        f"[v4] padded legacy raw anchor cache with "
+                        f"{TRAJECTORY_FEATURES} trajectory features={cache_path}"
+                    )
+                compatible = (
+                    features.ndim == 2
+                    and features.shape[1] == V4_OBSERVATION_SIZE
+                    and actions.ndim == 1
+                    and len(actions) == len(features)
+                )
+                if not compatible:
+                    print(f"[v4] ignoring incompatible raw anchor cache={cache_path}")
+                    features = None
                 if str(cached["signature"].item()) == signature:
-                    print(f"[v4] raw anchor cache hit={cache_path}")
-                    return features, actions
-                if cache_only:
+                    if features is not None:
+                        print(f"[v4] raw anchor cache hit={cache_path}")
+                        return features, actions
+                if cache_only and features is not None:
                     print(
                         f"[v4] raw anchor cache stale; using existing cache while it refreshes={cache_path}"
                     )
