@@ -340,22 +340,30 @@ class CombatTensorboardCallback(BaseCallback):
                 "combat/projectile_path_action_improved",
                 float(bool(info.get("projectile_path_action_improved"))),
             )
-            for name in (
-                "projectile",
-                "enemy",
-                "boundary",
+            for name, short in (
+                ("projectile", "proj"),
+                ("enemy", "enemy"),
+                ("boundary", "bound"),
             ):
                 self.logger.record_mean(
-                    f"combat/{name}_path_min_risk",
+                    f"combat/{short}_path_min_risk",
                     float(info.get(f"{name}_path_min_risk", 0.0)),
                 )
                 self.logger.record_mean(
-                    f"combat/{name}_path_unsafe_action_count",
+                    f"combat/{short}_path_unsafe_count",
                     float(info.get(f"{name}_path_unsafe_action_count", 0.0)),
                 )
                 self.logger.record_mean(
-                    f"combat/{name}_path_unsafe_action_fraction",
+                    f"combat/{short}_path_unsafe_frac",
                     float(info.get(f"{name}_path_unsafe_action_fraction", 0.0)),
+                )
+                self.logger.record_mean(
+                    f"combat/pre_{short}_path_min_risk",
+                    float(info.get(f"{name}_path_min_risk_before_action", 0.0)),
+                )
+                self.logger.record_mean(
+                    f"combat/pre_{short}_path_unsafe_frac",
+                    float(info.get(f"{name}_path_unsafe_action_fraction_before_action", 0.0)),
                 )
             self.logger.record_mean(
                 "combat/hazard_override_rate",
