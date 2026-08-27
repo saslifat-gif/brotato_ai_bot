@@ -346,3 +346,43 @@ The restructure is complete when:
 5. Refactor one boundary at a time, running the full suite and same-trace
    backtest after each boundary.
 
+
+
+
+## Review-pass completion
+
+The review-driven implementation is complete in source and offline tests:
+
+- runtime telemetry includes requested/applied action shares and disagreement,
+  all-action minimum/unsafe/regret diagnostics, interval p50/p95/p99 tails,
+  stale/dropped bridge counters, and elapsed-time reward scaling;
+- projectile exposure metrics distinguish valid TTI/miss-distance windows and
+  explicit death labels from victory;
+- the fixed replay report records minimum-risk, unsafe-action, regret, and
+  explicit shield-off versus shield-on metadata;
+- the temporal actor exposes legacy/residual logits, and
+  `tools/inspect/temporal_ablation.py` compares normal, zeroed-history, and
+  deterministically shuffled-history outputs;
+- human-anchor training uses a deterministic held-out split with overall and
+  per-action validation metrics;
+- the protected `v1/shop/ocr_winmedia.py` modification remains untouched.
+
+The current active branch is `feat/v4-restructure`. The older migration
+instructions above are historical context; the review-pass contracts and
+current acceptance sequence below are authoritative.
+
+## Current acceptance sequence
+
+The source changes are not live in an already-running Python process. The user
+must perform the final live gate after a normal stop and restart:
+
+1. stop the trainer normally so it saves its checkpoint;
+2. restart Brotato with `--enable-mods`;
+3. confirm the bridge handshake reports the installed bridge version;
+4. start `train.bat` or the scheduled v4 launcher;
+5. confirm the new telemetry tags appear in the newest TensorBoard run;
+6. compare bounded runs across multiple seeds, watching best wave, deaths,
+   victory, hazard override/risk reduction, requested/applied disagreement,
+   timing tails, and temporal ablation signals.
+
+A source change is not live until both the trainer and game are restarted.

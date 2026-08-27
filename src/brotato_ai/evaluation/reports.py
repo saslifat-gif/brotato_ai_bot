@@ -15,14 +15,26 @@ def write_json_report(report: Mapping[str, Any], path: Path) -> None:
 
 def markdown_report(report: Mapping[str, Any]) -> str:
     rows = [
-        "| Structure | Mean risk | Min-risk action | Override rate | Switches |",
-        "| --- | ---: | ---: | ---: | ---: |",
+        "| Structure | Mean risk | Min-risk action | Unsafe actions | Regret | Override rate | Switches |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for name, metrics in report["variants"].items():
         rows.append(
             f"| {name} | {metrics['mean_modeled_risk']:.4f} | "
             f"{metrics['minimum_risk_action_rate']:.1%} | "
+            f"{metrics['mean_unsafe_action_fraction']:.1%} | "
+            f"{metrics['mean_requested_to_minimum_regret']:.4f} | "
             f"{metrics['override_rate']:.1%} | {metrics['direction_switches']} |"
+        )
+    shield = report.get("shield_comparison", {})
+    if shield:
+        rows.extend(
+            [
+                "",
+                f"- Shield-off structure: {shield.get('off')}; shield-on structure: {shield.get('on')}.",
+                f"- Shield modeled-risk delta (off minus on): {shield.get('risk_reduction', 0.0):.4f}.",
+                f"- Shield direction-switch delta (on minus off): {shield.get('direction_switch_delta', 0)}.",
+            ]
         )
     damage = report["observed_outcomes"]
     rows.extend(

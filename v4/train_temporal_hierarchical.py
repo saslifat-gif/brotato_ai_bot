@@ -117,7 +117,8 @@ class TemporalHierarchicalActorExtractor(BaseFeaturesExtractor):
         nn.init.zeros_(self.temporal_residual[-1].weight)
         nn.init.zeros_(self.temporal_residual[-1].bias)
 
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+    def actor_components(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return legacy logits and temporal residual for inspectable ablations."""
         old = observations[..., :BULLET_HELL_OBSERVATION_SIZE]
         history_start = BULLET_HELL_OBSERVATION_SIZE
         history = observations[..., history_start:history_start + HISTORY_SIZE]
@@ -135,8 +136,11 @@ class TemporalHierarchicalActorExtractor(BaseFeaturesExtractor):
                 dim=-1,
             )
         )
-        logits = self.legacy_actor(old) + residual
-        return torch.cat((logits, observations), dim=-1)
+        return self.legacy_actor(old), residual
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        legacy, residual = self.actor_components(observations)
+        return torch.cat((legacy + residual, observations), dim=-1)
 
 
 class V4TensorboardCallback(CombatTensorboardCallback):
@@ -189,6 +193,30 @@ class V4TensorboardCallback(CombatTensorboardCallback):
         self.logger.record_mean(
             "v4/history_health_delta", float(np.mean(history[:, :, 12]))
         )
+        extractor = getattr(self.model.policy, "pi_features_extractor", None)
+        if isinstance(extractor, TemporalHierarchicalActorExtractor):
+            with torch.no_grad():
+                tensor = torch.as_tensor(batch, dtype=torch.float32, device=self.model.device)
+                legacy_logits, residual = extractor.actor_components(tensor)
+                final_logits = legacy_logits + residual
+                legacy_prob = torch.softmax(legacy_logits, dim=-1).clamp_min(1e-8)
+                final_log_prob = torch.log_softmax(final_logits, dim=-1)
+                kl = torch.sum(
+                    legacy_prob * (torch.log(legacy_prob) - final_log_prob), dim=-1
+                )
+                disagreement = (legacy_logits.argmax(dim=-1) != final_logits.argmax(dim=-1)).float()
+                self.logger.record_mean(
+                    "v4/temporal_residual_logit_norm",
+                    float(residual.norm(dim=-1).mean().cpu().item()),
+                )
+                self.logger.record_mean(
+                    "v4/temporal_policy_disagreement",
+                    float(disagreement.mean().cpu().item()),
+                )
+                self.logger.record_mean(
+                    "v4/temporal_legacy_final_kl",
+                    float(kl.mean().cpu().item()),
+                )
         return True
 
 

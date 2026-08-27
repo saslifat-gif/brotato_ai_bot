@@ -88,6 +88,7 @@ class FinalActionArbiter:
             timestamp_ms=snapshot.timestamp_ms,
             state_interval_ms=max(0.0, float(state_interval_ms)),
             control_interval_ms=max(0.0, float(control_interval_ms)),
+            all_risks=dict(risks),
         )
 
 

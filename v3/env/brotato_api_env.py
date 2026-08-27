@@ -1,6 +1,7 @@
 """Gymnasium compatibility entrypoint backed by the active v4 runtime."""
 
 import time
+from collections import deque
 from typing import Any, Mapping, Optional
 
 import gymnasium as gym
@@ -31,6 +32,7 @@ from v3.protocol import (
 from v3.reward import ApiRewardEngine
 from v3.ui_automation import AutoUiController
 from v3.vectorizer import ApiStateVectorizer
+from brotato_ai.telemetry import percentile, risk_diagnostics, reward_time_scale
 
 
 def _state_wave(state: Mapping[str, Any]) -> float:
@@ -192,6 +194,8 @@ class BrotatoApiEnv(gym.Env):
         self._effective_state_hz = 0.0
         self._last_state_interval_ms = 0.0
         self._last_control_started: Optional[float] = None
+        self._state_intervals_ms = deque(maxlen=512)
+        self._control_intervals_ms = deque(maxlen=512)
         self._cached_projectile_paths: dict[str, Any] = {}
         self._cached_arena_grid: dict[str, Any] = {}
 
@@ -228,6 +232,9 @@ class BrotatoApiEnv(gym.Env):
         if previous is None or published_ms <= previous:
             return self._effective_state_hz
         self._last_state_interval_ms = max(1.0, float(published_ms - previous))
+        if not hasattr(self, "_state_intervals_ms"):
+            self._state_intervals_ms = deque(maxlen=512)
+        self._state_intervals_ms.append(self._last_state_interval_ms)
         instantaneous = 1000.0 / self._last_state_interval_ms
         if self._effective_state_hz <= 0.0:
             self._effective_state_hz = instantaneous
@@ -304,6 +311,8 @@ class BrotatoApiEnv(gym.Env):
         self._effective_state_hz = 0.0
         self._last_state_interval_ms = 0.0
         self._last_control_started = None
+        self._state_intervals_ms.clear()
+        self._control_intervals_ms.clear()
         self._observe_state_rate(state)
         self.previous_action = int(MoveAction.IDLE)
         self.reward_engine.reset(state)
@@ -331,6 +340,8 @@ class BrotatoApiEnv(gym.Env):
             else max(0.0, (control_started - self._last_control_started) * 1000.0)
         )
         self._last_control_started = control_started
+        if control_interval_ms > 0.0:
+            self._control_intervals_ms.append(control_interval_ms)
         decision_trace = self.decision_pipeline.apply(
             previous_state,
             requested,
@@ -424,40 +435,44 @@ class BrotatoApiEnv(gym.Env):
             ),
         ) and not decision_trace.recovery_active
         idle_penalty = (
-            float(getattr(self.vectorizer, "idle_reward_scale", 0.0))
+            float(getattr(self.vectorizer, "idle_reward_scale", 0.0)) * dense_scale
             if movement["active"] and normalized == int(MoveAction.IDLE)
             else 0.0
         )
         reversal_penalty = (
-            float(getattr(self.vectorizer, "reversal_reward_scale", 0.0))
+            float(getattr(self.vectorizer, "reversal_reward_scale", 0.0)) * dense_scale
             if movement["reversal"] and threat_max_risk < 0.35
             else 0.0
         )
         low_motion_penalty = (
-            float(getattr(self.vectorizer, "low_motion_reward_scale", 0.0))
+            float(getattr(self.vectorizer, "low_motion_reward_scale", 0.0)) * dense_scale
             if movement["low_motion"]
             else 0.0
         )
         contact_override_penalty = (
-            float(getattr(self.vectorizer, "enemy_contact_override_penalty", 0.0))
+            float(getattr(self.vectorizer, "enemy_contact_override_penalty", 0.0)) * dense_scale
             if decision_trace.enemy_contact_overridden
             else 0.0
         )
         center_stagnation_penalty = (
-            float(getattr(self.vectorizer, "center_stagnation_reward_scale", 0.0))
+            float(getattr(self.vectorizer, "center_stagnation_reward_scale", 0.0)) * dense_scale
             if center_stagnation
             else 0.0
         )
-        reward = self.reward_engine.step(state)
+        dense_scale = reward_time_scale(
+            self._last_state_interval_ms,
+            self.state_hz or 24.0,
+        )
+        reward = self.reward_engine.step(state, dense_scale=dense_scale)
         reward_components = dict(self.reward_engine.last_components)
         late_focus = bool(self.cfg.late_wave_focus and _state_wave(previous_state) >= 18)
         threat_scale = 3.0 if late_focus else 1.0
         path_risk_penalty = float(
             getattr(self.vectorizer, "path_risk_reward_scale", 0.0)
-        ) * selected_path_risk * threat_scale
+        ) * selected_path_risk * threat_scale * dense_scale
         boundary_risk_penalty = float(
             getattr(self.vectorizer, "boundary_risk_reward_scale", 0.0)
-        ) * selected_boundary_risk * threat_scale
+        ) * selected_boundary_risk * threat_scale * dense_scale
         reward -= path_risk_penalty + boundary_risk_penalty
         reward_components["path_risk"] = -path_risk_penalty
         reward_components["boundary_risk"] = -boundary_risk_penalty
@@ -512,8 +527,14 @@ class BrotatoApiEnv(gym.Env):
                 "damage_taken": damage_taken,
                 "damage_after_projectile_visible": damage_taken if projectile_visible else 0.0,
                 "damage_after_projectile_hazard": damage_taken if projectile_hazard else 0.0,
-                "death_after_projectile_visible": bool(terminated and projectile_visible),
-                "death_after_projectile_hazard": bool(terminated and projectile_hazard),
+                # Victory is terminal but must never be counted as a death.
+                "death_after_projectile_visible": bool(state.get("dead") and projectile_visible),
+                "death_after_projectile_hazard": bool(state.get("dead") and projectile_hazard),
+                "projectile_tti_exposed": bool(
+                    projectile_diagnostics["projectile_nearest_tti"] >= 0.0
+                    and projectile_diagnostics["projectile_nearest_tti"] <= 0.8
+                ),
+                "projectile_hazard_exposed": bool(projectile_hazard),
             }
         )
         truncated = not terminated and state.get("phase") != "combat"
@@ -539,6 +560,29 @@ class BrotatoApiEnv(gym.Env):
             else []
         )
         finite_boundary_risks = _risk_vector(boundary_path_risks)
+        def _path_stats(values):
+            finite = _risk_vector(values)
+            unsafe = sum(value >= 0.65 for value in finite)
+            return (
+                min(finite, default=0.0),
+                unsafe,
+                unsafe / max(1, len(finite)),
+            )
+        projectile_path_min, projectile_path_unsafe, projectile_path_fraction = _path_stats(path_risks)
+        enemy_path_min, enemy_path_unsafe, enemy_path_fraction = _path_stats(enemy_path_risks)
+        boundary_path_min, boundary_path_unsafe, boundary_path_fraction = _path_stats(boundary_path_risks)
+        projectile_path_pre_min, projectile_path_pre_unsafe, projectile_path_pre_fraction = _path_stats(projectile_risks)
+        enemy_path_pre_min, enemy_path_pre_unsafe, enemy_path_pre_fraction = _path_stats(enemy_risks)
+        boundary_path_pre_min, boundary_path_pre_unsafe, boundary_path_pre_fraction = _path_stats(boundary_risks)
+        risk_stats = risk_diagnostics(
+            decision_trace.all_risks,
+            requested,
+        )
+        state_interval_values = list(self._state_intervals_ms)
+        control_interval_values = list(self._control_intervals_ms)
+        wave_clear = float(reward_components.get("wave_clear", 0.0)) > 0.0
+        dead = bool(state.get("dead"))
+        victory = bool(state.get("victory"))
         info = {
             "tick": int(state.get("tick", -1)),
             "phase": state.get("phase"),
@@ -601,10 +645,42 @@ class BrotatoApiEnv(gym.Env):
                 if normalized < len(finite_boundary_risks)
                 else 0.0
             ),
+            "projectile_path_min_risk": projectile_path_min,
+            "projectile_path_unsafe_action_count": projectile_path_unsafe,
+            "projectile_path_unsafe_action_fraction": projectile_path_fraction,
+            "enemy_path_min_risk": enemy_path_min,
+            "enemy_path_unsafe_action_count": enemy_path_unsafe,
+            "enemy_path_unsafe_action_fraction": enemy_path_fraction,
+            "boundary_path_min_risk": boundary_path_min,
+            "boundary_path_unsafe_action_count": boundary_path_unsafe,
+            "boundary_path_unsafe_action_fraction": boundary_path_fraction,
+            "projectile_path_min_risk_before_action": projectile_path_pre_min,
+            "projectile_path_unsafe_action_count_before_action": projectile_path_pre_unsafe,
+            "projectile_path_unsafe_action_fraction_before_action": projectile_path_pre_fraction,
+            "enemy_path_min_risk_before_action": enemy_path_pre_min,
+            "enemy_path_unsafe_action_count_before_action": enemy_path_pre_unsafe,
+            "enemy_path_unsafe_action_fraction_before_action": enemy_path_pre_fraction,
+            "boundary_path_min_risk_before_action": boundary_path_pre_min,
+            "boundary_path_unsafe_action_count_before_action": boundary_path_pre_unsafe,
+            "boundary_path_unsafe_action_fraction_before_action": boundary_path_pre_fraction,
             "selected_path_risk_penalty": selected_path_risk,
+            "minimum_action_risk": risk_stats["minimum_action_risk"],
+            "unsafe_action_count": risk_stats["unsafe_action_count"],
+            "unsafe_action_fraction": risk_stats["unsafe_action_fraction"],
+            "requested_to_minimum_regret": risk_stats["requested_to_minimum_regret"],
             "late_wave_focus": late_focus,
             "late_threat_scale": threat_scale,
             "effective_state_hz": effective_state_hz,
+            "state_interval_p50_ms": percentile(state_interval_values, 0.50),
+            "state_interval_p95_ms": percentile(state_interval_values, 0.95),
+            "state_interval_p99_ms": percentile(state_interval_values, 0.99),
+            "control_interval_p50_ms": percentile(control_interval_values, 0.50),
+            "control_interval_p95_ms": percentile(control_interval_values, 0.95),
+            "control_interval_p99_ms": percentile(control_interval_values, 0.99),
+            "stale_state_count": int(getattr(self.server, "stale_state_count", 0)),
+            "dropped_state_count": int(getattr(self.server, "dropped_state_count", 0)),
+            "state_tick_gap": int(getattr(self.server, "last_tick_gap", 0)),
+            "reward_time_scale": dense_scale,
             "movement_distance": float(movement["distance"]),
             "movement_efficiency": float(movement["efficiency"]),
             "movement_reversal": bool(movement["reversal"]),
@@ -631,6 +707,8 @@ class BrotatoApiEnv(gym.Env):
                 "projectile_path_safe_action": projectile_diagnostics["projectile_path_safe_action"],
                 "projectile_path_risk_margin": projectile_diagnostics["projectile_path_risk_margin"],
                 "projectile_path_action_improved": projectile_diagnostics["projectile_path_action_improved"],
+                "projectile_tti_exposed": projectile_diagnostics["projectile_tti_exposed"],
+                "projectile_hazard_exposed": projectile_diagnostics["projectile_hazard_exposed"],
                 "hazard_overridden": decision_trace.hazard_overridden,
                 "hazard_source": decision_trace.source,
                 "hazard_action": decision_trace.hazard_decision.applied_action,
@@ -657,6 +735,8 @@ class BrotatoApiEnv(gym.Env):
                 "damage_after_projectile_hazard": projectile_diagnostics["damage_after_projectile_hazard"],
                 "death_after_projectile_visible": projectile_diagnostics["death_after_projectile_visible"],
                 "death_after_projectile_hazard": projectile_diagnostics["death_after_projectile_hazard"],
+                "projectile_tti_exposed": projectile_diagnostics["projectile_tti_exposed"],
+                "projectile_hazard_exposed": projectile_diagnostics["projectile_hazard_exposed"],
             }
         )
         return observation, reward, terminated, truncated, info

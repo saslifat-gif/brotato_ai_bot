@@ -49,7 +49,9 @@ class ApiRewardEngine:
         self.previous = state
         self.last_components = {}
 
-    def step(self, state: Mapping[str, Any]) -> float:
+    def step(self, state: Mapping[str, Any], *, dense_scale: float = 1.0) -> float:
+        """Compute reward; only dense survival shaping is time-normalized."""
+        dense_scale = max(0.0, float(dense_scale))
         wave_number = max(0.0, _nested(state, "wave", "number"))
         # Survival is deliberately small but present at every combat sample;
         # terminal outcomes and wave completion remain much larger.
@@ -58,7 +60,7 @@ class ApiRewardEngine:
         if focused:
             late_wave_scale *= 2.0
         components = {
-            "survival": self.SURVIVAL_REWARD * late_wave_scale
+            "survival": self.SURVIVAL_REWARD * late_wave_scale * dense_scale
             if state.get("phase") == "combat"
             else 0.0,
             "health": 0.0,

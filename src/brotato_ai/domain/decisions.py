@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
@@ -94,6 +94,7 @@ class DecisionTrace:
     timestamp_ms: int = -1
     state_interval_ms: float = 0.0
     control_interval_ms: float = 0.0
+    all_risks: dict[int, HazardRisk] = field(default_factory=dict)
     schema_version: int = DECISION_SCHEMA_VERSION
 
     @property
@@ -121,5 +122,16 @@ class DecisionTrace:
             "applied_risk": self.applied_risk.to_dict(),
             "state_interval_ms": float(self.state_interval_ms),
             "control_interval_ms": float(self.control_interval_ms),
+            "minimum_action_risk": min(
+                (risk.total for risk in self.all_risks.values()), default=0.0
+            ),
+            "unsafe_action_count": sum(
+                risk.total >= 0.65 for risk in self.all_risks.values()
+            ),
+            "requested_to_minimum_regret": max(
+                0.0,
+                self.requested_risk.total
+                - min((risk.total for risk in self.all_risks.values()), default=self.requested_risk.total),
+            ),
         }
 

@@ -91,16 +91,44 @@ class HumanAnchoredPPO(PPO):
         self.bc_batch_size = max(16, int(bc_batch_size))
         self._bc_features = None
         self._bc_actions = None
+        self._bc_validation_features = None
+        self._bc_validation_actions = None
         super().__init__(*args, **kwargs)
 
     def _excluded_save_params(self) -> list[str]:
-        return super()._excluded_save_params() + ["_bc_features", "_bc_actions"]
+        return super()._excluded_save_params() + [
+            "_bc_features", "_bc_actions",
+            "_bc_validation_features", "_bc_validation_actions",
+        ]
 
-    def set_human_anchor(self, features: np.ndarray, actions: np.ndarray) -> None:
+    def set_human_anchor(
+        self,
+        features: np.ndarray,
+        actions: np.ndarray,
+        *,
+        validation_fraction: float = 0.10,
+        seed: int = 17,
+    ) -> None:
         if len(features) != len(actions) or len(features) == 0:
             raise ValueError("human anchor requires matching non-empty features and actions")
-        self._bc_features = torch.as_tensor(features, dtype=torch.float32, device=self.device)
-        self._bc_actions = torch.as_tensor(actions, dtype=torch.long, device=self.device)
+        fraction = min(0.5, max(0.0, float(validation_fraction)))
+        rng = np.random.default_rng(int(seed))
+        indices = rng.permutation(len(features))
+        validation_count = min(len(features) - 1, max(1, int(len(features) * fraction)))
+        validation_indices = indices[:validation_count]
+        training_indices = indices[validation_count:]
+        self._bc_features = torch.as_tensor(
+            features[training_indices], dtype=torch.float32, device=self.device
+        )
+        self._bc_actions = torch.as_tensor(
+            actions[training_indices], dtype=torch.long, device=self.device
+        )
+        self._bc_validation_features = torch.as_tensor(
+            features[validation_indices], dtype=torch.float32, device=self.device
+        )
+        self._bc_validation_actions = torch.as_tensor(
+            actions[validation_indices], dtype=torch.long, device=self.device
+        )
 
     def train(self) -> None:
         """Pause the live simulator so gradient updates cannot cause deaths."""
@@ -142,6 +170,35 @@ class HumanAnchoredPPO(PPO):
             accuracies.append(float((logits.argmax(dim=1) == targets).float().mean().item()))
         self.logger.record("human_bc/cross_entropy", float(np.mean(losses)))
         self.logger.record("human_bc/accuracy", float(np.mean(accuracies)))
+        if self._bc_validation_features is not None:
+            with torch.no_grad():
+                validation_logits = actor_logits(
+                    self.policy, self._bc_validation_features
+                )
+                validation_targets = self._bc_validation_actions
+                validation_loss = F.cross_entropy(validation_logits, validation_targets)
+                validation_prediction = validation_logits.argmax(dim=1)
+                validation_accuracy = (
+                    validation_prediction == validation_targets
+                ).float().mean()
+                self.logger.record(
+                    "human_bc/validation_cross_entropy",
+                    float(validation_loss.cpu().item()),
+                )
+                self.logger.record(
+                    "human_bc/validation_accuracy",
+                    float(validation_accuracy.cpu().item()),
+                )
+                for action in range(9):
+                    mask = validation_targets == action
+                    if bool(mask.any()):
+                        self.logger.record(
+                            f"human_bc/validation_accuracy_action_{action}",
+                            float(
+                                (validation_prediction[mask] == action)
+                                .float().mean().cpu().item()
+                            ),
+                        )
         self.logger.record("human_bc/coefficient", self.bc_coefficient)
 
 
@@ -154,6 +211,10 @@ class CombatTensorboardCallback(BaseCallback):
         self.deaths_by_wave: dict[int, int] = {}
         self.total_deaths = 0
         self.episode_id = 1
+        self.total_victories = 0
+        self.total_wave_clears = 0
+        self.conditional_counts: dict[str, int] = {}
+        self.conditional_sums: dict[str, float] = {}
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -161,7 +222,34 @@ class CombatTensorboardCallback(BaseCallback):
         for index, info in enumerate(infos):
             wave = int(info.get("wave", 0))
             applied = int(info.get("applied_action", 0))
+            requested = int(info.get("requested_action", applied))
             self.best_wave = max(self.best_wave, wave)
+            self.logger.record_mean("combat/victory", float(bool(info.get("victory"))))
+            self.logger.record_mean("combat/wave_clear", float(bool(info.get("wave_clear"))))
+            self.logger.record_mean(
+                "actions/requested_applied_disagreement",
+                float(requested != applied),
+            )
+            for action in range(9):
+                self.logger.record_mean(
+                    f"actions/requested_{action}", float(requested == action)
+                )
+            self.logger.record_mean(
+                "combat/min_action_risk",
+                float(info.get("minimum_action_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/unsafe_action_count",
+                float(info.get("unsafe_action_count", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/unsafe_action_fraction",
+                float(info.get("unsafe_action_fraction", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/requested_to_minimum_regret",
+                float(info.get("requested_to_minimum_regret", 0.0)),
+            )
             self.logger.record_mean("combat/current_wave", wave)
             self.logger.record("combat/best_wave", self.best_wave)
             self.logger.record("combat/episode_id", self.episode_id)
@@ -252,6 +340,23 @@ class CombatTensorboardCallback(BaseCallback):
                 "combat/projectile_path_action_improved",
                 float(bool(info.get("projectile_path_action_improved"))),
             )
+            for name in (
+                "projectile",
+                "enemy",
+                "boundary",
+            ):
+                self.logger.record_mean(
+                    f"combat/{name}_path_min_risk",
+                    float(info.get(f"{name}_path_min_risk", 0.0)),
+                )
+                self.logger.record_mean(
+                    f"combat/{name}_path_unsafe_action_count",
+                    float(info.get(f"{name}_path_unsafe_action_count", 0.0)),
+                )
+                self.logger.record_mean(
+                    f"combat/{name}_path_unsafe_action_fraction",
+                    float(info.get(f"{name}_path_unsafe_action_fraction", 0.0)),
+                )
             self.logger.record_mean(
                 "combat/hazard_override_rate",
                 float(bool(info.get("hazard_overridden"))),
@@ -327,6 +432,24 @@ class CombatTensorboardCallback(BaseCallback):
                 "combat/hazard_control_interval_ms",
                 float(info.get("hazard_control_interval_ms", 0.0)),
             )
+            for name in (
+                "state_interval_p50_ms",
+                "state_interval_p95_ms",
+                "state_interval_p99_ms",
+                "control_interval_p50_ms",
+                "control_interval_p95_ms",
+                "control_interval_p99_ms",
+                "reward_time_scale",
+            ):
+                self.logger.record_mean(
+                    f"control/{name}",
+                    float(info.get(name, 0.0)),
+                )
+            for name in ("stale_state_count", "dropped_state_count", "state_tick_gap"):
+                self.logger.record(
+                    f"control/{name}",
+                    float(info.get(name, 0.0)),
+                )
             self.logger.record_mean(
                 "combat/projectile_predicted_hazard_count",
                 float(info.get("projectile_predicted_hazard_count", 0.0)),
@@ -338,6 +461,48 @@ class CombatTensorboardCallback(BaseCallback):
             self.logger.record_mean(
                 "combat/projectile_nearest_miss_distance",
                 float(info.get("projectile_nearest_miss_distance", -1.0)),
+            )
+            visible = bool(info.get("projectile_visible_before_action"))
+            tti = float(info.get("projectile_nearest_tti", -1.0))
+            miss = float(info.get("projectile_nearest_miss_distance", -1.0))
+            predicted = bool(info.get("projectile_hazard_exposed"))
+            for key, condition, value in (
+                ("visible", visible, float(info.get("damage_taken", 0.0))),
+                ("tti", bool(0.0 <= tti <= 0.8), float(info.get("damage_taken", 0.0))),
+                ("predicted_hazard", predicted, float(info.get("damage_taken", 0.0))),
+                ("miss_distance", bool(miss >= 0.0), miss),
+            ):
+                if condition:
+                    self.conditional_counts[key] = self.conditional_counts.get(key, 0) + 1
+                    self.conditional_sums[key] = self.conditional_sums.get(key, 0.0) + value
+            self.logger.record("combat/projectile_visible_exposure_count",
+                               self.conditional_counts.get("visible", 0))
+            self.logger.record("combat/projectile_tti_exposure_count",
+                               self.conditional_counts.get("tti", 0))
+            self.logger.record("combat/projectile_predicted_hazard_exposure_count",
+                               self.conditional_counts.get("predicted_hazard", 0))
+            self.logger.record_mean(
+                "combat/projectile_tti_exposure_rate",
+                float(bool(0.0 <= tti <= 0.8)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_predicted_hazard_exposure_rate",
+                float(predicted),
+            )
+            self.logger.record_mean(
+                "combat/projectile_tti_conditional_damage",
+                self.conditional_sums.get("tti", 0.0)
+                / max(1, self.conditional_counts.get("tti", 0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_hazard_conditional_damage",
+                self.conditional_sums.get("predicted_hazard", 0.0)
+                / max(1, self.conditional_counts.get("predicted_hazard", 0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_conditional_miss_distance",
+                self.conditional_sums.get("miss_distance", 0.0)
+                / max(1, self.conditional_counts.get("miss_distance", 0)),
             )
             self.logger.record_mean(
                 "combat/damage_taken",
@@ -445,7 +610,7 @@ class CombatTensorboardCallback(BaseCallback):
                 # A terminal episode with a death penalty is one actual player
                 # death.  Count it once here, rather than once per dead-state
                 # observation, and retain separate curves for each wave.
-                if str(info.get("phase", "")) == "game_over" or death_reward < 0.0:
+                if bool(info.get("dead")):
                     self.logger.record("combat/episode_death", 1.0)
                     self.logger.record("combat/episode_death_wave", max(0, wave))
                     self.deaths_by_wave[wave] = self.deaths_by_wave.get(wave, 0) + 1
@@ -457,6 +622,14 @@ class CombatTensorboardCallback(BaseCallback):
                     self.logger.record("combat/death_count_total", self.total_deaths)
                 else:
                     self.logger.record("combat/episode_death", 0.0)
+                victory = bool(info.get("victory"))
+                wave_clear = bool(info.get("wave_clear"))
+                self.logger.record("combat/episode_victory", float(victory))
+                self.logger.record("combat/episode_wave_clear", float(wave_clear))
+                self.total_victories += int(victory)
+                self.total_wave_clears += int(wave_clear)
+                self.logger.record("combat/victory_count_total", self.total_victories)
+                self.logger.record("combat/wave_clear_count_total", self.total_wave_clears)
                 self.episode_id += 1
         return True
 

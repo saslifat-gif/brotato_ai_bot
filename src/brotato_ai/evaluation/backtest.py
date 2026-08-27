@@ -105,6 +105,9 @@ def compare_recording(
                 requested_risk=risks[requested].total,
                 selected_risk=risks[action].total,
                 minimum_action=minimum_action,
+                unsafe_action_count=sum(risk.total >= 0.65 for risk in risks.values()),
+                action_count=len(risks),
+                minimum_risk=risks[minimum_action].total,
             )
         timestamp_ms = snapshot.timestamp_ms if snapshot.timestamp_ms >= 0 else snapshot.tick * 17
         damage.observe(
@@ -128,6 +131,18 @@ def compare_recording(
         "records": records,
         "stride": max(1, int(stride)),
         "variants": variants,
+        "shield_comparison": {
+            "off": "policy_only",
+            "on": "unified",
+            "risk_reduction": (
+                variants["policy_only"]["mean_modeled_risk"]
+                - variants["unified"]["mean_modeled_risk"]
+            ),
+            "direction_switch_delta": (
+                variants["unified"]["direction_switches"]
+                - variants["policy_only"]["direction_switches"]
+            ),
+        },
         "analyzer_drift": drift,
         "observed_outcomes": damage.to_dict(),
         "interpretation": (

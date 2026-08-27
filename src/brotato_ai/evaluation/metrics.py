@@ -12,17 +12,23 @@ class VariantMetrics:
     requested_risk_sum: float = 0.0
     overrides: int = 0
     minimum_risk_actions: int = 0
+    unsafe_action_count: int = 0
+    unsafe_action_total: int = 0
+    requested_regret_sum: float = 0.0
     direction_switches: int = 0
     previous_action: int | None = None
 
     def observe(
-        self, *, requested_action: int, selected_action: int, requested_risk: float, selected_risk: float, minimum_action: int
+        self, *, requested_action: int, selected_action: int, requested_risk: float, selected_risk: float, minimum_action: int, unsafe_action_count: int = 0, action_count: int = 9, minimum_risk: float = 0.0
     ) -> None:
         self.samples += 1
         self.risk_sum += float(selected_risk)
         self.requested_risk_sum += float(requested_risk)
         self.overrides += int(selected_action != requested_action)
         self.minimum_risk_actions += int(selected_action == minimum_action)
+        self.unsafe_action_count += int(unsafe_action_count)
+        self.unsafe_action_total += int(action_count)
+        self.requested_regret_sum += max(0.0, float(requested_risk) - float(minimum_risk))
         if self.previous_action is not None:
             self.direction_switches += int(selected_action != self.previous_action)
         self.previous_action = selected_action
@@ -36,6 +42,9 @@ class VariantMetrics:
             "risk_reduction": (self.requested_risk_sum - self.risk_sum) / count,
             "override_rate": self.overrides / count,
             "minimum_risk_action_rate": self.minimum_risk_actions / count,
+            "mean_unsafe_action_count": self.unsafe_action_count / count,
+            "mean_unsafe_action_fraction": self.unsafe_action_count / max(1, self.unsafe_action_total),
+            "mean_requested_to_minimum_regret": self.requested_regret_sum / count,
             "direction_switches": self.direction_switches,
             "direction_switch_rate": self.direction_switches / max(1, self.samples - 1),
         }

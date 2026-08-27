@@ -37,6 +37,13 @@ class BridgeClient:
         self._connection_generation = 0
         self._last_action: dict[str, Any] | None = None
         self.last_hello: dict[str, Any] | None = None
+        # Process-local transport counters; these are intentionally not reset
+        # between episodes so TensorBoard exposes bridge health for the run.
+        self.received_state_count = 0
+        self.stale_state_count = 0
+        self.dropped_state_count = 0
+        self.last_tick_gap = 0
+        self._last_received_tick = -1
 
     @property
     def connected(self) -> bool:
@@ -170,6 +177,7 @@ class BridgeClient:
             if self._connection_generation != connection_generation:
                 connection_generation = self._connection_generation
                 minimum_tick = None
+                self._last_received_tick = -1
             if message["type"] == "hello":
                 self.last_hello = message
                 print(
@@ -181,11 +189,21 @@ class BridgeClient:
                 continue
             tick = int(message.get("tick", -1))
             if minimum_tick is not None and tick <= int(minimum_tick):
+                self.stale_state_count += 1
+                self.dropped_state_count += 1
                 continue
             if minimum_sequence is not None and int(message.get("sequence", -1)) < int(
                 minimum_sequence
             ):
+                self.stale_state_count += 1
+                self.dropped_state_count += 1
                 continue
+            if self.received_state_count:
+                self.last_tick_gap = max(0, tick - int(self._last_received_tick))
+                if self.last_tick_gap > 1:
+                    self.dropped_state_count += self.last_tick_gap - 1
+            self._last_received_tick = tick
+            self.received_state_count += 1
             if combat_only and message.get("phase") != "combat":
                 continue
             return message
