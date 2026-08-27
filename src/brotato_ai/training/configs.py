@@ -37,6 +37,7 @@ class RuntimeConfig:
     control_hz: float = 24.0
     recorder_hz: float = 60.0
     cache_max_gib: float = 10.0
+    ranged_spacing: bool = True
 
     def validate(self) -> "RuntimeConfig":
         if not self.host.strip():
@@ -61,7 +62,8 @@ class RuntimeConfig:
             f"recorder_hz={self.recorder_hz:g} safety={self.safety_shield} "
             f"late_wave={self.late_wave_focus} menus={self.automate_menus} "
             f"profile={self.ui_build_profile} ui_model={model} "
-            f"output={self.output_dir} cache_max_gib={self.cache_max_gib:g}"
+            f"output={self.output_dir} cache_max_gib={self.cache_max_gib:g} "
+            f"ranged_spacing={self.ranged_spacing}"
         )
 
 
@@ -117,4 +119,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
         control_hz=float(env.get("BROTATO_V4_CONTROL_HZ", "24")),
         recorder_hz=float(env.get("BROTATO_V4_RECORDER_HZ", "60")),
         cache_max_gib=float(env.get("BROTATO_V4_CACHE_MAX_GIB", "10")),
+        ranged_spacing=_enabled(
+            env.get("BROTATO_V4_RANGED_SPACING", "1"),
+            default=True,
+        ),
     ).validate()

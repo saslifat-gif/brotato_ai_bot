@@ -377,6 +377,9 @@ class HierarchicalCombatVectorizer:
     enemy_contact_guard_threshold = 0.22
     enemy_contact_guard_margin = 0.08
     enemy_contact_override_penalty = 0.02
+    # Small dense penalty; the unified hazard scorer remains the authority for
+    # emergency movement and can override this when a safer lane exists.
+    ranged_spacing_reward_scale = 0.015
 
     def __init__(self):
         self.base = BulletHellCombatVectorizer()

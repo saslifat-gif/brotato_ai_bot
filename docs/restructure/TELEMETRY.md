@@ -29,6 +29,29 @@ otherwise, callback values named *_rate or *_share are dump-window means.
   `unified` (shield on) on exactly the same recording. It reports modeled
   risk only; it cannot prove alternate game outcomes.
 
+## Ranged spacing
+
+- BROTATO_V4_RANGED_SPACING=1 enables the additive ranged-spacing term;
+  setting it to 0 disables it without changing projectile, enemy, telegraph,
+  or boundary scoring.
+- combat/ranged_spacing_active indicates that the current state has a
+  ranged-dominant loadout with usable weapon range.
+- combat/ranged_spacing_risk and
+  combat/ranged_spacing_req_risk report the applied and requested
+  action-specific spacing terms. They are heuristic risk units, not hit
+  probabilities.
+- combat/ranged_spacing_dist, combat/ranged_spacing_target,
+  combat/ranged_spacing_closing, and combat/ranged_spacing_error expose
+  the predicted nearest-enemy distance, target distance, closing signal, and
+  normalized deficit.
+- reward/ranged_spacing is a small dense penalty for the final action when
+  it moves a ranged-dominant build inside the useful spacing band.
+- This is not a hard flee rule: the unified scorer still weighs all hazard
+  components, and emergency projectile, telegraph, boss, boundary, and
+  contact escapes can take priority.
+- Fixed replay must compare spacing_comparison.off and .on before claiming
+  that spacing improves behavior.
+
 ## Timing and transport
 
 - `control/effective_state_hz` is the EMA of instantaneous published-state

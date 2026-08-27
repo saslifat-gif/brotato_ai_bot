@@ -442,6 +442,38 @@ class CombatTensorboardCallback(BaseCallback):
                 "combat/hazard_applied_boundary_risk",
                 float(info.get("hazard_applied_boundary_risk", 0.0)),
             )
+            self.logger.record_mean(
+                "combat/ranged_spacing_active",
+                float(bool(info.get("ranged_spacing_active"))),
+            )
+            self.logger.record_mean(
+                "combat/ranged_spacing_risk",
+                float(info.get("ranged_spacing_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/ranged_spacing_req_risk",
+                float(info.get("ranged_spacing_requested_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/ranged_spacing_penalty",
+                float(info.get("ranged_spacing_penalty", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/ranged_spacing_dist",
+                float(info.get("ranged_spacing_predicted_distance", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/ranged_spacing_target",
+                float(info.get("ranged_spacing_target_distance", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/ranged_spacing_closing",
+                float(info.get("ranged_spacing_closing_rate", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/ranged_spacing_error",
+                float(info.get("ranged_spacing_error", 0.0)),
+            )
             hazard_source = str(info.get("hazard_source", "policy"))
             self.logger.record_mean(
                 "combat/hazard_source_policy", float(hazard_source == "policy")

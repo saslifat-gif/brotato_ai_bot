@@ -31,6 +31,7 @@ class HazardRisk:
     enemy_path: float = 0.0
     projectile_path: float = 0.0
     boundary_path: float = 0.0
+    ranged_spacing: float = 0.0
 
     @property
     def total(self) -> float:
@@ -42,6 +43,7 @@ class HazardRisk:
             + self.enemy_path
             + self.projectile_path
             + self.boundary_path
+            + self.ranged_spacing
         )
 
     @property
@@ -50,7 +52,7 @@ class HazardRisk:
 
     @property
     def enemy_total(self) -> float:
-        return float(self.enemy + self.enemy_path)
+        return float(self.enemy + self.enemy_path + self.ranged_spacing)
 
     @property
     def projectile_total(self) -> float:
@@ -73,6 +75,7 @@ class HazardRisk:
             "enemy_path": self.enemy_path,
             "projectile_path": self.projectile_path,
             "boundary_path": self.boundary_path,
+            "ranged_spacing": self.ranged_spacing,
         }
 
 

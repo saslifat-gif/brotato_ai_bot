@@ -71,6 +71,115 @@ def _owner_threat_code(
     return 1.0 if _enemy_is_boss(owner) else 0.5
 
 
+def ranged_spacing_diagnostics(
+    state: Mapping[str, Any] | StateSnapshot,
+    action: int,
+    *,
+    horizon_seconds: float = 0.45,
+    enabled: bool = True,
+) -> dict[str, float | bool]:
+    '''Return transparent ranged-spacing diagnostics for one candidate action.'''
+
+    empty = {
+        "active": False,
+        "risk": 0.0,
+        "target_distance": 0.0,
+        "predicted_distance": 0.0,
+        "closing_rate": 0.0,
+        "spacing_error": 0.0,
+    }
+    if not enabled:
+        return empty
+    payload = state.to_dict() if isinstance(state, StateSnapshot) else state
+    combat = _mapping(payload.get("combat"))
+    ranged_count = _number(combat.get("ranged_count"), 0.0)
+    melee_count = _number(combat.get("melee_count"), 0.0)
+    weapon_range = _number(combat.get("weapon_range"), 0.0)
+    if ranged_count <= 0.0 or ranged_count <= melee_count or weapon_range <= 0.0:
+        return empty
+
+    player = _mapping(payload.get("player"))
+    px, py = _xy(player.get("position"))
+    player_radius = max(
+        18.0,
+        _number(player.get("radius"), 28.0),
+        _number(player.get("width"), 0.0) * 0.5,
+        _number(player.get("height"), 0.0) * 0.5,
+    )
+    speed = max(150.0, _number(combat.get("move_speed"), 300.0))
+    movement = ACTION_VECTORS[MoveAction(int(action))]
+    future_x = px + movement[0] * speed * horizon_seconds
+    future_y = py + movement[1] * speed * horizon_seconds
+
+    candidates: list[tuple[float, float, float, float, float, float]] = []
+    for enemy in _items(payload.get("enemies")):
+        if bool(enemy.get("dead")):
+            continue
+        ex, ey = _xy(enemy.get("position"))
+        evx, evy = _xy(enemy.get("velocity"))
+        predicted_x = ex + evx * horizon_seconds
+        predicted_y = ey + evy * horizon_seconds
+        current_distance = math.hypot(ex - px, ey - py)
+        predicted_distance = math.hypot(predicted_x - future_x, predicted_y - future_y)
+        enemy_radius = max(25.0, _number(enemy.get("radius"), 40.0))
+        contact_clearance = player_radius + enemy_radius + 80.0
+        target_distance = max(
+            contact_clearance,
+            min(420.0, max(180.0, weapon_range * 0.55)),
+        )
+        candidates.append(
+            (
+                predicted_distance,
+                current_distance,
+                target_distance,
+                max(0.0, current_distance - predicted_distance),
+                predicted_x,
+                predicted_y,
+            )
+        )
+    if not candidates:
+        return empty
+
+    predicted_distance, current_distance, target_distance, closing_distance, _, _ = min(
+        candidates,
+        key=lambda row: (row[0], row[1]),
+    )
+    spacing_error = max(0.0, target_distance - predicted_distance) / target_distance
+    closing_rate = closing_distance / target_distance
+    if predicted_distance > target_distance * 1.40:
+        closing_rate = 0.0
+    risk = min(
+        2.0,
+        1.25 * spacing_error * spacing_error
+        + 0.35 * min(1.0, closing_rate),
+    )
+    return {
+        "active": True,
+        "risk": float(risk),
+        "target_distance": float(target_distance),
+        "predicted_distance": float(predicted_distance),
+        "closing_rate": float(closing_rate),
+        "spacing_error": float(spacing_error),
+    }
+
+
+def ranged_spacing_risk(
+    state: Mapping[str, Any] | StateSnapshot,
+    action: int,
+    *,
+    horizon_seconds: float = 0.45,
+    enabled: bool = True,
+) -> float:
+    return float(
+        ranged_spacing_diagnostics(
+            state,
+            action,
+            horizon_seconds=horizon_seconds,
+            enabled=enabled,
+        )["risk"]
+    )
+
+
 def projectile_time_to_impact(
     projectile: Mapping[str, Any],
     player_position: tuple[float, float],
@@ -104,12 +213,16 @@ class UnifiedHazardScorer:
         hard_risk_threshold: float = 0.65,
         minimum_risk: float = 0.22,
         switch_penalty: float = 0.05,
+        ranged_spacing_enabled: bool = True,
+        ranged_spacing_weight: float = 1.25,
     ):
         self.enabled = bool(enabled)
         self.override_margin = float(override_margin)
         self.hard_risk_threshold = float(hard_risk_threshold)
         self.minimum_risk = max(0.0, float(minimum_risk))
         self.switch_penalty = max(0.0, float(switch_penalty))
+        self.ranged_spacing_enabled = bool(ranged_spacing_enabled)
+        self.ranged_spacing_weight = max(0.0, float(ranged_spacing_weight))
 
     @staticmethod
     def _payload(state: Mapping[str, Any] | StateSnapshot) -> Mapping[str, Any]:
@@ -136,6 +249,12 @@ class UnifiedHazardScorer:
         projectile_path_risk = 0.0
         enemy_path_risk = 0.0
         boundary_path_risk = 0.0
+        spacing = ranged_spacing_diagnostics(
+            state,
+            action,
+            enabled=self.ranged_spacing_enabled,
+        )
+        spacing_risk = float(spacing["risk"]) * self.ranged_spacing_weight
 
         edge_margin = 150.0
         edge_distance = min(future_x, width - future_x, future_y, height - future_y)
@@ -265,6 +384,7 @@ class UnifiedHazardScorer:
             enemy_path=float(enemy_path_risk),
             projectile_path=float(projectile_path_risk),
             boundary_path=float(boundary_path_risk),
+            ranged_spacing=float(spacing_risk),
         )
 
     def risk(self, state: Mapping[str, Any] | StateSnapshot, action: int) -> float:

@@ -77,14 +77,43 @@ def compare_recording(
 ) -> dict:
     recording = Path(recording)
     scorer = UnifiedHazardScorer(enabled=True, switch_penalty=0.0)
+    spacing_off_scorer = UnifiedHazardScorer(
+        enabled=True,
+        switch_penalty=0.0,
+        ranged_spacing_enabled=False,
+    )
     metrics = {name: VariantMetrics() for name in VARIANT_NAMES}
+    spacing_metrics = {"off": VariantMetrics(), "on": VariantMetrics()}
     damage = DamageMetrics()
     records = 0
     for snapshot, requested in JsonlReplay(
         recording, max_records=max_records, stride=stride
     ).records():
         risks = scorer.all_risks(snapshot)
+        spacing_risks_off = spacing_off_scorer.all_risks(snapshot)
         minimum_action = min(risks, key=lambda action: (risks[action].total, action == 0, action))
+        spacing_minimums = {
+            "off": min(
+                spacing_risks_off,
+                key=lambda action: (spacing_risks_off[action].total, action == 0, action),
+            ),
+            "on": minimum_action,
+        }
+        spacing_risks_by_mode = {"off": spacing_risks_off, "on": risks}
+        for mode, mode_risks in spacing_risks_by_mode.items():
+            selected_spacing = _select(mode_risks, requested)
+            spacing_metrics[mode].observe(
+                requested_action=requested,
+                selected_action=selected_spacing,
+                requested_risk=mode_risks[requested].total,
+                selected_risk=mode_risks[selected_spacing].total,
+                minimum_action=spacing_minimums[mode],
+                unsafe_action_count=sum(
+                    risk.total >= 0.65 for risk in mode_risks.values()
+                ),
+                action_count=len(mode_risks),
+                minimum_risk=mode_risks[spacing_minimums[mode]].total,
+            )
         selected = {
             "policy_only": requested,
             "projectile_only": _select(risks, requested, component="projectile"),
@@ -141,6 +170,18 @@ def compare_recording(
             "direction_switch_delta": (
                 variants["unified"]["direction_switches"]
                 - variants["policy_only"]["direction_switches"]
+            ),
+        },
+        "spacing_comparison": {
+            "off": spacing_metrics["off"].to_dict(),
+            "on": spacing_metrics["on"].to_dict(),
+            "direction_switch_delta": (
+                spacing_metrics["on"].direction_switches
+                - spacing_metrics["off"].direction_switches
+            ),
+            "override_rate_delta": (
+                spacing_metrics["on"].to_dict()["override_rate"]
+                - spacing_metrics["off"].to_dict()["override_rate"]
             ),
         },
         "analyzer_drift": drift,

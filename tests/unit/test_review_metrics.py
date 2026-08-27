@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from brotato_ai.control.hazards import UnifiedHazardScorer
+from brotato_ai.domain.actions import MoveAction
 from brotato_ai.evaluation.temporal_ablation import ablation_observations
 from brotato_ai.telemetry import percentile, risk_diagnostics, reward_time_scale
 
@@ -50,3 +52,54 @@ def test_human_anchor_coefficient_anneals_linearly():
     assert model._effective_bc_coefficient() == pytest.approx(0.10)
     model.num_timesteps = 10_000
     assert model._effective_bc_coefficient() == pytest.approx(0.0)
+
+
+def _ranged_spacing_state():
+    return {
+        "arena": {"width": 1000, "height": 600},
+        "player": {"position": {"x": 500, "y": 300}, "radius": 28},
+        "combat": {
+            "move_speed": 300,
+            "weapon_range": 400,
+            "weapon_count": 1,
+            "ranged_count": 1,
+            "melee_count": 0,
+        },
+        "enemies": [{
+            "runtime_id": "enemy-1",
+            "position": {"x": 680, "y": 300},
+            "velocity": {"x": -100, "y": 0},
+            "radius": 40,
+            "attack_method": "contact",
+        }],
+        "projectiles": [],
+        "attack_indicators": [],
+        "projectile_paths": {},
+    }
+
+
+def test_ranged_spacing_prefers_distance_from_closing_enemy():
+    state = _ranged_spacing_state()
+    scorer = UnifiedHazardScorer(enabled=True)
+    toward = scorer.risk_breakdown(state, MoveAction.RIGHT)
+    away = scorer.risk_breakdown(state, MoveAction.LEFT)
+    assert toward.ranged_spacing > away.ranged_spacing
+    assert toward.total > away.total
+
+
+def test_ranged_spacing_is_inactive_for_melee_or_missing_range():
+    state = _ranged_spacing_state()
+    scorer = UnifiedHazardScorer(enabled=True)
+    state["combat"]["ranged_count"] = 0
+    state["combat"]["melee_count"] = 1
+    assert scorer.risk_breakdown(state, MoveAction.RIGHT).ranged_spacing == 0.0
+    state["combat"]["ranged_count"] = 1
+    state["combat"]["melee_count"] = 0
+    state["combat"]["weapon_range"] = 0
+    assert scorer.risk_breakdown(state, MoveAction.RIGHT).ranged_spacing == 0.0
+
+
+def test_ranged_spacing_can_be_disabled_for_ablation():
+    state = _ranged_spacing_state()
+    scorer = UnifiedHazardScorer(enabled=True, ranged_spacing_enabled=False)
+    assert scorer.risk_breakdown(state, MoveAction.RIGHT).ranged_spacing == 0.0

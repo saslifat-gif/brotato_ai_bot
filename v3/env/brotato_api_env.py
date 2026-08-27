@@ -33,6 +33,7 @@ from v3.reward import ApiRewardEngine
 from v3.ui_automation import AutoUiController
 from v3.vectorizer import ApiStateVectorizer
 from brotato_ai.telemetry import percentile, risk_diagnostics, reward_time_scale
+from brotato_ai.control.hazards import ranged_spacing_diagnostics
 
 
 def _state_wave(state: Mapping[str, Any]) -> float:
@@ -169,7 +170,10 @@ class BrotatoApiEnv(gym.Env):
         self.sequence = 0
         self.previous_action = int(MoveAction.IDLE)
         self.last_state = None
-        self.safety_shield = CombatSafetyShield(enabled=cfg.safety_shield)
+        self.safety_shield = CombatSafetyShield(
+            enabled=cfg.safety_shield,
+            ranged_spacing_enabled=cfg.ranged_spacing,
+        )
         self.crowd_recovery_guard = CrowdRecoveryGuard(
             enabled=True,
             shield=self.safety_shield,
@@ -356,6 +360,16 @@ class BrotatoApiEnv(gym.Env):
             requested,
             normalized,
         )
+        spacing_requested = ranged_spacing_diagnostics(
+            previous_state,
+            requested,
+            enabled=self.safety_shield.ranged_spacing_enabled,
+        )
+        spacing_applied = ranged_spacing_diagnostics(
+            previous_state,
+            normalized,
+            enabled=self.safety_shield.ranged_spacing_enabled,
+        )
         previous_paths = (self.last_state or {}).get("projectile_paths", {})
         projectile_risks = (
             previous_paths.get("action_risk", [])
@@ -463,6 +477,11 @@ class BrotatoApiEnv(gym.Env):
             if center_stagnation
             else 0.0
         )
+        ranged_spacing_penalty = (
+            float(getattr(self.vectorizer, "ranged_spacing_reward_scale", 0.0))
+            * float(decision_trace.applied_risk.ranged_spacing)
+            * dense_scale
+        )
         reward = self.reward_engine.step(state, dense_scale=dense_scale)
         reward_components = dict(self.reward_engine.last_components)
         late_focus = bool(self.cfg.late_wave_focus and _state_wave(previous_state) >= 18)
@@ -482,12 +501,14 @@ class BrotatoApiEnv(gym.Env):
             + low_motion_penalty
             + contact_override_penalty
             + center_stagnation_penalty
+            + ranged_spacing_penalty
         )
         reward_components["idle"] = -idle_penalty
         reward_components["reversal"] = -reversal_penalty
         reward_components["low_motion"] = -low_motion_penalty
         reward_components["contact_override"] = -contact_override_penalty
         reward_components["center_stagnation"] = -center_stagnation_penalty
+        reward_components["ranged_spacing"] = -ranged_spacing_penalty
         terminated = bool(state.get("dead") or state.get("victory"))
         ui_sent = []
         ui_confirmed = []
@@ -610,6 +631,14 @@ class BrotatoApiEnv(gym.Env):
             "hazard_applied_projectile_risk": decision_trace.applied_risk.projectile_total,
             "hazard_applied_indicator_risk": decision_trace.applied_risk.indicator,
             "hazard_applied_boundary_risk": decision_trace.applied_risk.boundary_total,
+            "ranged_spacing_active": bool(spacing_requested["active"]),
+            "ranged_spacing_risk": float(decision_trace.applied_risk.ranged_spacing),
+            "ranged_spacing_requested_risk": float(decision_trace.requested_risk.ranged_spacing),
+            "ranged_spacing_penalty": ranged_spacing_penalty,
+            "ranged_spacing_target_distance": float(spacing_applied["target_distance"]),
+            "ranged_spacing_predicted_distance": float(spacing_applied["predicted_distance"]),
+            "ranged_spacing_closing_rate": float(spacing_applied["closing_rate"]),
+            "ranged_spacing_error": float(spacing_applied["spacing_error"]),
             "enemy_contact_overridden": decision_trace.enemy_contact_overridden,
             "enemy_contact_requested_risk": decision_trace.requested_risk.enemy_total,
             "enemy_contact_applied_risk": decision_trace.applied_risk.enemy_total,
