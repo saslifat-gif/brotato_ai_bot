@@ -8,12 +8,14 @@ from gymnasium import spaces
 
 from v3.bridge_server import BridgeServer
 from v3.combat_policy import (
+    ACTION_VECTORS,
     CombatDecisionLogger,
     CombatSafetyShield,
     CrowdRecoveryGuard,
     EnemyContactGuard,
     SafetyDecision,
     movement_transition_metrics,
+    projectile_time_to_impact,
 )
 from v3.config import V3Config
 from v3.protocol import (
@@ -34,6 +36,97 @@ def _state_wave(state: Mapping[str, Any]) -> float:
         return float(wave.get("number", 0.0)) if isinstance(wave, Mapping) else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def _state_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _state_risks(value: Any) -> list[float]:
+    result = [0.0] * len(MoveAction)
+    if not isinstance(value, (list, tuple)):
+        return result
+    for index, raw_value in enumerate(value[:len(result)]):
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            result[index] = float(np.clip(value, 0.0, 1.0))
+    return result
+
+
+def _projectile_diagnostics(
+    state: Mapping[str, Any],
+    requested_action: int,
+    applied_action: int,
+) -> dict[str, Any]:
+    """Summarize projectile visibility, forecast danger, and chosen lane."""
+
+    player = state.get("player", {}) if isinstance(state, Mapping) else {}
+    player = player if isinstance(player, Mapping) else {}
+    position = player.get("position", {})
+    position = position if isinstance(position, Mapping) else {}
+    px = float(position.get("x", 0.0) or 0.0)
+    py = float(position.get("y", 0.0) or 0.0)
+    combat = state.get("combat", {}) if isinstance(state, Mapping) else {}
+    combat = combat if isinstance(combat, Mapping) else {}
+    try:
+        player_speed = max(150.0, float(combat.get("move_speed", 300.0)))
+    except (TypeError, ValueError):
+        player_speed = 300.0
+    projectiles = _state_items(state.get("projectiles"))
+    enemies = _state_items(state.get("enemies"))
+    owner_ids = {
+        str(enemy.get("runtime_id"))
+        for enemy in enemies
+        if str(enemy.get("runtime_id", ""))
+    }
+    paths = state.get("projectile_paths", {})
+    paths = paths if isinstance(paths, Mapping) else {}
+    risks = _state_risks(paths.get("action_risk"))
+    requested_risk = risks[int(requested_action)]
+    applied_risk = risks[int(applied_action)]
+    safe_action = int(np.argmin(risks)) if risks else int(MoveAction.IDLE)
+    hazard_count = 0
+    nearest_tti = None
+    nearest_miss = None
+    for projectile in projectiles:
+        tti, miss_distance = projectile_time_to_impact(
+            projectile,
+            (px, py),
+            ACTION_VECTORS[MoveAction(int(applied_action))],
+            player_speed,
+        )
+        try:
+            radius = max(8.0, float(projectile.get("radius", 12.0))) + 42.0
+        except (TypeError, ValueError):
+            radius = 54.0
+        if tti <= 0.8 and miss_distance <= radius:
+            hazard_count += 1
+        if nearest_tti is None or tti < nearest_tti:
+            nearest_tti = float(tti)
+            nearest_miss = float(miss_distance)
+    return {
+        "projectile_visible": bool(projectiles),
+        "projectile_count": len(projectiles),
+        "projectile_owner_known_count": sum(
+            str(projectile.get("owner_runtime_id", "")) in owner_ids
+            for projectile in projectiles
+        ),
+        "projectile_path_present": bool(paths),
+        "projectile_path_count": int(paths.get("count", 0) or 0),
+        "projectile_path_requested_risk": requested_risk,
+        "projectile_path_applied_risk": applied_risk,
+        "projectile_path_safe_action": safe_action,
+        "projectile_path_risk_margin": requested_risk - applied_risk,
+        "projectile_path_action_improved": applied_risk + 1e-6 < requested_risk,
+        "projectile_predicted_hazard_count": hazard_count,
+        "projectile_nearest_tti": nearest_tti if nearest_tti is not None else -1.0,
+        "projectile_nearest_miss_distance": nearest_miss if nearest_miss is not None else -1.0,
+    }
 
 
 class BrotatoApiEnv(gym.Env):
@@ -236,6 +329,11 @@ class BrotatoApiEnv(gym.Env):
                 crowd_decision.applied_risk,
             )
         normalized = decision.applied_action
+        projectile_diagnostics = _projectile_diagnostics(
+            previous_state,
+            requested,
+            normalized,
+        )
         previous_paths = (self.last_state or {}).get("projectile_paths", {})
         projectile_risks = (
             previous_paths.get("action_risk", [])
@@ -366,6 +464,28 @@ class BrotatoApiEnv(gym.Env):
             ui_confirmed = result.confirmed_roles
             state = self._merge_cached_spatial_state(state)
             terminated = bool(state.get("dead") or state.get("victory"))
+        previous_player = previous_state.get("player", {})
+        current_player = state.get("player", {})
+        try:
+            health_before = float(previous_player.get("health", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            health_before = 0.0
+        try:
+            health_after = float(current_player.get("health", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            health_after = health_before
+        damage_taken = max(0.0, health_before - health_after)
+        projectile_visible = bool(projectile_diagnostics["projectile_visible"])
+        projectile_hazard = projectile_diagnostics["projectile_predicted_hazard_count"] > 0
+        projectile_diagnostics.update(
+            {
+                "damage_taken": damage_taken,
+                "damage_after_projectile_visible": damage_taken if projectile_visible else 0.0,
+                "damage_after_projectile_hazard": damage_taken if projectile_hazard else 0.0,
+                "death_after_projectile_visible": bool(terminated and projectile_visible),
+                "death_after_projectile_hazard": bool(terminated and projectile_hazard),
+            }
+        )
         truncated = not terminated and state.get("phase") != "combat"
         self.last_state = state
         self.previous_action = normalized
@@ -445,6 +565,28 @@ class BrotatoApiEnv(gym.Env):
             "reward_total": float(reward),
             "reward_components": reward_components,
         }
+        info.update(
+            {
+                "projectile_visible_before_action": projectile_diagnostics["projectile_visible"],
+                "projectile_count_before_action": projectile_diagnostics["projectile_count"],
+                "projectile_owner_known_count": projectile_diagnostics["projectile_owner_known_count"],
+                "projectile_path_present_before_action": projectile_diagnostics["projectile_path_present"],
+                "projectile_path_count_before_action": projectile_diagnostics["projectile_path_count"],
+                "projectile_path_requested_risk": projectile_diagnostics["projectile_path_requested_risk"],
+                "projectile_path_applied_risk": projectile_diagnostics["projectile_path_applied_risk"],
+                "projectile_path_safe_action": projectile_diagnostics["projectile_path_safe_action"],
+                "projectile_path_risk_margin": projectile_diagnostics["projectile_path_risk_margin"],
+                "projectile_path_action_improved": projectile_diagnostics["projectile_path_action_improved"],
+                "projectile_predicted_hazard_count": projectile_diagnostics["projectile_predicted_hazard_count"],
+                "projectile_nearest_tti": projectile_diagnostics["projectile_nearest_tti"],
+                "projectile_nearest_miss_distance": projectile_diagnostics["projectile_nearest_miss_distance"],
+                "damage_taken": projectile_diagnostics["damage_taken"],
+                "damage_after_projectile_visible": projectile_diagnostics["damage_after_projectile_visible"],
+                "damage_after_projectile_hazard": projectile_diagnostics["damage_after_projectile_hazard"],
+                "death_after_projectile_visible": projectile_diagnostics["death_after_projectile_visible"],
+                "death_after_projectile_hazard": projectile_diagnostics["death_after_projectile_hazard"],
+            }
+        )
         return observation, reward, terminated, truncated, info
 
     def close(self):

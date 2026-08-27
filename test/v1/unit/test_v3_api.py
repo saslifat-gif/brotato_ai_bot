@@ -1938,6 +1938,47 @@ def test_v4_macro_uses_boss_hitbox_and_owned_telegraph_for_escape():
     assert macro[-1] > 0.0
 
 
+def test_projectile_diagnostics_connects_visibility_risk_and_hazard():
+    from v3.env.brotato_api_env import _projectile_diagnostics
+
+    state = _state()
+    state["combat"] = {"move_speed": 300.0}
+    state["enemies"] = [{
+        "runtime_id": "boss-1",
+        "position": {"x": 800.0, "y": 300.0},
+    }]
+    state["projectiles"] = [{
+        "runtime_id": "projectile-1",
+        "owner_runtime_id": "boss-1",
+        "position": {"x": 650.0, "y": 300.0},
+        "velocity": {"x": -600.0, "y": 0.0},
+        "radius": 12.0,
+    }]
+    state["projectile_paths"] = {
+        "count": 1,
+        "action_risk": [0.1, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.0],
+    }
+
+    diagnostics = _projectile_diagnostics(state, requested_action=4, applied_action=0)
+
+    assert diagnostics["projectile_visible"] is True
+    assert diagnostics["projectile_count"] == 1
+    assert diagnostics["projectile_owner_known_count"] == 1
+    assert diagnostics["projectile_path_present"] is True
+    assert diagnostics["projectile_path_requested_risk"] == pytest.approx(0.9)
+    assert diagnostics["projectile_path_applied_risk"] == pytest.approx(0.1)
+    assert diagnostics["projectile_path_action_improved"] is True
+    assert diagnostics["projectile_predicted_hazard_count"] == 1
+    assert diagnostics["projectile_nearest_tti"] > 0.0
+
+
+def test_v4_raw_anchor_loader_preserves_projectile_fields():
+    source = (ROOT / "v4" / "train_temporal_hierarchical.py").read_text(encoding="utf-8")
+    assert '"projectiles": record.get("projectiles", [])' in source
+    assert '"projectile_paths": record.get("projectile_paths", {})' in source
+    assert '"attack_indicators": record.get("attack_indicators", [])' in source
+
+
 def test_v4_anchor_balancing_limits_idle_to_ten_percent():
     pytest.importorskip("gymnasium")
     pytest.importorskip("stable_baselines3")

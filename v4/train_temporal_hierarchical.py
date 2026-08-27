@@ -333,15 +333,22 @@ def load_raw_anchor_arrays(
                 state = {
                     "session": session,
                     "tick": tick,
+                    "phase": record.get("phase", "combat"),
+                    "published_at_ms": record.get("published_at_ms", 0),
                     "player": record.get("player", {}),
                     "enemies": record.get("enemies", []),
                     "wave": {"number": int(record.get("wave", 0))},
-                    "arena": {"width": 1920.0, "height": 1080.0},
-                    "projectiles": [],
-                    "projectile_paths": {},
-                    "attack_indicators": [],
-                    "pickups": [],
-                    "combat": {},
+                    "arena": record.get(
+                        "arena", {"width": 1920.0, "height": 1080.0}
+                    ),
+                    "projectiles": record.get("projectiles", []),
+                    "projectile_paths": record.get("projectile_paths", {}),
+                    "attack_indicators": record.get("attack_indicators", []),
+                    "pickups": record.get("pickups", []),
+                    "combat": record.get("combat", {}),
+                    "counters": record.get("counters", {}),
+                    "dead": record.get("dead", False),
+                    "victory": record.get("victory", False),
                 }
                 observation = vectorizer.build(state, previous_action)
                 if seen % max(1, stride) == 0:

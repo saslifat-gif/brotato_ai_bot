@@ -207,6 +207,74 @@ class CombatTensorboardCallback(BaseCallback):
                 float(info.get("projectile_path_action_risk", 0.0)),
             )
             self.logger.record_mean(
+                "combat/projectile_visible_before_action",
+                float(bool(info.get("projectile_visible_before_action"))),
+            )
+            self.logger.record_mean(
+                "combat/projectile_count_before_action",
+                float(info.get("projectile_count_before_action", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_owner_known_count",
+                float(info.get("projectile_owner_known_count", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_present_before_action",
+                float(bool(info.get("projectile_path_present_before_action"))),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_count_before_action",
+                float(info.get("projectile_path_count_before_action", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_requested_risk",
+                float(info.get("projectile_path_requested_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_applied_risk",
+                float(info.get("projectile_path_applied_risk", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_risk_margin",
+                float(info.get("projectile_path_risk_margin", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_path_action_improved",
+                float(bool(info.get("projectile_path_action_improved"))),
+            )
+            self.logger.record_mean(
+                "combat/projectile_predicted_hazard_count",
+                float(info.get("projectile_predicted_hazard_count", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_nearest_tti",
+                float(info.get("projectile_nearest_tti", -1.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_nearest_miss_distance",
+                float(info.get("projectile_nearest_miss_distance", -1.0)),
+            )
+            self.logger.record_mean(
+                "combat/damage_taken",
+                float(info.get("damage_taken", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/damage_after_projectile_visible",
+                float(info.get("damage_after_projectile_visible", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/damage_after_projectile_hazard",
+                float(info.get("damage_after_projectile_hazard", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/death_after_projectile_visible",
+                float(bool(info.get("death_after_projectile_visible"))),
+            )
+            self.logger.record_mean(
+                "combat/death_after_projectile_hazard",
+                float(bool(info.get("death_after_projectile_hazard"))),
+            )
+            self.logger.record_mean(
                 "combat/enemy_path_max_risk",
                 float(info.get("enemy_path_max_risk", 0.0)),
             )
