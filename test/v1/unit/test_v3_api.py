@@ -1294,6 +1294,32 @@ def test_ranged_launchers_use_an_isolated_checkpoint_lineage():
     assert "fresh-ranged-lineage" in scheduled
 
 
+def test_three_frame_tracker_estimates_timestamp_aware_projectile_motion():
+    from v4.combat_policy import (
+        TRAJECTORY_PROJECTILE_START,
+        TRAJECTORY_PROJECTILE_TRACKED,
+        ThreeFrameTrajectoryTracker,
+    )
+
+    tracker = ThreeFrameTrajectoryTracker()
+    samples = []
+    for tick, timestamp, x in ((1, 1000, 800.0), (2, 1100, 900.0), (3, 1200, 1000.0)):
+        state = _state()
+        state.update({"session": "trajectory-run", "tick": tick, "published_at_ms": timestamp})
+        state["projectiles"] = [{
+            "runtime_id": "projectile-1",
+            "position": {"x": x, "y": 300.0},
+            "velocity": {"x": 0.0, "y": 0.0},
+        }]
+        samples.append(tracker.features(state))
+
+    latest = samples[-1]
+    assert latest[TRAJECTORY_PROJECTILE_START + 2] == pytest.approx(1000.0 / 1200.0)
+    assert latest[TRAJECTORY_PROJECTILE_START + 7] == pytest.approx(1.0)
+    assert latest[TRAJECTORY_PROJECTILE_TRACKED] == pytest.approx(1.0 / 32.0)
+    assert latest[TRAJECTORY_PROJECTILE_START] > 0.5
+
+
 def test_ui_build_base_is_small_and_has_stable_features():
     state = dict(_state(wave=7, materials=120), phase="shop")
     state["build"] = {
@@ -1789,6 +1815,7 @@ def test_v4_vector_preserves_v3_prefix_and_records_real_transition():
     from v4.combat_policy import (
         HISTORY_FEATURES,
         HISTORY_SIZE,
+        MACRO_FEATURES,
         OBJECTIVE_EVADE,
         V4_OBSERVATION_SIZE,
         HierarchicalCombatVectorizer,
@@ -1820,13 +1847,18 @@ def test_v4_vector_preserves_v3_prefix_and_records_real_transition():
     assert latest[4] == pytest.approx(1.0)
     assert latest[9] == pytest.approx(0.2)
     assert latest[11] == pytest.approx(0.2)
-    macro = second[history_start + HISTORY_SIZE:]
+    macro = second[history_start + HISTORY_SIZE:history_start + HISTORY_SIZE + MACRO_FEATURES]
     assert macro[OBJECTIVE_EVADE] == pytest.approx(1.0)
     assert macro[-1] == pytest.approx((0.9 + 0.7 + 0.6) / 3.0)
 
 
 def test_v4_macro_does_not_treat_one_bad_lane_as_global_evade():
-    from v4.combat_policy import OBJECTIVE_ENGAGE, HISTORY_SIZE, HierarchicalCombatVectorizer
+    from v4.combat_policy import (
+        HISTORY_SIZE,
+        MACRO_FEATURES,
+        OBJECTIVE_ENGAGE,
+        HierarchicalCombatVectorizer,
+    )
 
     state = _state()
     state["enemies"] = [{"position": {"x": 700.0, "y": 300.0}}]
@@ -1836,23 +1868,30 @@ def test_v4_macro_does_not_treat_one_bad_lane_as_global_evade():
         "boundary_action_risk": [0.0] * 9,
     }
     observation = HierarchicalCombatVectorizer().build(state)
-    macro = observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    macro_start = BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE
+    macro = observation[macro_start:macro_start + MACRO_FEATURES]
     assert macro[OBJECTIVE_ENGAGE] == pytest.approx(1.0)
 
 
 def test_v4_reposition_returns_to_safe_band_without_center_attractor():
-    from v4.combat_policy import OBJECTIVE_REPOSITION, HISTORY_SIZE, HierarchicalCombatVectorizer
+    from v4.combat_policy import (
+        HISTORY_SIZE,
+        MACRO_FEATURES,
+        OBJECTIVE_REPOSITION,
+        HierarchicalCombatVectorizer,
+    )
 
     state = _state()
     state["player"]["position"] = {"x": 800.0, "y": 300.0}
     observation = HierarchicalCombatVectorizer().build(state)
-    macro = observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    macro_start = BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE
+    macro = observation[macro_start:macro_start + MACRO_FEATURES]
     assert macro[OBJECTIVE_REPOSITION] == pytest.approx(1.0)
     assert macro[-3] < 0.0
 
     centered = _state()
     centered_observation = HierarchicalCombatVectorizer().build(centered)
-    centered_macro = centered_observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    centered_macro = centered_observation[macro_start:macro_start + MACRO_FEATURES]
     assert centered_macro[-3] == pytest.approx(0.0)
     assert centered_macro[-2] == pytest.approx(0.0)
 
@@ -1860,6 +1899,7 @@ def test_v4_reposition_returns_to_safe_band_without_center_attractor():
 def test_v4_macro_uses_boss_hitbox_and_owned_telegraph_for_escape():
     from v4.combat_policy import (
         HISTORY_SIZE,
+        MACRO_FEATURES,
         OBJECTIVE_EVADE,
         HierarchicalCombatVectorizer,
     )
@@ -1891,7 +1931,8 @@ def test_v4_macro_uses_boss_hitbox_and_owned_telegraph_for_escape():
         "boundary_action_risk": [0.0] * 9,
     }
     observation = HierarchicalCombatVectorizer().build(state)
-    macro = observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    macro_start = BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE
+    macro = observation[macro_start:macro_start + MACRO_FEATURES]
     assert macro[OBJECTIVE_EVADE] == pytest.approx(1.0)
     assert macro[-3] < 0.0
     assert macro[-1] > 0.0
@@ -1901,6 +1942,7 @@ def test_v4_anchor_balancing_limits_idle_to_ten_percent():
     pytest.importorskip("gymnasium")
     pytest.importorskip("stable_baselines3")
     from v4.train_temporal_hierarchical import balanced_anchor_arrays
+    from v4.combat_policy import V4_OBSERVATION_SIZE
 
     records = [
         {"features": [0.0] * SEMANTIC_OBSERVATION_SIZE, "action": 0}
@@ -1910,7 +1952,7 @@ def test_v4_anchor_balancing_limits_idle_to_ten_percent():
         for index in range(90)
     ]
     features, actions, idle_fraction = balanced_anchor_arrays(records)
-    assert features.shape == (100, 4077)
+    assert features.shape == (100, V4_OBSERVATION_SIZE)
     assert actions.shape == (100,)
     assert idle_fraction == pytest.approx(0.10)
 

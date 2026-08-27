@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Mapping
+from typing import Any, Deque, Mapping
 
 import numpy as np
 
@@ -23,7 +23,20 @@ HISTORY_FEATURES = 16
 HISTORY_SIZE = HISTORY_STEPS * HISTORY_FEATURES
 MACRO_OBJECTIVES = 5
 MACRO_FEATURES = MACRO_OBJECTIVES + 3
-V4_OBSERVATION_SIZE = BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE + MACRO_FEATURES
+TRAJECTORY_ENTITY_FEATURES = 8
+TRAJECTORY_PROJECTILE_START = 0
+TRAJECTORY_ENEMY_START = TRAJECTORY_ENTITY_FEATURES
+TRAJECTORY_PROJECTILE_COUNT = TRAJECTORY_ENEMY_START + TRAJECTORY_ENTITY_FEATURES
+TRAJECTORY_ENEMY_COUNT = TRAJECTORY_PROJECTILE_COUNT + 1
+TRAJECTORY_PROJECTILE_TRACKED = TRAJECTORY_ENEMY_COUNT + 1
+TRAJECTORY_ENEMY_TRACKED = TRAJECTORY_PROJECTILE_TRACKED + 1
+TRAJECTORY_FEATURES = TRAJECTORY_ENEMY_TRACKED + 1
+V4_OBSERVATION_SIZE = (
+    BULLET_HELL_OBSERVATION_SIZE
+    + HISTORY_SIZE
+    + MACRO_FEATURES
+    + TRAJECTORY_FEATURES
+)
 
 OBJECTIVE_EVADE = 0
 OBJECTIVE_HEAL = 1
@@ -76,6 +89,196 @@ def _items(value: Any) -> list[Mapping[str, Any]]:
     if not isinstance(value, (list, tuple)):
         return []
     return [item for item in value if isinstance(item, Mapping)]
+
+
+class ThreeFrameTrajectoryTracker:
+    """Track short object histories and expose deterministic motion features.
+
+    The bridge already gives entities stable runtime IDs and publishes a real
+    timestamp. Three samples are enough for a local velocity and acceleration
+    estimate, while the compact output keeps the V4 policy inexpensive.
+    """
+
+    horizon_seconds = 0.25
+    fallback_dt = 1.0 / 24.0
+    stale_after_seconds = 0.75
+    projectile_speed_scale = 1200.0
+    enemy_speed_scale = 500.0
+    acceleration_scale = 5000.0
+
+    def __init__(self) -> None:
+        self._tracks: dict[tuple[str, str], dict[str, Any]] = {}
+        self._last_identity: tuple[str, int] | None = None
+        self._last_timestamp: float | None = None
+        self._last_features = np.zeros(TRAJECTORY_FEATURES, dtype=np.float32)
+
+    def reset(self) -> None:
+        self._tracks.clear()
+        self._last_identity = None
+        self._last_timestamp = None
+        self._last_features.fill(0.0)
+
+    @classmethod
+    def _timestamp(cls, state: Mapping[str, Any], previous: float | None) -> float:
+        published_ms = _number(state.get("published_at_ms"), 0.0)
+        timestamp = published_ms / 1000.0 if published_ms > 0.0 else 0.0
+        if timestamp <= 0.0:
+            timestamp = _number(state.get("tick"), 0.0) * cls.fallback_dt
+        if previous is not None and timestamp <= previous:
+            timestamp = previous + cls.fallback_dt
+        return timestamp
+
+    @staticmethod
+    def _entity_key(kind: str, entity: Mapping[str, Any]) -> str:
+        return str(entity.get("runtime_id") or entity.get("id") or "").strip()
+
+    @staticmethod
+    def _reported_velocity(entity: Mapping[str, Any]) -> tuple[float, float]:
+        return _xy(entity.get("velocity"))
+
+    @classmethod
+    def _motion(
+        cls,
+        samples: Deque[tuple[float, float, float]],
+        entity: Mapping[str, Any],
+    ) -> tuple[float, float, float, float, float, float]:
+        points = list(samples)
+        vx, vy = cls._reported_velocity(entity)
+        ax = ay = 0.0
+        confidence = 0.0
+        if len(points) >= 2:
+            _, x0, y0 = points[-2]
+            t1, x1, y1 = points[-1]
+            dt = max(0.001, t1 - points[-2][0])
+            vx = (x1 - x0) / dt
+            vy = (y1 - y0) / dt
+            confidence = 0.5
+            if len(points) >= 3:
+                t_prev, x_prev, y_prev = points[-3]
+                dt_prev = max(0.001, points[-2][0] - t_prev)
+                prev_vx = (x0 - x_prev) / dt_prev
+                prev_vy = (y0 - y_prev) / dt_prev
+                avg_dt = max(0.001, (dt + dt_prev) * 0.5)
+                ax = (vx - prev_vx) / avg_dt
+                ay = (vy - prev_vy) / avg_dt
+                acceleration = float(np.hypot(ax, ay))
+                if acceleration > cls.acceleration_scale:
+                    scale = cls.acceleration_scale / acceleration
+                    ax *= scale
+                    ay *= scale
+                confidence = 1.0
+        return vx, vy, ax, ay, confidence, float(np.hypot(vx, vy))
+
+    @classmethod
+    def _entity_features(
+        cls,
+        candidates: list[tuple[float, Mapping[str, Any], Deque[tuple[float, float, float]]]],
+        player: tuple[float, float],
+        arena: tuple[float, float],
+        speed_scale: float,
+    ) -> tuple[np.ndarray, int]:
+        output = np.zeros(TRAJECTORY_ENTITY_FEATURES, dtype=np.float32)
+        if not candidates:
+            return output, 0
+        px, py = player
+        width, height = arena
+        ranked = []
+        tracked_count = 0
+        for _, entity, samples in candidates:
+            ex, ey = _xy(entity.get("position"))
+            vx, vy, ax, ay, confidence, speed = cls._motion(samples, entity)
+            horizon = cls.horizon_seconds
+            predicted_x = ex + vx * horizon + 0.5 * ax * horizon * horizon
+            predicted_y = ey + vy * horizon + 0.5 * ay * horizon * horizon
+            predicted_distance = float(np.hypot(predicted_x - px, predicted_y - py))
+            relative_distance = max(1.0, float(np.hypot(ex - px, ey - py)))
+            approaching = float(np.clip(
+                (-(ex - px) * vx - (ey - py) * vy)
+                / max(1.0, relative_distance * speed_scale),
+                -1.0,
+                1.0,
+            ))
+            if confidence >= 0.5:
+                tracked_count += 1
+            rank = predicted_distance - max(0.0, approaching) * speed_scale * 0.35
+            ranked.append((rank, predicted_x, predicted_y, vx, vy, ax, ay, speed, approaching, confidence))
+        _, predicted_x, predicted_y, vx, vy, ax, ay, speed, approaching, confidence = min(
+            ranked,
+            key=lambda row: row[0],
+        )
+        output[0] = np.clip((predicted_x - px) / max(1.0, width), -1.0, 1.0)
+        output[1] = np.clip((predicted_y - py) / max(1.0, height), -1.0, 1.0)
+        output[2] = np.clip(vx / speed_scale, -1.0, 1.0)
+        output[3] = np.clip(vy / speed_scale, -1.0, 1.0)
+        output[4] = np.clip(speed / speed_scale, 0.0, 1.0)
+        output[5] = np.clip(float(np.hypot(ax, ay)) / cls.acceleration_scale, 0.0, 1.0)
+        output[6] = np.clip(approaching, -1.0, 1.0)
+        output[7] = confidence
+        return output, tracked_count
+
+    def features(self, state: Mapping[str, Any]) -> np.ndarray:
+        session = str(state.get("session", ""))
+        tick = int(_number(state.get("tick"), -1.0))
+        identity = (session, tick)
+        if self._last_identity == identity and tick >= 0:
+            return self._last_features.copy()
+        if self._last_identity is not None and session != self._last_identity[0]:
+            self.reset()
+        timestamp = self._timestamp(state, self._last_timestamp)
+        self._last_identity = identity
+        self._last_timestamp = timestamp
+        player = _mapping(state.get("player"))
+        arena = _mapping(state.get("arena"))
+        player_position = _xy(player.get("position"))
+        arena_size = (
+            max(1.0, _number(arena.get("width"), 1920.0)),
+            max(1.0, _number(arena.get("height"), 1080.0)),
+        )
+        active_keys: set[tuple[str, str]] = set()
+        candidates: dict[str, list[tuple[float, Mapping[str, Any], Deque[tuple[float, float, float]]]]] = {
+            "projectile": [],
+            "enemy": [],
+        }
+        for kind, value in (("projectile", state.get("projectiles")), ("enemy", state.get("enemies"))):
+            for entity in _items(value):
+                key = self._entity_key(kind, entity)
+                if not key:
+                    continue
+                position = _xy(entity.get("position"))
+                track_key = (kind, key)
+                active_keys.add(track_key)
+                track = self._tracks.setdefault(
+                    track_key,
+                    {"samples": deque(maxlen=3), "last_seen": timestamp},
+                )
+                samples = track["samples"]
+                if not samples or float(np.hypot(samples[-1][1] - position[0], samples[-1][2] - position[1])) > 0.01:
+                    samples.append((timestamp, position[0], position[1]))
+                track["last_seen"] = timestamp
+                distance = float(np.hypot(position[0] - player_position[0], position[1] - player_position[1]))
+                candidates[kind].append((distance, entity, samples))
+        stale = [
+            key for key, track in self._tracks.items()
+            if key not in active_keys
+            and timestamp - float(track.get("last_seen", timestamp)) > self.stale_after_seconds
+        ]
+        for key in stale:
+            self._tracks.pop(key, None)
+        projectile_features, projectile_tracked = self._entity_features(
+            candidates["projectile"], player_position, arena_size, self.projectile_speed_scale
+        )
+        enemy_features, enemy_tracked = self._entity_features(
+            candidates["enemy"], player_position, arena_size, self.enemy_speed_scale
+        )
+        output = np.zeros(TRAJECTORY_FEATURES, dtype=np.float32)
+        output[TRAJECTORY_PROJECTILE_START:TRAJECTORY_ENEMY_START] = projectile_features
+        output[TRAJECTORY_ENEMY_START:TRAJECTORY_PROJECTILE_COUNT] = enemy_features
+        output[TRAJECTORY_PROJECTILE_COUNT] = np.clip(len(candidates["projectile"]) / 32.0, 0.0, 1.0)
+        output[TRAJECTORY_PROJECTILE_TRACKED] = np.clip(projectile_tracked / 32.0, 0.0, 1.0)
+        output[TRAJECTORY_ENEMY_COUNT] = np.clip(len(candidates["enemy"]) / 64.0, 0.0, 1.0)
+        output[TRAJECTORY_ENEMY_TRACKED] = np.clip(enemy_tracked / 64.0, 0.0, 1.0)
+        self._last_features = output
+        return output.copy()
 
 
 def _boss_escape_risk(
@@ -173,12 +376,14 @@ class HierarchicalCombatVectorizer:
     def __init__(self):
         self.base = BulletHellCombatVectorizer()
         self.history: deque[np.ndarray] = deque(maxlen=HISTORY_STEPS)
+        self.trajectory_tracker = ThreeFrameTrajectoryTracker()
         self.previous_snapshot: dict[str, float] | None = None
         self.last_tick: tuple[str, int] | None = None
         self.reset()
 
     def reset(self, state: Mapping[str, Any] | None = None) -> None:
         self.history.clear()
+        self.trajectory_tracker.reset()
         for _ in range(HISTORY_STEPS):
             self.history.append(np.zeros(HISTORY_FEATURES, dtype=np.float32))
         self.previous_snapshot = self._snapshot(state or {}) if state else None
@@ -299,5 +504,7 @@ class HierarchicalCombatVectorizer:
         output[:BULLET_HELL_OBSERVATION_SIZE] = self.base.build(state, previous_action)
         cursor = BULLET_HELL_OBSERVATION_SIZE
         output[cursor:cursor + HISTORY_SIZE] = np.concatenate(tuple(self.history))
-        output[cursor + HISTORY_SIZE:] = self._macro(state)
+        macro_start = cursor + HISTORY_SIZE
+        output[macro_start:macro_start + MACRO_FEATURES] = self._macro(state)
+        output[macro_start + MACRO_FEATURES:] = self.trajectory_tracker.features(state)
         return output

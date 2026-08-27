@@ -30,6 +30,11 @@ from v4.combat_policy import (
     HISTORY_SIZE,
     HISTORY_STEPS,
     MACRO_FEATURES,
+    TRAJECTORY_ENEMY_START,
+    TRAJECTORY_ENEMY_TRACKED,
+    TRAJECTORY_FEATURES,
+    TRAJECTORY_PROJECTILE_START,
+    TRAJECTORY_PROJECTILE_TRACKED,
     V4_OBSERVATION_SIZE,
     HierarchicalCombatVectorizer,
 )
@@ -98,8 +103,13 @@ class TemporalHierarchicalActorExtractor(BaseFeaturesExtractor):
             nn.Linear(MACRO_FEATURES, 32),
             nn.Tanh(),
         )
+        self.trajectory_encoder = nn.Sequential(
+            nn.LayerNorm(TRAJECTORY_FEATURES),
+            nn.Linear(TRAJECTORY_FEATURES, 32),
+            nn.Tanh(),
+        )
         self.temporal_residual = nn.Sequential(
-            nn.Linear(96 + 32, 128),
+            nn.Linear(96 + 32 + 32, 128),
             nn.Tanh(),
             nn.Linear(128, self.actor_size),
         )
@@ -111,11 +121,18 @@ class TemporalHierarchicalActorExtractor(BaseFeaturesExtractor):
         history_start = BULLET_HELL_OBSERVATION_SIZE
         history = observations[..., history_start:history_start + HISTORY_SIZE]
         history = history.reshape(-1, HISTORY_STEPS, HISTORY_FEATURES)
-        macro = observations[..., history_start + HISTORY_SIZE:]
         _, hidden = self.history_gru(history)
         temporal = hidden[-1]
+        macro_start = history_start + HISTORY_SIZE
+        macro = observations[..., macro_start:macro_start + MACRO_FEATURES]
+        trajectory = observations[
+            ..., macro_start + MACRO_FEATURES:macro_start + MACRO_FEATURES + TRAJECTORY_FEATURES
+        ]
         residual = self.temporal_residual(
-            torch.cat((temporal, self.macro_encoder(macro)), dim=-1)
+            torch.cat(
+                (temporal, self.macro_encoder(macro), self.trajectory_encoder(trajectory)),
+                dim=-1,
+            )
         )
         logits = self.legacy_actor(old) + residual
         return torch.cat((logits, observations), dim=-1)
@@ -136,12 +153,32 @@ class V4TensorboardCallback(CombatTensorboardCallback):
         if batch.shape[-1] != V4_OBSERVATION_SIZE:
             return True
         macro_start = BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE
-        macro = batch[:, macro_start:]
+        macro = batch[:, macro_start:macro_start + MACRO_FEATURES]
         for index, name in enumerate(OBJECTIVE_NAMES):
             self.logger.record_mean(f"v4/objective_{name}", float(np.mean(macro[:, index])))
         self.logger.record_mean("v4/macro_target_x", float(np.mean(macro[:, -3])))
         self.logger.record_mean("v4/macro_target_y", float(np.mean(macro[:, -2])))
         self.logger.record_mean("v4/macro_urgency", float(np.mean(macro[:, -1])))
+        trajectory = batch[
+            :,
+            macro_start + MACRO_FEATURES:macro_start + MACRO_FEATURES + TRAJECTORY_FEATURES,
+        ]
+        self.logger.record_mean(
+            "v4/trajectory_projectile_confidence",
+            float(np.mean(trajectory[:, TRAJECTORY_PROJECTILE_START + 7])),
+        )
+        self.logger.record_mean(
+            "v4/trajectory_enemy_confidence",
+            float(np.mean(trajectory[:, TRAJECTORY_ENEMY_START + 7])),
+        )
+        self.logger.record_mean(
+            "v4/trajectory_projectile_tracked",
+            float(np.mean(trajectory[:, TRAJECTORY_PROJECTILE_TRACKED])),
+        )
+        self.logger.record_mean(
+            "v4/trajectory_enemy_tracked",
+            float(np.mean(trajectory[:, TRAJECTORY_ENEMY_TRACKED])),
+        )
         history_start = BULLET_HELL_OBSERVATION_SIZE
         history = batch[:, history_start:history_start + HISTORY_SIZE]
         history = history.reshape(-1, HISTORY_STEPS, HISTORY_FEATURES)
