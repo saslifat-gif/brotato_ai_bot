@@ -215,6 +215,14 @@ class CombatTensorboardCallback(BaseCallback):
                 float(info.get("projectile_count_before_action", 0.0)),
             )
             self.logger.record_mean(
+                "combat/projectile_total_count_before_action",
+                float(info.get("projectile_total_count_before_action", 0.0)),
+            )
+            self.logger.record_mean(
+                "combat/projectile_hostile_count_before_action",
+                float(info.get("projectile_hostile_count_before_action", 0.0)),
+            )
+            self.logger.record_mean(
                 "combat/projectile_owner_known_count",
                 float(info.get("projectile_owner_known_count", 0.0)),
             )

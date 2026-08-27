@@ -77,7 +77,12 @@ def _projectile_diagnostics(
         player_speed = max(150.0, float(combat.get("move_speed", 300.0)))
     except (TypeError, ValueError):
         player_speed = 300.0
-    projectiles = _state_items(state.get("projectiles"))
+    all_projectiles = _state_items(state.get("projectiles"))
+    projectiles = [
+        projectile
+        for projectile in all_projectiles
+        if bool(projectile.get("hostile", True))
+    ]
     enemies = _state_items(state.get("enemies"))
     owner_ids = {
         str(enemy.get("runtime_id"))
@@ -112,6 +117,8 @@ def _projectile_diagnostics(
     return {
         "projectile_visible": bool(projectiles),
         "projectile_count": len(projectiles),
+        "projectile_total_count": len(all_projectiles),
+        "projectile_hostile_count": len(projectiles),
         "projectile_owner_known_count": sum(
             str(projectile.get("owner_runtime_id", "")) in owner_ids
             for projectile in projectiles
@@ -569,6 +576,8 @@ class BrotatoApiEnv(gym.Env):
             {
                 "projectile_visible_before_action": projectile_diagnostics["projectile_visible"],
                 "projectile_count_before_action": projectile_diagnostics["projectile_count"],
+                "projectile_total_count_before_action": projectile_diagnostics["projectile_total_count"],
+                "projectile_hostile_count_before_action": projectile_diagnostics["projectile_hostile_count"],
                 "projectile_owner_known_count": projectile_diagnostics["projectile_owner_known_count"],
                 "projectile_path_present_before_action": projectile_diagnostics["projectile_path_present"],
                 "projectile_path_count_before_action": projectile_diagnostics["projectile_path_count"],

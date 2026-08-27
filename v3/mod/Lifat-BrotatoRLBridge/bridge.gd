@@ -1461,6 +1461,7 @@ func _append_projectile(
 		"runtime_id": str(projectile.get_instance_id()),
 		"owner_id": _semantic_id(source, null) if source != null else "",
 		"owner_runtime_id": str(source.get_instance_id()) if typeof(source) == TYPE_OBJECT and is_instance_valid(source) else "",
+		"hostile": _is_hostile_projectile(projectile),
 		"position": _vector_json(_first_property(
 			projectile, ["global_position", "position"], Vector2.ZERO
 		)),

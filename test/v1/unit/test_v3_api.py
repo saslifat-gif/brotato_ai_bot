@@ -872,6 +872,7 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "func _build_raw_state() -> Dictionary:" in bridge
     assert "_collect_projectiles(main, projectiles, MAX_PROJECTILES, projectile_nodes)" in bridge
     assert '"projectiles": projectiles' in bridge
+    assert '"hostile": _is_hostile_projectile(projectile)' in bridge
     assert '"source": "projectile"' in bridge
     assert '"attack_warning"' in bridge
     assert '"semantic_entities_v2"' in bridge
@@ -1953,9 +1954,16 @@ def test_projectile_diagnostics_connects_visibility_risk_and_hazard():
     state["projectiles"] = [{
         "runtime_id": "projectile-1",
         "owner_runtime_id": "boss-1",
+        "hostile": True,
         "position": {"x": 650.0, "y": 300.0},
         "velocity": {"x": -600.0, "y": 0.0},
         "radius": 12.0,
+    }, {
+        "runtime_id": "player-shot-1",
+        "hostile": False,
+        "position": {"x": 350.0, "y": 300.0},
+        "velocity": {"x": 600.0, "y": 0.0},
+        "radius": 8.0,
     }]
     state["projectile_paths"] = {
         "count": 1,
@@ -1966,6 +1974,8 @@ def test_projectile_diagnostics_connects_visibility_risk_and_hazard():
 
     assert diagnostics["projectile_visible"] is True
     assert diagnostics["projectile_count"] == 1
+    assert diagnostics["projectile_total_count"] == 2
+    assert diagnostics["projectile_hostile_count"] == 1
     assert diagnostics["projectile_owner_known_count"] == 1
     assert diagnostics["projectile_path_present"] is True
     assert diagnostics["projectile_path_requested_risk"] == pytest.approx(0.9)
