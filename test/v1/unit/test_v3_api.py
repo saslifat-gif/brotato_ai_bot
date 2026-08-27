@@ -869,6 +869,9 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "func _state_interval_sec() -> float:" in bridge
     assert "func _append_projectile_attack_indicator(projectile, output: Array)" in bridge
     assert "_collect_attack_indicators(main, projectile_nodes)" in bridge
+    assert "func _build_raw_state() -> Dictionary:" in bridge
+    assert "_collect_projectiles(main, projectiles, MAX_PROJECTILES, projectile_nodes)" in bridge
+    assert '"projectiles": projectiles' in bridge
     assert '"source": "projectile"' in bridge
     assert '"attack_warning"' in bridge
     assert '"semantic_entities_v2"' in bridge

@@ -427,6 +427,8 @@ func _build_raw_state() -> Dictionary:
 	var main = root.get_node_or_null("Main")
 	var player = _find_player(root, main)
 	var enemies := []
+	var projectiles := []
+	var projectile_nodes := []
 	var spawner = main.get_node_or_null("EntitySpawner") if main != null else null
 	var spawned = _property(spawner, "enemies", [])
 	if typeof(spawned) == TYPE_ARRAY:
@@ -439,6 +441,10 @@ func _build_raw_state() -> Dictionary:
 				"velocity": _vector_json(_property(enemy, "linear_velocity", Vector2.ZERO)),
 				"boss": bool(_property(enemy, "is_boss", false))
 			})
+	if main != null:
+		# Keep the 60 Hz recorder useful for trajectory training without running
+		# the more expensive path-risk and telegraph scans on every raw tick.
+		_collect_projectiles(main, projectiles, MAX_PROJECTILES, projectile_nodes)
 	var player_state := _player_state(player)
 	var wave_number := int(_first_property(root.get_node_or_null("RunData"), ["current_wave", "wave"], 0))
 	return {
@@ -451,7 +457,8 @@ func _build_raw_state() -> Dictionary:
 		"phase": str(get_tree().current_scene.name) if get_tree().current_scene != null else "",
 		"wave": wave_number,
 		"player": player_state,
-		"enemies": enemies
+		"enemies": enemies,
+		"projectiles": projectiles
 	}
 
 
