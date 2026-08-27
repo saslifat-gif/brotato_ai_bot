@@ -1286,7 +1286,7 @@ def test_ranged_smg_teacher_stages_weapons_before_wave_eight():
 def test_ranged_launchers_use_an_isolated_checkpoint_lineage():
     for name in ("train.bat", "train_v4_temporal_rl.bat", "train_v4_temporal_scheduled.bat"):
         source = (ROOT / name).read_text(encoding="utf-8")
-        assert "ranged_smg_v1" in source
+        assert "ranged_smg_v2" in source
         assert "BROTATO_V3_OUTPUT_DIR" in source
     scheduled = (ROOT / "train_v4_temporal_scheduled.bat").read_text(encoding="utf-8")
     assert "--source-model" in scheduled

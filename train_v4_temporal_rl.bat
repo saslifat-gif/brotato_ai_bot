@@ -4,7 +4,7 @@ title Brotato AI v4 - Temporal Hierarchical PPO
 cd /d "%~dp0"
 call conda activate bota_ai 2>nul || echo [warn] conda activate skipped
 set "MODEL_ROOT=%~dp0models\version_3"
-set "MODEL_DIR=%MODEL_ROOT%\ranged_smg_v1"
+set "MODEL_DIR=%MODEL_ROOT%\ranged_smg_v2"
 set "BROTATO_V3_OUTPUT_DIR=%MODEL_DIR%"
 set "BROTATO_V3_UI_BUILD_PROFILE=ranged_smg"
 set "BROTATO_V3_UI_MODEL="
