@@ -1,10 +1,13 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "MODEL_ROOT=C:\ml\brotato\models\version_3"
+set "MODEL_DIR=%MODEL_ROOT%\ranged_smg_v1"
 set "BROTATO_V3_LATE_WAVE_FOCUS=1"
+set "BROTATO_V3_OUTPUT_DIR=%MODEL_DIR%"
 set "BROTATO_V3_UI_BUILD_PROFILE=ranged_smg"
 set "BROTATO_V3_UI_MODEL="
-set "BROTATO_V3_UI_DATASET=%~dp0models\version_3\ui_decisions_ranged_smg_v1.jsonl"
+set "BROTATO_V3_UI_DATASET=%MODEL_ROOT%\ui_decisions_ranged_smg_v2.jsonl"
 
 echo [train] Checking trainer port...
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 4242 -State Listen -ErrorAction SilentlyContinue) { exit 1 }"
@@ -23,7 +26,7 @@ echo [train] trainer_pid=%TRAINER_PID%
 
 :wait_for_trainer
 timeout /t 2 /nobreak >nul
-powershell -NoProfile -Command "$lines=Get-Content 'C:\ml\brotato\models\version_3\v4_temporal_train.log'; $start=-1; for($i=0; $i -lt $lines.Count; $i++){ if($lines[$i] -like '*launch_token=%TRAIN_TOKEN%*'){ $start=$i } }; if($start -ge 0){ $tail=$lines | Select-Object -Skip ($start+1); if($tail -match 'raw_anchor_records='){ exit 0 } }; exit 1"
+powershell -NoProfile -Command "$lines=Get-Content '%MODEL_DIR%\v4_temporal_train.log'; $start=-1; for($i=0; $i -lt $lines.Count; $i++){ if($lines[$i] -like '*launch_token=%TRAIN_TOKEN%*'){ $start=$i } }; if($start -ge 0){ $tail=$lines | Select-Object -Skip ($start+1); if($tail -match 'raw_anchor_records='){ exit 0 } }; exit 1"
 if not errorlevel 1 goto start_recorder
 tasklist /FI "PID eq %TRAINER_PID%" | find "%TRAINER_PID%" >nul
 if errorlevel 1 goto trainer_failed
@@ -52,6 +55,6 @@ echo [train] Combined run finished.
 exit /b 0
 
 :trainer_failed
-echo [train] Trainer exited before startup completed. See v4_temporal_train.log.
+echo [train] Trainer exited before startup completed. See %MODEL_DIR%\v4_temporal_train.log.
 pause
 exit /b 3

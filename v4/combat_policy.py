@@ -63,6 +63,15 @@ def _maximum(values: np.ndarray) -> float:
     return float(np.max(values)) if values.size else 0.0
 
 
+def _top_action_threat(values: np.ndarray, count: int = 3) -> float:
+    """Estimate global danger without letting one bad direction dominate."""
+
+    if not values.size:
+        return 0.0
+    top = np.sort(np.asarray(values, dtype=np.float32))[-max(1, min(count, values.size)):]
+    return float(np.mean(top))
+
+
 def _items(value: Any) -> list[Mapping[str, Any]]:
     if not isinstance(value, (list, tuple)):
         return []
@@ -238,7 +247,10 @@ class HierarchicalCombatVectorizer:
         boundary_risk = _risk_vector(paths, "boundary_action_risk")
         combined = np.clip(projectile_risk + enemy_risk + boundary_risk, 0.0, 1.0)
         combined, boss_mode, boss_urgency = _boss_escape_risk(state, combined)
-        threat = _maximum(combined)
+        # These are risks for candidate actions, not nine simultaneous hits.
+        # Using max() made one bad direction turn almost every state into an
+        # evade objective, which explains the current ~99% evade telemetry.
+        threat = _top_action_threat(combined)
         pickups = state.get("pickups", [])
         healing = [
             item for item in pickups
@@ -265,10 +277,13 @@ class HierarchicalCombatVectorizer:
             urgency = 0.35
         else:
             objective = OBJECTIVE_REPOSITION
-            # Do not turn the arena center into a permanent attractor.  The
-            # safety shield already protects the edges, while the movement
-            # reward handles genuine stalling.
-            output[-3:-1] = 0.0
+            # Pull back only when outside the safe band.  Inside it, leave
+            # the actor free to orbit instead of making the exact center an
+            # attractor.
+            safe_x = min(max(px, width * 0.25), width * 0.75)
+            safe_y = min(max(py, height * 0.25), height * 0.75)
+            output[-3] = np.clip((safe_x - px) / width, -1.0, 1.0)
+            output[-2] = np.clip((safe_y - py) / height, -1.0, 1.0)
             urgency = 0.2
         output[objective] = 1.0
         if target is not None:

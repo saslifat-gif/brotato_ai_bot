@@ -1242,6 +1242,58 @@ def test_ranged_smg_teacher_prioritizes_ranged_stats_and_recycles_conflicts():
     assert teacher.select(found, [take, recycle]).action["role"] == "recycle_item"
 
 
+def test_ranged_smg_teacher_stages_weapons_before_wave_eight():
+    teacher = RangedSmgTeacher()
+    shop = dict(_state(wave=4, materials=100), phase="shop")
+    shop["build"] = {
+        "weapons": [
+            {"id": "weapon_smg_1", "base_id": "weapon_smg"},
+            {"id": "weapon_smg_2", "base_id": "weapon_smg"},
+        ]
+    }
+    smg = {
+        "id": "/root/Shop/SMG/BuyButton",
+        "role": "buy",
+        "enabled": True,
+        "choice": {
+            "id": "weapon_smg_1",
+            "base_id": "weapon_smg",
+            "category": "weapon",
+            "weapon_type": 1,
+            "price": 30,
+            "affordable": True,
+            "tier": 0,
+            "effects": [],
+        },
+    }
+    armor = {
+        "id": "/root/Upgrade/Armor",
+        "role": "upgrade_choice",
+        "enabled": True,
+        "choice": {
+            "id": "upgrade_armor_1",
+            "base_id": "upgrade_armor",
+            "category": "upgrade",
+            "tier": 0,
+            "effects": [{"key": "stat_armor", "value": 1}],
+        },
+    }
+    selected = teacher.select(shop, [smg, armor])
+    assert selected is not None
+    assert selected.action["id"] == armor["id"]
+
+
+def test_ranged_launchers_use_an_isolated_checkpoint_lineage():
+    for name in ("train.bat", "train_v4_temporal_rl.bat", "train_v4_temporal_scheduled.bat"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        assert "ranged_smg_v1" in source
+        assert "BROTATO_V3_OUTPUT_DIR" in source
+    scheduled = (ROOT / "train_v4_temporal_scheduled.bat").read_text(encoding="utf-8")
+    assert "--source-model" in scheduled
+    assert "--dataset" in scheduled
+    assert "fresh-ranged-lineage" in scheduled
+
+
 def test_ui_build_base_is_small_and_has_stable_features():
     state = dict(_state(wave=7, materials=120), phase="shop")
     state["build"] = {
@@ -1770,7 +1822,39 @@ def test_v4_vector_preserves_v3_prefix_and_records_real_transition():
     assert latest[11] == pytest.approx(0.2)
     macro = second[history_start + HISTORY_SIZE:]
     assert macro[OBJECTIVE_EVADE] == pytest.approx(1.0)
-    assert macro[-1] == pytest.approx(0.9)
+    assert macro[-1] == pytest.approx((0.9 + 0.7 + 0.6) / 3.0)
+
+
+def test_v4_macro_does_not_treat_one_bad_lane_as_global_evade():
+    from v4.combat_policy import OBJECTIVE_ENGAGE, HISTORY_SIZE, HierarchicalCombatVectorizer
+
+    state = _state()
+    state["enemies"] = [{"position": {"x": 700.0, "y": 300.0}}]
+    state["projectile_paths"] = {
+        "action_risk": [0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "enemy_action_risk": [0.0] * 9,
+        "boundary_action_risk": [0.0] * 9,
+    }
+    observation = HierarchicalCombatVectorizer().build(state)
+    macro = observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    assert macro[OBJECTIVE_ENGAGE] == pytest.approx(1.0)
+
+
+def test_v4_reposition_returns_to_safe_band_without_center_attractor():
+    from v4.combat_policy import OBJECTIVE_REPOSITION, HISTORY_SIZE, HierarchicalCombatVectorizer
+
+    state = _state()
+    state["player"]["position"] = {"x": 800.0, "y": 300.0}
+    observation = HierarchicalCombatVectorizer().build(state)
+    macro = observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    assert macro[OBJECTIVE_REPOSITION] == pytest.approx(1.0)
+    assert macro[-3] < 0.0
+
+    centered = _state()
+    centered_observation = HierarchicalCombatVectorizer().build(centered)
+    centered_macro = centered_observation[BULLET_HELL_OBSERVATION_SIZE + HISTORY_SIZE:]
+    assert centered_macro[-3] == pytest.approx(0.0)
+    assert centered_macro[-2] == pytest.approx(0.0)
 
 
 def test_v4_macro_uses_boss_hitbox_and_owned_telegraph_for_escape():

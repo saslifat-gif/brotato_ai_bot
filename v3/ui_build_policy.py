@@ -51,7 +51,7 @@ CATEGORY_NAMES = ("item", "weapon", "upgrade")
 ID_BUCKETS = 1024
 ID_EMBEDDING_SIZE = 8
 STICK_MELEE_TEACHER_VERSION = 3
-RANGED_SMG_TEACHER_VERSION = 1
+RANGED_SMG_TEACHER_VERSION = 2
 CONTEXT_SIZE = 4 + len(STAT_KEYS) + 4
 CHOICE_SIZE = 5 + len(CATEGORY_NAMES) + 3 + len(ROLE_NAMES) + len(STAT_KEYS)
 
@@ -230,6 +230,28 @@ class RangedSmgTeacher:
         "stat_engineering": -6.0,
     }
 
+    # A ranged build still needs a stable early-game floor.  Filling all six
+    # weapon slots immediately leaves Well-Rounded with too little armor,
+    # health, speed, and sustain to survive the first dense waves.
+    early_wave_end = 8
+    early_survival_upgrade_bonus = {
+        "upgrade_armor": 44.0,
+        "upgrade_health": 44.0,
+        "upgrade_max_hp": 44.0,
+        "upgrade_lifesteal": 40.0,
+        "upgrade_hp_regeneration": 36.0,
+        "upgrade_dodge": 30.0,
+        "upgrade_speed": 30.0,
+    }
+    early_survival_effect_weights = {
+        "stat_armor": 22.0,
+        "stat_max_hp": 18.0,
+        "stat_lifesteal": 22.0,
+        "stat_hp_regeneration": 16.0,
+        "stat_speed": 18.0,
+        "stat_dodge": 14.0,
+    }
+
     @staticmethod
     def _choice_text(choice: Mapping[str, Any]) -> str:
         values = [
@@ -277,6 +299,31 @@ class RangedSmgTeacher:
         shredder = sum(1 for item in weapons if cls._is_shredder(_mapping(item)))
         return smg, shredder, len(weapons)
 
+    @staticmethod
+    def _early_weapon_cap(wave: int) -> int:
+        """Increase the weapon allowance gradually instead of front-loading it."""
+
+        if wave <= 2:
+            return 1
+        if wave <= 4:
+            return 2
+        if wave <= 6:
+            return 3
+        return 4
+
+    @classmethod
+    def _early_survival_bonus(cls, choice: Mapping[str, Any], wave: int) -> float:
+        if wave >= cls.early_wave_end:
+            return 0.0
+        base_id = str(choice.get("base_id", "")).lower()
+        phase = 1.0 if wave <= 4 else 0.55
+        bonus = cls.early_survival_upgrade_bonus.get(base_id, 0.0) * phase
+        totals = effect_totals(choice)
+        for key, value in totals.items():
+            if value > 0.0:
+                bonus += cls.early_survival_effect_weights.get(key, 0.0) * value * phase
+        return bonus
+
     @classmethod
     def _keyword_bonus(cls, choice: Mapping[str, Any], wave: int) -> float:
         text = cls._choice_text(choice)
@@ -311,10 +358,16 @@ class RangedSmgTeacher:
                 return -120.0
             if self._is_smg(choice):
                 score += 180.0 + (6 - smg_count) * 12.0
+                if wave < self.early_wave_end and smg_count >= self._early_weapon_cap(wave):
+                    # A third/fourth gun is useful later, but should not
+                    # displace a meaningful defensive choice before wave 8.
+                    score -= 185.0
             elif self._is_shredder(choice):
                 score += 105.0 + (2 - min(shredder_count, 2)) * 8.0
                 if wave < 8 and smg_count < 4:
                     score -= 28.0
+                if wave < self.early_wave_end and weapon_count >= self._early_weapon_cap(wave):
+                    score -= 145.0
             elif self._is_ranged_weapon(choice):
                 # Keep a run alive when the preferred weapons do not appear,
                 # but never let an unrelated gun displace the core plan.
@@ -325,13 +378,17 @@ class RangedSmgTeacher:
             "upgrade_ranged_damage_"
         ):
             score += 92.0
-        elif base_id in {"upgrade_attack_speed", "upgrade_speed"} or item_id.startswith(
-            "upgrade_attack_speed_"
-        ):
+        elif base_id == "upgrade_attack_speed" or item_id.startswith("upgrade_attack_speed_"):
             score += 68.0
         elif base_id in {"upgrade_percent_damage", "upgrade_damage"}:
             score += 48.0
-        elif base_id in {"upgrade_lifesteal", "upgrade_armor", "upgrade_health"}:
+        elif base_id in {
+            "upgrade_lifesteal",
+            "upgrade_armor",
+            "upgrade_health",
+            "upgrade_max_hp",
+            "upgrade_hp_regeneration",
+        }:
             score += 44.0
         elif base_id in {"upgrade_dodge", "upgrade_speed", "upgrade_range"}:
             score += 30.0
@@ -343,6 +400,7 @@ class RangedSmgTeacher:
             if key in {"stat_armor", "stat_max_hp", "stat_lifesteal", "stat_speed"} and wave >= 12:
                 weight *= 1.35
             score += weight * value
+        score += self._early_survival_bonus(choice, wave)
         return score
 
     def select(
@@ -366,7 +424,7 @@ class RangedSmgTeacher:
                 if choice.get("affordable") is False or price > materials:
                     continue
                 score = base_score - (price / max(20.0, materials)) * 8.0
-                minimum_buy_score = 0.0 if rich_shop else 4.0
+                minimum_buy_score = 0.0 if rich_shop else (8.0 if wave < self.early_wave_end else 4.0)
                 if score < minimum_buy_score:
                     continue
             elif role == "take_item":
