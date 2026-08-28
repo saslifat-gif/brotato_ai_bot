@@ -40,11 +40,17 @@ def test_config_is_validated_and_has_stable_startup_summary(tmp_path):
     )
     assert cfg.control_hz == 24
     assert "control_hz=24" in cfg.startup_summary()
+    high_rate = load_config(
+        {
+            "BROTATO_V3_OUTPUT_DIR": str(tmp_path),
+            "BROTATO_V4_CONTROL_HZ": "30",
+        }
+    )
+    assert high_rate.control_hz == 30
     with pytest.raises(ValueError, match="control_hz"):
         load_config(
             {
                 "BROTATO_V3_OUTPUT_DIR": str(tmp_path),
-                "BROTATO_V4_CONTROL_HZ": "30",
+                "BROTATO_V4_CONTROL_HZ": "61",
             }
         )
-

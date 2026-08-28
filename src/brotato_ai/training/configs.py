@@ -37,19 +37,22 @@ class RuntimeConfig:
     control_hz: float = 24.0
     recorder_hz: float = 60.0
     cache_max_gib: float = 10.0
-    ranged_spacing: bool = True
+    runtime_profile_path: Path | None = None
+    runtime_profile_sample_limit: int = 20_000
 
     def validate(self) -> "RuntimeConfig":
         if not self.host.strip():
             raise ValueError("bridge host cannot be empty")
         if not 1 <= int(self.port) <= 65535:
             raise ValueError(f"bridge port out of range: {self.port}")
-        if not 4.0 <= float(self.control_hz) <= 24.0:
-            raise ValueError(f"control_hz must be between 4 and 24: {self.control_hz}")
+        if not 4.0 <= float(self.control_hz) <= 60.0:
+            raise ValueError(f"control_hz must be between 4 and 60: {self.control_hz}")
         if not 1.0 <= float(self.recorder_hz) <= 120.0:
             raise ValueError(f"recorder_hz must be between 1 and 120: {self.recorder_hz}")
         if not 0.1 <= float(self.cache_max_gib) <= 10.0:
             raise ValueError(f"cache_max_gib must be between 0.1 and 10: {self.cache_max_gib}")
+        if int(self.runtime_profile_sample_limit) < 100:
+            raise ValueError("runtime_profile_sample_limit must be at least 100")
         if self.state_timeout_sec < 1.0 or self.reset_timeout_sec < 10.0:
             raise ValueError("bridge timeouts are below safe minimums")
         return self
@@ -63,7 +66,7 @@ class RuntimeConfig:
             f"late_wave={self.late_wave_focus} menus={self.automate_menus} "
             f"profile={self.ui_build_profile} ui_model={model} "
             f"output={self.output_dir} cache_max_gib={self.cache_max_gib:g} "
-            f"ranged_spacing={self.ranged_spacing}"
+            f"runtime_profile={self.runtime_profile_path or 'off'}"
         )
 
 
@@ -100,6 +103,12 @@ def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
         if combat_log_value.lower() in {"", "0", "off", "none"}
         else Path(combat_log_value).resolve()
     )
+    runtime_profile_value = env.get("BROTATO_RUNTIME_PROFILE_PATH", "").strip()
+    runtime_profile_path = (
+        None
+        if runtime_profile_value.lower() in {"", "0", "off", "none"}
+        else Path(runtime_profile_value).resolve()
+    )
     return RuntimeConfig(
         host=env.get("BROTATO_V3_HOST", DEFAULT_HOST),
         port=int(env.get("BROTATO_V3_PORT", str(DEFAULT_PORT))),
@@ -119,8 +128,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
         control_hz=float(env.get("BROTATO_V4_CONTROL_HZ", "24")),
         recorder_hz=float(env.get("BROTATO_V4_RECORDER_HZ", "60")),
         cache_max_gib=float(env.get("BROTATO_V4_CACHE_MAX_GIB", "10")),
-        ranged_spacing=_enabled(
-            env.get("BROTATO_V4_RANGED_SPACING", "1"),
-            default=True,
+        runtime_profile_path=runtime_profile_path,
+        runtime_profile_sample_limit=max(
+            100, int(env.get("BROTATO_RUNTIME_PROFILE_SAMPLES", "20000"))
         ),
     ).validate()

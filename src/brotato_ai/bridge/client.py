@@ -14,6 +14,7 @@ from brotato_ai.bridge.protocol import (
     decode_message,
     encode_message,
 )
+from brotato_ai.performance import RuntimeProfiler
 
 
 class BridgeDisconnected(RuntimeError):
@@ -28,22 +29,31 @@ class BridgeClient:
     ``FinalActionWriter``.
     """
 
-    def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
+    def __init__(
+        self,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        *,
+        profiler: RuntimeProfiler | None = None,
+    ):
         self.host = str(host)
         self.port = int(port)
         self._listener: socket.socket | None = None
         self._client: socket.socket | None = None
         self._buffer = bytearray()
+        self._buffer_received_ns: int | None = None
+        self._buffer_last_received_ns: int | None = None
+        self._buffer_recv_start_ns: int | None = None
         self._connection_generation = 0
         self._last_action: dict[str, Any] | None = None
         self.last_hello: dict[str, Any] | None = None
-        # Process-local transport counters; these are intentionally not reset
-        # between episodes so TensorBoard exposes bridge health for the run.
-        self.received_state_count = 0
-        self.stale_state_count = 0
-        self.dropped_state_count = 0
-        self.last_tick_gap = 0
-        self._last_received_tick = -1
+        self.profiler = profiler or RuntimeProfiler.disabled()
+        self._last_source_boundary_index: int | None = None
+
+    def set_profiler(self, profiler: RuntimeProfiler | None) -> None:
+        """Attach the optional runtime profiler without changing transport behavior."""
+
+        self.profiler = profiler or RuntimeProfiler.disabled()
 
     @property
     def connected(self) -> bool:
@@ -67,6 +77,9 @@ class BridgeClient:
                 pass
         self._client = None
         self._buffer.clear()
+        self._buffer_received_ns = None
+        self._buffer_last_received_ns = None
+        self._buffer_recv_start_ns = None
         self.last_hello = None
 
     def _accept(self, deadline: float) -> None:
@@ -124,16 +137,55 @@ class BridgeClient:
         self._last_action = dict(message)
         self._send_unchecked(message, timeout_sec)
 
+    def _pop_buffered_message(self) -> dict[str, Any] | None:
+        """Decode one complete buffered line without reading the socket."""
+
+        receive_call_start_ns = time.perf_counter_ns()
+        separator = self._buffer.find(b"\n")
+        if separator < 0:
+            return None
+        line = bytes(self._buffer[:separator])
+        del self._buffer[: separator + 1]
+        response_arrival_ns = (
+            self._buffer_last_received_ns
+            or self._buffer_received_ns
+            or time.perf_counter_ns()
+        )
+        buffer_recv_start_ns = self._buffer_recv_start_ns
+        if not self._buffer:
+            self._buffer_received_ns = None
+            self._buffer_last_received_ns = None
+            self._buffer_recv_start_ns = None
+        if not line.strip():
+            return self._pop_buffered_message()
+        parse_start_ns = time.perf_counter_ns()
+        try:
+            message = decode_message(line)
+        finally:
+            parse_end_ns = time.perf_counter_ns()
+        self.profiler.observe("bridge_decode", parse_end_ns - parse_start_ns)
+        boundary_index = self.profiler.source_boundary(
+            receive_call_start_ns=receive_call_start_ns,
+            recv_start_ns=buffer_recv_start_ns,
+            response_arrival_ns=response_arrival_ns,
+            payload_complete_ns=response_arrival_ns,
+            parse_start_ns=parse_start_ns,
+            parse_end_ns=parse_end_ns,
+            payload_size_bytes=len(line),
+            message=message,
+        )
+        if boundary_index is not None:
+            self._last_source_boundary_index = boundary_index
+        self.profiler.count("bridge_messages")
+        self.profiler.count(f"bridge_messages_{message.get('type', 'unknown')}")
+        return message
+
     def receive(self, timeout_sec: float = 30.0) -> dict[str, Any]:
         deadline = time.monotonic() + max(0.1, float(timeout_sec))
         while True:
-            separator = self._buffer.find(b"\n")
-            if separator >= 0:
-                line = bytes(self._buffer[:separator])
-                del self._buffer[: separator + 1]
-                if not line.strip():
-                    continue
-                return decode_message(line)
+            message = self._pop_buffered_message()
+            if message is not None:
+                return message
             if self._client is None:
                 self._accept(deadline)
             remaining = deadline - time.monotonic()
@@ -141,6 +193,7 @@ class BridgeClient:
                 raise TimeoutError("timed out waiting for a bridge message")
             assert self._client is not None
             self._client.settimeout(min(1.0, remaining))
+            recv_start_ns = time.perf_counter_ns()
             try:
                 chunk = self._client.recv(65536)
             except socket.timeout:
@@ -151,10 +204,43 @@ class BridgeClient:
             if not chunk:
                 self._drop_client()
                 raise BridgeDisconnected("game closed the bridge connection")
+            response_arrival_ns = time.perf_counter_ns()
+            if not self._buffer:
+                self._buffer_received_ns = response_arrival_ns
+                self._buffer_recv_start_ns = recv_start_ns
+            self._buffer_last_received_ns = response_arrival_ns
             self._buffer.extend(chunk)
             if len(self._buffer) > 4 * 1024 * 1024:
                 self._drop_client()
                 raise BridgeProtocolError("bridge message exceeded 4 MiB")
+
+    def mark_state_processing_start(self) -> None:
+        self.profiler.update_source_boundary(
+            self._last_source_boundary_index,
+            "processing_start_ns",
+            time.perf_counter_ns(),
+        )
+
+    def mark_state_processing_end(self) -> None:
+        self.profiler.update_source_boundary(
+            self._last_source_boundary_index,
+            "processing_end_ns",
+            time.perf_counter_ns(),
+        )
+
+    def mark_action_decision(self) -> None:
+        self.profiler.update_source_boundary(
+            self._last_source_boundary_index,
+            "action_decision_ns",
+            time.perf_counter_ns(),
+        )
+
+    def mark_action_sent(self) -> None:
+        self.profiler.update_source_boundary(
+            self._last_source_boundary_index,
+            "action_sent_ns",
+            time.perf_counter_ns(),
+        )
 
     def wait_for_state(
         self,
@@ -177,7 +263,6 @@ class BridgeClient:
             if self._connection_generation != connection_generation:
                 connection_generation = self._connection_generation
                 minimum_tick = None
-                self._last_received_tick = -1
             if message["type"] == "hello":
                 self.last_hello = message
                 print(
@@ -189,24 +274,42 @@ class BridgeClient:
                 continue
             tick = int(message.get("tick", -1))
             if minimum_tick is not None and tick <= int(minimum_tick):
-                self.stale_state_count += 1
-                self.dropped_state_count += 1
                 continue
             if minimum_sequence is not None and int(message.get("sequence", -1)) < int(
                 minimum_sequence
             ):
-                self.stale_state_count += 1
-                self.dropped_state_count += 1
                 continue
-            if self.received_state_count:
-                self.last_tick_gap = max(0, tick - int(self._last_received_tick))
-                if self.last_tick_gap > 1:
-                    self.dropped_state_count += self.last_tick_gap - 1
-            self._last_received_tick = tick
-            self.received_state_count += 1
             if combat_only and message.get("phase") != "combat":
                 continue
-            return message
+            # The mod is a push stream.  If several complete states arrived
+            # while Python was busy, consume the buffered burst and return the
+            # newest eligible state.  This prevents socket-buffer backlog from
+            # becoming artificial controller latency while preserving the
+            # existing after_tick/minimum_sequence guards.
+            newest = message
+            newest_boundary_index = self._last_source_boundary_index
+            while True:
+                buffered = self._pop_buffered_message()
+                if buffered is None:
+                    break
+                if buffered.get("type") == "hello":
+                    self.last_hello = buffered
+                    continue
+                if buffered.get("type") != "state":
+                    continue
+                buffered_tick = int(buffered.get("tick", -1))
+                if minimum_tick is not None and buffered_tick <= int(minimum_tick):
+                    continue
+                if minimum_sequence is not None and int(buffered.get("sequence", -1)) < int(
+                    minimum_sequence
+                ):
+                    continue
+                if combat_only and buffered.get("phase") != "combat":
+                    continue
+                newest = buffered
+                newest_boundary_index = self._last_source_boundary_index
+            self._last_source_boundary_index = newest_boundary_index
+            return newest
 
     def close(self) -> None:
         self._drop_client()
@@ -224,4 +327,3 @@ class BridgeClient:
 
     def __exit__(self, _exc_type, _exc, _traceback):
         self.close()
-

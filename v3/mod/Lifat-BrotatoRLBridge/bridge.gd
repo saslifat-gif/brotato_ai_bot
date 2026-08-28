@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.18"
+const MOD_VERSION := "0.3.20"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RAW_RECORD_PORT := 4243
@@ -9,6 +9,10 @@ const RAW_RECORD_HZ := 60.0
 const RECONNECT_MS := 1000
 const ACTION_STALE_MS := 1500
 const DEFAULT_STATE_HZ := 24.0
+# 24 Hz remains the production default.  The upper bound is deliberately
+# wider so the same bridge can run the controlled 24/30/40/60 Hz sensitivity
+# experiment without changing any policy code.
+const MAX_STATE_HZ := 60.0
 # The rich policy consumes at most 20 enemies, 20 projectiles and 8 pickups.
 # Keep generous headroom without reflecting and serializing hundreds of nodes
 # on Godot's main thread every frame in dense late waves.
@@ -28,17 +32,17 @@ const BULLET_GRID_CHANNELS := 10
 const BULLET_GRID_WIDTH := 1600.0
 const BULLET_GRID_HEIGHT := 900.0
 const BULLET_PATH_HORIZONS := [0.0, 0.25, 0.5, 0.75, 1.0]
-# Path risk is deliberately refreshed less often than the control state.  The
-# full state still publishes every requested tick, while this bounded forecast
-# is allowed to be up to ~167 ms old at 24 Hz.
-const PROJECTILE_PATH_REFRESH_TICKS := 4
+# Path risk is deliberately refreshed less often than the control state.  Use
+# wall time rather than control ticks so the rate experiment changes only the
+# decision schedule, not the freshness of the policy input.
+const PROJECTILE_PATH_REFRESH_MS := 167
 # Keep a short per-projectile history so the forecast can react to homing,
 # curved and accelerating attacks instead of assuming the latest velocity is
 # valid for the whole one-second horizon.
 const PROJECTILE_HISTORY_SAMPLES := 6
 const PROJECTILE_HISTORY_MAX_AGE_MS := 1000
 const PROJECTILE_MAX_ACCELERATION := 6000.0
-const ARENA_GRID_REFRESH_TICKS := 2
+const ARENA_GRID_REFRESH_MS := 83
 const BULLET_ACTION_VECTORS := [
 	Vector2.ZERO,
 	Vector2(0, -1),
@@ -94,16 +98,20 @@ var _projectile_static_cache := {}
 var _pickup_static_cache := {}
 var _latest_human_action := 0
 var _last_human_input_ms := 0
+var _latest_human_input := {}
 var _last_attack_indicators := []
 var _indicator_scan_nodes := 0
 var _indicator_scan_seen := {}
 var _projectile_scan_nodes := 0
 var _logged_semantic_probes := {}
 var _last_indicator_scan_tick := -999999
+var _last_indicator_scan_ms := -999999
 var _last_projectile_path_tick := -999999
+var _last_projectile_path_refresh_ms := -999999
 var _last_projectile_paths := {}
 var _projectile_motion_history := {}
 var _last_arena_grid_tick := -999999
+var _last_arena_grid_refresh_ms := -999999
 var _last_arena_enemy_grid := []
 var _last_state_profile_tick := -999999
 var _requested_state_hz := 24.0
@@ -148,7 +156,7 @@ func _state_interval_sec() -> float:
 	# Respect the trainer's requested control rate at every wave. The previous
 	# adaptive cap silently reduced late-wave control to 12 Hz exactly when boss
 	# projectiles require the fastest reaction loop.
-	return 1.0 / max(4.0, _requested_state_hz)
+	return 1.0 / clamp(_requested_state_hz, 4.0, MAX_STATE_HZ)
 
 
 func _poll_connection() -> void:
@@ -254,7 +262,7 @@ func _handle_message(line: String) -> void:
 		_last_sequence = int(message.get("sequence", -1))
 		_activate_ui_action(str(message.get("target", "")), _last_sequence)
 	elif message_type == "configure":
-		_requested_state_hz = clamp(float(message.get("state_hz", 24.0)), 4.0, 24.0)
+		_requested_state_hz = clamp(float(message.get("state_hz", DEFAULT_STATE_HZ)), 4.0, MAX_STATE_HZ)
 		_send({
 			"type": "event",
 			"event": "configured",
@@ -312,6 +320,7 @@ func observe_movement_behavior(behavior, human_movement = Vector2.ZERO) -> void:
 		return
 	_latest_human_action = _movement_to_action(human_movement)
 	_last_human_input_ms = OS.get_ticks_msec()
+	_latest_human_input = _capture_human_input(human_movement)
 	var candidate = _property(behavior, "player", null)
 	if candidate == null:
 		candidate = behavior.get_parent()
@@ -394,9 +403,12 @@ func _send_ui_result(sequence: int, target: String, ok: bool, error: String) -> 
 
 
 func _publish_state() -> void:
-	var started_ms := OS.get_ticks_msec()
+	var eligible_ms := OS.get_ticks_msec()
+	var started_ms := eligible_ms
 	_tick += 1
 	var state := _build_state()
+	state["bridge_eligible_at_ms"] = eligible_ms
+	state["bridge_dispatch_at_ms"] = OS.get_ticks_msec()
 	_send(state)
 	var elapsed_ms := OS.get_ticks_msec() - started_ms
 	if elapsed_ms >= 30 and _tick - _last_state_profile_tick >= 24:
@@ -454,6 +466,9 @@ func _build_raw_state() -> Dictionary:
 		"published_at_ms": OS.get_ticks_msec(),
 		"action": _latest_action,
 		"action_sequence": _last_sequence,
+		"human_action": _latest_human_action,
+		"human_input": _latest_human_input.duplicate(true),
+		"human_input_age_ms": max(0, OS.get_ticks_msec() - _last_human_input_ms),
 		"phase": str(get_tree().current_scene.name) if get_tree().current_scene != null else "",
 		"wave": wave_number,
 		"player": player_state,
@@ -558,18 +573,23 @@ func _build_state() -> Dictionary:
 		# Warning-node discovery is more expensive than the normal entity export.
 		# Four scans/second at early-wave rate is responsive without worsening the
 		# late-wave frame drops that motivated the adaptive state interval.
-		if _tick - _last_indicator_scan_tick >= 6:
+		var now_ms := OS.get_ticks_msec()
+		if now_ms - _last_indicator_scan_ms >= 250:
 			_last_indicator_scan_tick = _tick
+			_last_indicator_scan_ms = now_ms
 			_last_attack_indicators = _collect_attack_indicators(main, projectile_nodes)
 		attack_indicators = _last_attack_indicators.duplicate(true)
 	else:
 		_last_attack_indicators = []
 		_last_indicator_scan_tick = -999999
+		_last_indicator_scan_ms = -999999
 		_last_projectile_paths = {}
 		_last_projectile_path_tick = -999999
+		_last_projectile_path_refresh_ms = -999999
 		_projectile_motion_history.clear()
 		_last_arena_enemy_grid = []
 		_last_arena_grid_tick = -999999
+		_last_arena_grid_refresh_ms = -999999
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
@@ -626,10 +646,44 @@ func _build_state() -> Dictionary:
 		"combat": combat_state,
 		"human_action": _latest_human_action,
 		"human_input_age_ms": max(0, OS.get_ticks_msec() - _last_human_input_ms),
+		"human_input": _latest_human_input.duplicate(true),
 		"build": build_state,
 		"ui": {"actions": ui_actions},
 		"dead": dead,
 		"victory": run_won
+}
+
+
+func _capture_human_input(human_movement: Vector2) -> Dictionary:
+	# Keep the analog signal before quantization.  The movement hook supplies
+	# the game's processed vector; joystick axes provide the raw source when a
+	# controller is connected.  Keyboard sessions remain explicitly marked as
+	# processed-only instead of pretending that WASD has analog precision.
+	var device_id := -1
+	var raw := human_movement
+	var raw_available := false
+	var joypads = Input.get_connected_joypads()
+	if typeof(joypads) == TYPE_ARRAY and not joypads.empty():
+		device_id = int(joypads[0])
+		raw = Vector2(Input.get_joy_axis(device_id, 0), Input.get_joy_axis(device_id, 1))
+		raw_available = true
+	var buttons := {}
+	if device_id >= 0:
+		for button_id in range(16):
+			buttons["joy_%d" % button_id] = bool(Input.is_joy_button_pressed(device_id, button_id))
+	return {
+		"capture_timestamp_ms": OS.get_ticks_msec(),
+		"device_id": device_id,
+		"source": "joystick" if raw_available else "keyboard_or_gamepad_processed",
+		"raw_available": raw_available,
+		"raw_stick": {"x": clamp(raw.x, -1.0, 1.0), "y": clamp(raw.y, -1.0, 1.0)},
+		"processed_stick": {"x": clamp(human_movement.x, -1.0, 1.0), "y": clamp(human_movement.y, -1.0, 1.0)},
+		"magnitude": human_movement.length(),
+		"buttons": buttons,
+		"triggers": {
+			"left": Input.get_joy_axis(device_id, 2) if device_id >= 0 else 0.0,
+			"right": Input.get_joy_axis(device_id, 5) if device_id >= 0 else 0.0
+		}
 	}
 
 
@@ -705,13 +759,15 @@ func _full_arena_enemy_grid(spawned_enemies, arena_size: Vector2, player_state: 
 
 
 func _cached_arena_enemy_grid(spawned_enemies, arena_size: Vector2, player_state: Dictionary) -> Array:
-	if _tick - _last_arena_grid_tick >= ARENA_GRID_REFRESH_TICKS:
+	var now_ms := OS.get_ticks_msec()
+	if _last_arena_grid_refresh_ms < 0 or now_ms - _last_arena_grid_refresh_ms >= ARENA_GRID_REFRESH_MS:
 		_last_arena_enemy_grid = _full_arena_enemy_grid(
 			spawned_enemies,
 			arena_size,
 			player_state
 		)
 		_last_arena_grid_tick = _tick
+		_last_arena_grid_refresh_ms = now_ms
 	return _last_arena_enemy_grid
 
 
@@ -1490,7 +1546,8 @@ func _cached_projectile_path_state(
 	combat_state: Dictionary,
 	arena_size: Vector2
 ) -> Dictionary:
-	if _tick - _last_projectile_path_tick >= PROJECTILE_PATH_REFRESH_TICKS:
+	var now_ms := OS.get_ticks_msec()
+	if _last_projectile_path_refresh_ms < 0 or now_ms - _last_projectile_path_refresh_ms >= PROJECTILE_PATH_REFRESH_MS:
 		_last_projectile_paths = _projectile_path_state(
 			projectile_nodes,
 			spawned_enemies,
@@ -1499,6 +1556,7 @@ func _cached_projectile_path_state(
 			arena_size
 		)
 		_last_projectile_path_tick = _tick
+		_last_projectile_path_refresh_ms = now_ms
 	return _last_projectile_paths
 
 

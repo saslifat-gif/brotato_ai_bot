@@ -228,8 +228,8 @@ def main() -> int:
     )
     parser.add_argument("--safety", action="store_true")
     args = parser.parse_args()
-    if not 4.0 <= args.state_hz <= 24.0:
-        parser.error("--state-hz must be between 4 and 24")
+    if not 4.0 <= args.state_hz <= 60.0:
+        parser.error("--state-hz must be between 4 and 60")
 
     cfg = replace(cfg, safety_shield=bool(args.safety))
     cfg.output_dir.mkdir(parents=True, exist_ok=True)

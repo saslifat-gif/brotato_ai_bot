@@ -75,6 +75,149 @@ def test_conflicting_projectile_path_uses_one_hazard_override():
     assert trace.decision.applied_action != 4
 
 
+def test_typed_snapshot_and_mapping_have_identical_risk_outputs():
+    from brotato_ai.domain.state import StateSnapshot
+
+    state = _state(
+        enemies=[
+            {
+                "runtime_id": "enemy-1",
+                "position": {"x": 610, "y": 300},
+                "velocity": {"x": -40, "y": 0},
+                "radius": 35,
+                "attack_method": "charge",
+            }
+        ],
+        projectiles=[
+            {
+                "runtime_id": "projectile-1",
+                "position": {"x": 900, "y": 300},
+                "velocity": {"x": -500, "y": 0},
+                "radius": 12,
+            }
+        ],
+    )
+    scorer = CombatSafetyShield()
+    mapping = scorer.all_risks(state)
+    typed = scorer.all_risks(StateSnapshot.from_payload(state))
+    reference = {
+        action: scorer.risk_breakdown(state, action) for action in mapping
+    }
+    for action in mapping:
+        assert typed[action].to_dict() == pytest.approx(mapping[action].to_dict())
+        assert mapping[action].to_dict() == pytest.approx(reference[action].to_dict())
+
+
+def test_vectorized_all_risks_matches_per_action_breakdown():
+    enemies = [
+        {
+            "runtime_id": f"e{index}",
+            "position": {"x": 500 + index * 12.0, "y": 280.0},
+            "velocity": {"x": -40.0, "y": 15.0},
+            "radius": 30 + index,
+            "attack_method": "charge" if index % 3 == 0 else "projectile",
+            "is_charging": index % 4 == 0,
+            "is_boss": index == 0,
+        }
+        for index in range(30)
+    ]
+    projectiles = [
+        {
+            "runtime_id": f"p{index}",
+            "position": {"x": 700 - index * 8.0, "y": 310.0},
+            "velocity": {"x": -280.0, "y": 40.0 - index},
+            "radius": 10,
+            "hostile": True,
+            "owner_runtime_id": "e0" if index < 4 else "e2",
+        }
+        for index in range(40)
+    ]
+    state = _state(
+        wave={"number": 12},
+        enemies=enemies,
+        projectiles=projectiles,
+        attack_indicators=[
+            {
+                "id": "aoe-1",
+                "type": "warning",
+                "position": {"x": 520, "y": 300},
+                "width": 120,
+                "height": 80,
+                "time_to_activate": 0.4,
+                "active": False,
+                "owner_runtime_id": "e0",
+            }
+        ],
+        projectile_paths={
+            "action_risk": [0.1 * index for index in range(9)],
+            "enemy_action_risk": [0.05 * index for index in range(9)],
+            "boundary_action_risk": [0.02] * 9,
+        },
+    )
+    scorer = CombatSafetyShield()
+    mapping = scorer.all_risks(state)
+    for action in mapping:
+        assert mapping[action].to_dict() == pytest.approx(
+            scorer.risk_breakdown(state, action).to_dict(), rel=1e-9, abs=1e-9
+        )
+
+
+def test_packed_enemies_are_not_scored_as_zero_risk():
+    import math
+
+    enemies = []
+    for index in range(20):
+        angle = index * 2.0 * math.pi / 20.0
+        enemies.append(
+            {
+                "position": {
+                    "x": 500.0 + 200.0 * math.cos(angle),
+                    "y": 300.0 + 200.0 * math.sin(angle),
+                },
+                "velocity": {"x": 0.0, "y": 0.0},
+                "radius": 30,
+            }
+        )
+    scorer = CombatSafetyShield()
+    idle = scorer.risk_breakdown(_state(wave={"number": 6}, enemies=enemies), 0)
+    assert idle.enemy > 0.5
+    assert scorer.all_risks(_state(wave={"number": 6}, enemies=enemies))[0].enemy == pytest.approx(
+        idle.enemy
+    )
+
+
+def test_clearly_safer_lane_overrides_previous_action():
+    from brotato_ai.domain.decisions import HazardRisk
+
+    scorer = CombatSafetyShield()
+    risks = {index: HazardRisk(enemy=0.50) for index in range(9)}
+    risks[4] = HazardRisk(enemy=0.40)
+    risks[1] = HazardRisk(enemy=0.10)
+    decision = scorer.choose(risks, 4, previous_action=4)
+    assert decision.applied_action == 1
+    assert decision.overridden
+
+
+def test_early_wave_pack_uses_policy_lane_not_escape():
+    state = _state(
+        wave={"number": 6},
+        enemies=[{"position": {"x": 700, "y": 300}} for _ in range(18)],
+    )
+    trace = _pipeline().apply(state, 0, previous_action=0)
+    assert trace.source != "crowd_recovery"
+    assert trace.decision.applied_action != 0
+
+
+def test_late_wave_pack_can_still_enter_escape():
+    state = _state(
+        wave={"number": 10},
+        enemies=[{"position": {"x": 600, "y": 300}} for _ in range(18)],
+    )
+    trace = _pipeline().apply(state, 0, previous_action=0)
+    assert trace.source == "crowd_recovery"
+    assert trace.recovery_active
+
+
 def test_emergency_recovery_is_explicit_and_reuses_scorer():
     state = _state(
         wave={"number": 19},

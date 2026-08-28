@@ -113,22 +113,44 @@ class TacticalMovementController:
         paths = _mapping(payload.get("projectile_paths"))
         boundary = paths.get("boundary_action_risk", [])
         boundary_max = max((_number(v) for v in boundary), default=0.0) if isinstance(boundary, (list, tuple)) else 0.0
-        return boundary_max >= 0.80 or (
-            wave >= self.wave_threshold
-            and (enemy_count >= self.enemy_threshold or boundary_max >= self.boundary_threshold)
+        packed_late = wave >= 8 and enemy_count >= self.enemy_threshold
+        return (
+            boundary_max >= 0.80
+            or packed_late
+            or (
+                wave >= self.wave_threshold
+                and boundary_max >= self.boundary_threshold
+            )
         )
 
-    def _should_enter(self, payload: Mapping[str, Any], requested_risk: HazardRisk, requested_action: int) -> bool:
-        if requested_risk.total >= self.escape_enter_risk or requested_risk.enemy_total >= self.escape_enter_risk:
-            return True
+    def _should_enter(
+        self,
+        payload: Mapping[str, Any],
+        requested_risk: HazardRisk,
+        requested_action: int,
+        risks: Mapping[int, HazardRisk] | None = None,
+    ) -> bool:
         if self._legacy_trigger(payload):
             return True
         geometry = enemy_separation_diagnostics(payload, requested_action)
-        return bool(
+        closing = bool(
             geometry["active"]
             and float(geometry["predicted_distance"]) <= float(geometry["target_distance"]) * 1.08
             and float(geometry["closing_rate"]) > -0.08
         )
+        if closing:
+            return True
+        high_requested = (
+            requested_risk.total >= self.escape_enter_risk
+            or requested_risk.enemy_total >= self.escape_enter_risk
+        )
+        if not high_requested:
+            return False
+        if risks is None:
+            return True
+        best_risk = min(float(risk.total) for risk in risks.values())
+        # A safer policy lane exists; let choose() take it instead of ESCAPE.
+        return best_risk >= self.escape_enter_risk
 
     def _score_action(
         self,
@@ -223,7 +245,9 @@ class TacticalMovementController:
         requested_risk = risks[requested]
         if not self.enabled:
             return SafetyDecision(requested, requested, requested_risk.total, requested_risk.total)
-        if self.state == self.NORMAL and self._should_enter(payload, requested_risk, requested):
+        if self.state == self.NORMAL and self._should_enter(
+            payload, requested_risk, requested, risks
+        ):
             self.state = self.ESCAPE
             self.remaining = self.hold_steps
             self._age = 0
@@ -244,6 +268,12 @@ class TacticalMovementController:
                     self.escape_side = preferred_side
                     self._side_age = 0
         escape_action = self._escape_action(payload, risks, previous_action)
+        safest = min(
+            risks,
+            key=lambda action: (risks[action].total, action == 0, action),
+        )
+        if risks[safest].total + 0.12 < risks[escape_action].total:
+            escape_action = int(safest)
         self._last_escape_action = escape_action
         self._age += 1
         self._side_age += 1

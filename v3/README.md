@@ -14,11 +14,11 @@ the archived standalone Brotato-ModLoader package.
 The first adapter trains combat movement from exact player, enemy, projectile,
 pickup, wave and arena state. Normal keyboard control is restored whenever the
 trainer disconnects or stops sending actions for 1.5 seconds. Combat remains
-real-time at up to 24 structured observations per second. The bridge adapts to
-16 observations per second from wave 6 and 12 from wave 10, leaving the game
-more frame time when enemy and projectile counts become dense. Actions remain
-active between observations. Global scene pauses are deliberately avoided
-because they can interrupt Brotato's wave-cleanup signals.
+real-time at a default of 24 structured observations per second. The bridge
+can be explicitly configured up to 60 Hz for controlled rate experiments;
+actions remain active between observations. Global scene pauses are
+deliberately avoided because they can interrupt Brotato's wave-cleanup
+signals.
 
 The adapter advertises visible, enabled game UI actions through the structured
 API. Training automatically chooses an upgrade, makes a bounded number of shop
@@ -117,7 +117,7 @@ actions exactly match the old human base. The saved model remains small (under
 
 After validating that base, run `train_v3_semantic_rl.bat` for live PPO
 fine-tuning. PPO starts with exactly the semantic base's action logits, uses the
-832-value API observation at 12 Hz, and applies a small supervised anchor after
+832-value API observation at 24 Hz by default, and applies a small supervised anchor after
 each rollout to limit catastrophic forgetting. It saves periodic checkpoints
 under `semantic_finetune_checkpoints`, the best rolling-reward model under
 `semantic_finetune_best`, and TensorBoard curves under `SemanticBasePPO`.
@@ -217,7 +217,7 @@ Live training requests a true 24 Hz at every wave and writes checkpoints under
 curves to TensorBoard under `V4TemporalPPO`.
 `train_v4_temporal_scheduled.bat` is the unattended launcher: after a restart
 it automatically selects the newest V4 checkpoint, falling back to the
-verified bootstrap when no live checkpoint exists yet. Bridge 0.3.18 removes
+verified bootstrap when no live checkpoint exists yet. The current bridge removes
 the former late-wave 12 Hz cap and adds temporal projectile trajectory
 prediction with swept multi-horizon action risk. TensorBoard's
 `control/effective_state_hz`

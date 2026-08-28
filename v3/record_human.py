@@ -98,7 +98,7 @@ def main() -> int:
             session = str(state.get("session", ""))
             if session != verified_session:
                 require_human_input_capability(server.last_hello)
-                server.send(configure_message(state_hz=max(4.0, min(24.0, args.sample_hz))))
+                server.send(configure_message(state_hz=max(4.0, min(60.0, args.sample_hz))))
                 verified_session = session
                 print(
                     f"[v3-human] verified_bridge_session={session} "

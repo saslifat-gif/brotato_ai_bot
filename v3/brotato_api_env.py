@@ -202,9 +202,6 @@ class BrotatoApiEnv(gym.Env):
         self._effective_state_hz = 0.0
         self._last_state_interval_ms = 0.0
         self._last_control_started: Optional[float] = None
-        self._control_ticks = 0
-        self._control_overruns = 0
-        self._control_missed_ticks = 0
         self._cached_projectile_paths: dict[str, Any] = {}
         self._cached_arena_grid: dict[str, Any] = {}
 
@@ -322,9 +319,6 @@ class BrotatoApiEnv(gym.Env):
         self._effective_state_hz = 0.0
         self._last_state_interval_ms = 0.0
         self._last_control_started = None
-        self._control_ticks = 0
-        self._control_overruns = 0
-        self._control_missed_ticks = 0
         self._observe_state_rate(state)
         self.previous_action = int(MoveAction.IDLE)
         self.reward_engine.reset(state)
@@ -339,9 +333,6 @@ class BrotatoApiEnv(gym.Env):
             "ui_sent": ui_sent,
             "ui_confirmed": ui_confirmed,
             "effective_state_hz": self._effective_state_hz,
-            "control_ticks": self._control_ticks,
-            "control_overruns": self._control_overruns,
-            "control_missed_ticks": self._control_missed_ticks,
         }
 
     def step(self, action):
@@ -356,19 +347,6 @@ class BrotatoApiEnv(gym.Env):
             else max(0.0, (control_started - self._last_control_started) * 1000.0)
         )
         self._last_control_started = control_started
-        self._control_ticks += 1
-        if self.state_hz is not None and self.state_hz > 0.0 and control_interval_ms > 0.0:
-            budget_ms = 1000.0 / self.state_hz
-            # Diagnostics only: the policy and action semantics are unchanged.
-            if control_interval_ms > budget_ms * 1.10:
-                self._control_overruns += 1
-                self.profiler.count("control_tick_overruns")
-            missed = max(0, int(control_interval_ms // budget_ms) - 1)
-            if missed:
-                self._control_missed_ticks += missed
-                self.profiler.count("control_ticks_missed", missed)
-            self.profiler.value("control_budget_ms", budget_ms)
-        self.profiler.count("control_ticks")
         self.profiler.value("control_interval_ms", control_interval_ms)
         if control_interval_ms > 0.0:
             self.profiler.value("control_effective_hz", 1000.0 / control_interval_ms)
@@ -438,7 +416,6 @@ class BrotatoApiEnv(gym.Env):
         started = self.profiler.begin("action_send")
         self.action_writer.write(decision_trace, self.sequence)
         self.profiler.end("action_send", started)
-        self.server.mark_action_sent()
         previous_tick = int(self.last_state.get("tick", -1)) if self.last_state else None
         started = self.profiler.begin("state_wait")
         state = self.server.wait_for_state(

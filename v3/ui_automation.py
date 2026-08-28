@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -235,6 +236,30 @@ class AutoUiController:
             return next_wave[0] if next_wave else None
         if phase == "game_over":
             restarts = available_actions(state, "restart")
+            if os.environ.get("BROTATO_V4_FULL_RESTART", "").strip() not in {
+                "",
+                "0",
+                "false",
+                "no",
+                "off",
+            }:
+                full = [
+                    action
+                    for action in restarts
+                    if "restartbutton" in str(action.get("name", "")).lower()
+                    or "endrun" in str(action.get("id", "")).lower()
+                ]
+                if full:
+                    return full[0]
+                cancel = [
+                    action
+                    for action in restarts
+                    if "cancel" in str(action.get("name", "")).lower()
+                    or "cancel" in str(action.get("id", "")).lower()
+                ]
+                if cancel:
+                    return cancel[0]
+                return None
             return restarts[0] if restarts else None
         if phase == "menu":
             starts = available_actions(state, "start")
@@ -389,9 +414,18 @@ class AutoUiController:
                         "UI transition did not complete "
                         f"role={pending_phase_change[1]} phase={phase}"
                     )
+                idle_ok_phases = {"wave_end", "menu"}
+                if os.environ.get("BROTATO_V4_FULL_RESTART", "").strip() not in {
+                    "",
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                }:
+                    idle_ok_phases = {*idle_ok_phases, "game_over"}
                 if (
                     pending_phase_change is None
-                    and phase not in {"wave_end", "menu"}
+                    and phase not in idle_ok_phases
                     and no_action_states >= (
                         MAX_SHOP_NO_ACTION_STATES
                         if phase == "shop"

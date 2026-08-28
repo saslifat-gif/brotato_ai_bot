@@ -39,14 +39,15 @@ Trainer to game:
   exact node identifier advertised in the latest state.
 - `reset`: releases movement control before the trainer uses an advertised
   restart action. It remains safe when no restart action is visible.
-- `configure`: requests a structured state rate from 4 to 24 Hz. Human
-  demonstration recording requests 8 Hz; PPO keeps the adaptive maximum.
+- `configure`: requests a structured state rate from 4 to 60 Hz. The normal
+  production default is 24 Hz; rates above 24 Hz are reserved for controlled
+  sensitivity testing until live gameplay results justify changing the default.
 
 Movement actions are idle, up, down, left, right, up-left, up-right,
-down-left and down-right. Combat runs in real time at up to 24 structured
-observations per second, adapting to 16 from wave 6 and 12 from wave 10 to
-protect late-wave game frame time. An action remains active between state
-updates and expires after 1.5 seconds without a trainer update. Normal human
-input is restored immediately after expiry or a disconnect. The trainer
-resends its last action after a reconnect and accepts a new low tick value when
-Brotato itself has restarted.
+down-left and down-right. Combat normally runs in real time at 24 structured
+observations per second. The bridge can be explicitly configured up to 60 Hz
+for rate experiments; it does not adapt the schedule by wave. An action
+remains active between state updates and expires after 1.5 seconds without a
+trainer update. Normal human input is restored immediately after expiry or a
+disconnect. The trainer resends its last action after a reconnect and accepts
+a new low tick value when Brotato itself has restarted.

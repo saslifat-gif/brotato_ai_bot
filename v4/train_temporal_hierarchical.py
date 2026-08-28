@@ -117,8 +117,7 @@ class TemporalHierarchicalActorExtractor(BaseFeaturesExtractor):
         nn.init.zeros_(self.temporal_residual[-1].weight)
         nn.init.zeros_(self.temporal_residual[-1].bias)
 
-    def actor_components(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return legacy logits and temporal residual for inspectable ablations."""
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
         old = observations[..., :BULLET_HELL_OBSERVATION_SIZE]
         history_start = BULLET_HELL_OBSERVATION_SIZE
         history = observations[..., history_start:history_start + HISTORY_SIZE]
@@ -136,11 +135,8 @@ class TemporalHierarchicalActorExtractor(BaseFeaturesExtractor):
                 dim=-1,
             )
         )
-        return self.legacy_actor(old), residual
-
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        legacy, residual = self.actor_components(observations)
-        return torch.cat((legacy + residual, observations), dim=-1)
+        logits = self.legacy_actor(old) + residual
+        return torch.cat((logits, observations), dim=-1)
 
 
 class V4TensorboardCallback(CombatTensorboardCallback):
@@ -193,30 +189,6 @@ class V4TensorboardCallback(CombatTensorboardCallback):
         self.logger.record_mean(
             "v4/history_health_delta", float(np.mean(history[:, :, 12]))
         )
-        extractor = getattr(self.model.policy, "pi_features_extractor", None)
-        if isinstance(extractor, TemporalHierarchicalActorExtractor):
-            with torch.no_grad():
-                tensor = torch.as_tensor(batch, dtype=torch.float32, device=self.model.device)
-                legacy_logits, residual = extractor.actor_components(tensor)
-                final_logits = legacy_logits + residual
-                legacy_prob = torch.softmax(legacy_logits, dim=-1).clamp_min(1e-8)
-                final_log_prob = torch.log_softmax(final_logits, dim=-1)
-                kl = torch.sum(
-                    legacy_prob * (torch.log(legacy_prob) - final_log_prob), dim=-1
-                )
-                disagreement = (legacy_logits.argmax(dim=-1) != final_logits.argmax(dim=-1)).float()
-                self.logger.record_mean(
-                    "v4/temporal_residual_logit_norm",
-                    float(residual.norm(dim=-1).mean().cpu().item()),
-                )
-                self.logger.record_mean(
-                    "v4/temporal_policy_disagreement",
-                    float(disagreement.mean().cpu().item()),
-                )
-                self.logger.record_mean(
-                    "v4/temporal_legacy_final_kl",
-                    float(kl.mean().cpu().item()),
-                )
         return True
 
 
@@ -474,8 +446,6 @@ def main() -> int:
         help="CPU threads used by PyTorch inference; one avoids small-model thread overhead",
     )
     parser.add_argument("--bc-coefficient", type=float, default=0.10)
-    parser.add_argument("--bc-coefficient-final", type=float, default=0.0)
-    parser.add_argument("--bc-anneal-steps", type=int, default=0)
     parser.add_argument("--bc-batches", type=int, default=2)
     parser.add_argument(
         "--run-name",
@@ -489,8 +459,8 @@ def main() -> int:
     )
     parser.add_argument("--bootstrap-only", action="store_true")
     args = parser.parse_args()
-    if not 8.0 <= args.state_hz <= 24.0:
-        parser.error("--state-hz must be between 8 and 24")
+    if not 8.0 <= args.state_hz <= 60.0:
+        parser.error("--state-hz must be between 8 and 60")
     if args.torch_threads < 1:
         parser.error("--torch-threads must be at least 1")
     torch.set_num_threads(int(args.torch_threads))
@@ -554,8 +524,6 @@ def main() -> int:
             tensorboard_log=str(cfg.output_dir / "logs"),
             device=args.device,
             bc_coefficient=args.bc_coefficient,
-            bc_final_coefficient=args.bc_coefficient_final,
-            bc_anneal_steps=args.bc_anneal_steps,
             bc_batches=args.bc_batches,
             policy_kwargs={
                 "features_extractor_class": TemporalHierarchicalActorExtractor,
@@ -566,8 +534,6 @@ def main() -> int:
         )
         difference = initialize_v4_from_bullet_ppo(model, source)
     model.bc_coefficient = max(0.0, float(args.bc_coefficient))
-    model.bc_final_coefficient = max(0.0, float(args.bc_coefficient_final))
-    model.bc_anneal_steps = max(0, int(args.bc_anneal_steps))
     model.bc_batches = max(0, int(args.bc_batches))
     model.set_human_anchor(anchor_features, anchor_actions)
     bootstrap = cfg.output_dir / "v4_temporal_bootstrap"
@@ -579,9 +545,7 @@ def main() -> int:
         f"anchor_records={len(anchor_actions)} anchor_idle={idle_fraction:.3f} "
         f"raw_anchor_records={len(raw_actions)} raw_dataset={args.raw_dataset} "
         f"transfer_diff={difference} state_hz={args.state_hz:g} "
-        f"torch_threads={args.torch_threads} "
-        f"bc={args.bc_coefficient:g}->{args.bc_coefficient_final:g} "
-        f"bc_anneal_steps={args.bc_anneal_steps}"
+        f"torch_threads={args.torch_threads}"
     )
     if args.bootstrap_only:
         env.close()

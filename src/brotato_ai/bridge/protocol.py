@@ -11,6 +11,7 @@ from brotato_ai.domain.actions import MoveAction
 PROTOCOL_VERSION = 1
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4242
+MAX_STATE_HZ = 60.0
 
 
 class BridgeProtocolError(RuntimeError):
@@ -65,11 +66,12 @@ def ui_action_message(target: str, sequence: int) -> dict[str, Any]:
 
 def configure_message(*, state_hz: float) -> dict[str, Any]:
     normalized = float(state_hz)
-    if not 4.0 <= normalized <= 24.0:
-        raise BridgeProtocolError(f"state_hz must be between 4 and 24: {state_hz!r}")
+    if not 4.0 <= normalized <= MAX_STATE_HZ:
+        raise BridgeProtocolError(
+            f"state_hz must be between 4 and {MAX_STATE_HZ:g}: {state_hz!r}"
+        )
     return {"type": "configure", "state_hz": normalized}
 
 
 def training_pause_message(paused: bool) -> dict[str, Any]:
     return {"type": "training_pause", "paused": bool(paused)}
-
