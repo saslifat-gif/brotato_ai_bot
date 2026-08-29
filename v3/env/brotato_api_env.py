@@ -327,10 +327,16 @@ class BrotatoApiEnv(gym.Env):
         the safety arbiter, which remains the single override authority.
         """
 
-        if self.policy_mode is PolicyMode.HANDCRAFTED or self.hybrid_controller is None:
+        if self.policy_mode is PolicyMode.HANDCRAFTED:
             return {}, requested
         proposal = self._human_proposal(self.last_state or {})
-        if self.policy_mode is PolicyMode.SHADOW_HUMAN:
+        if (
+            self.policy_mode is PolicyMode.SHADOW_HUMAN
+            or self.hybrid_controller is None
+        ):
+            # SHADOW records; a hybrid/full mode whose controller was never
+            # attached (e.g. a bare env in tests) degrades to recording too —
+            # never to changing the requested action.
             return {
                 "human_proposed_action": proposal.action if proposal else None,
                 "human_confidence": proposal.probability if proposal else None,

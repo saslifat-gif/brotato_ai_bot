@@ -982,7 +982,7 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert '"enemy_action_risk"' in bridge
     assert '"boundary_action_risk"' in bridge
     assert '"configurable_state_rate"' in bridge
-    assert "_tick - _last_indicator_scan_tick >= 6" in bridge
+    assert "now_ms - _last_indicator_scan_ms >= 250" in bridge
     assert "var _property_name_cache := {}" in bridge
     assert '"width": static_data["width"]' in bridge
     assert '"attack_method": attack_method' in bridge

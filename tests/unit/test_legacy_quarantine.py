@@ -49,6 +49,10 @@ def test_legacy_scripts_carry_a_visible_label():
 def test_runtime_package_does_not_import_legacy_experiments():
     for root in RUNTIME_ROOTS:
         for path in root.rglob("*.py"):
+            # Skip AppleDouble companion files (._*.py) that scp copies from
+            # macOS; they are binary metadata, not source.
+            if path.name.startswith("._"):
+                continue
             imports = _imports_of(path)
             for legacy in LEGACY_MODULES:
                 assert legacy not in imports, f"{path} imports legacy {legacy}"
