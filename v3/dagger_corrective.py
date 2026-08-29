@@ -10,6 +10,7 @@ handcrafted label.
 The workflow is:
 
     python v3/dagger_corrective.py select ...
+    python v3/dagger_corrective.py review ...
     python v3/dagger_corrective.py label ...
     python v3/dagger_corrective.py merge ...
     python v3/dagger_corrective.py evaluate ...
@@ -1218,6 +1219,10 @@ def main() -> int:
     label.add_argument("--annotator", default="human")
     label.add_argument("--init-only", action="store_true", help="create/resume the SQLite queue without asking for labels")
 
+    review = subparsers.add_parser("review", help="write an offline visual tactical-map reviewer")
+    review.add_argument("--queue", type=Path, required=True)
+    review.add_argument("--output", type=Path, required=True)
+
     merge = subparsers.add_parser("merge", help="merge labeled train corrections into a rich training SQLite")
     merge.add_argument("--base-dataset", type=Path, required=True)
     merge.add_argument("--corrections", type=Path, required=True)
@@ -1243,6 +1248,10 @@ def main() -> int:
         )
     elif args.command == "label":
         report = label_queue(args.queue, args.database, labels_path=args.labels_jsonl, annotator=args.annotator, init_only=args.init_only)
+    elif args.command == "review":
+        from v3.dagger_review import render_review_html
+
+        report = render_review_html(args.queue, args.output)
     elif args.command == "merge":
         report = merge_corrective_dataset(args.base_dataset, args.corrections, args.output, include_holdout=args.include_holdout)
     elif args.command == "validate":

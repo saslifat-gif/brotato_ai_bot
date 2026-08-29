@@ -35,6 +35,7 @@ coverage.
 python v3\dagger_corrective.py select --shadow-log reports\shadow_dagger_decisions.jsonl --state-log reports\shadow_dagger_states.jsonl --human-dataset models\version_3\human_demos\event_training_manual_set.sqlite --output reports\dagger_queue.jsonl --budget 200 --min-gap-ms 500 --holdout-fraction 0.25 --report reports\dagger_queue.report.json
 python v3\dagger_corrective.py validate --queue reports\dagger_queue.jsonl --report reports\dagger_queue.validation.json
 python v3\dagger_corrective.py label --queue reports\dagger_queue.jsonl --database models\version_3\human_demos\dagger_corrections.sqlite --init-only
+python v3\dagger_corrective.py review --queue reports\dagger_queue.jsonl --output reports\dagger_queue.review.html
 ```
 
 Selection is deterministic and prioritizes disagreement, high confidence,
@@ -42,6 +43,13 @@ counterfactual safety override, hard/much-higher modeled risk, low HP, dense
 combat, bad positioning, and representation-level OOD. The 500 ms gap avoids
 turning a long hold into hundreds of duplicate labels while retaining the
 original timestamps. Summary-only shadow logs are rejected.
+
+Open the generated `review.html` in a browser before labeling. It renders a
+tactical map from the exact captured player, enemy, projectile, indicator, and
+pickup coordinates, and shows the current, handcrafted, learned, confidence,
+risk, and safety context. It is an offline reconstruction rather than a pixel
+screenshot; use game replay for ambiguous high-risk cases. The page exports a
+human-authored JSONL that can be passed to `label --labels-jsonl`.
 
 The final `label` command is either interactive or consumes a human-authored
 JSONL. The latter must contain only real labels, for example:

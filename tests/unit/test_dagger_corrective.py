@@ -9,6 +9,7 @@ from v3.dagger_corrective import (
     _stable_holdout,
     priority_score,
 )
+from v3.dagger_review import render_review_html
 
 
 def _record():
@@ -66,3 +67,24 @@ def test_holdout_assignment_is_stable_and_binary():
     first = _stable_holdout("same-queue-id", 0.25)
     assert first in {"train", "holdout"}
     assert first == _stable_holdout("same-queue-id", 0.25)
+
+
+def test_visual_review_contains_captured_state_and_no_labels(tmp_path):
+    queue = tmp_path / "queue.jsonl"
+    queue.write_text(
+        '{"queue_id":"q1","split":"train","source_episode":"ep1",'
+        '"source_tick":3,"source_timestamp_ms":1000,"state":{"arena":{"width":100,"height":80},'
+        '"player":{"position":{"x":50,"y":40}},"enemies":[]},'
+        '"selection_reasons":["high_confidence"],"current_action":1,'
+        '"handcrafted_recommendation":1,"learned_proposal":2,"model_confidence":0.9}\n',
+        encoding="utf-8",
+    )
+    output = tmp_path / "review.html"
+    report = render_review_html(queue, output)
+    html = output.read_text(encoding="utf-8")
+    assert report["rows"] == 1
+    assert report["labels_created"] == 0
+    assert "q1" in html
+    assert "Recorded battlefield tactical map" in html
+    assert "human_corrective_action" in html
+    assert "synthetic_labels" not in html
