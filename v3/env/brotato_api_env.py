@@ -1,5 +1,6 @@
 """Gymnasium compatibility entrypoint backed by the active v4 runtime."""
 
+import dataclasses
 import time
 from typing import Any, Mapping, Optional
 
@@ -18,6 +19,8 @@ from brotato_ai.data.recorder import DecisionTraceLogger
 from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
 from brotato_ai.domain.state import normalize_state
 from brotato_ai.performance import RuntimeProfiler
+from brotato_ai.policy.human_action import HumanProposal
+from brotato_ai.policy.modes import PolicyMode, parse_policy_mode
 from v3.combat_policy import (
     movement_transition_metrics,
     projectile_time_to_impact,
@@ -139,6 +142,45 @@ def _projectile_diagnostics(
     }
 
 
+def _build_human_policy_stack(cfg: V3Config, profiler: RuntimeProfiler):
+    """Build the optional learned-human-policy stack for the configured mode.
+
+    Returns ``(policy_mode, human_policy, human_builder, hybrid_controller)``.
+    Any load failure degrades the mode to HANDCRAFTED with a printed warning;
+    the production controller never depends on learned inference being alive.
+    """
+
+    mode = parse_policy_mode(getattr(cfg, "policy_mode", None))
+    if mode is PolicyMode.HANDCRAFTED:
+        return mode, None, None, None
+    try:
+        from brotato_ai.policy.features import HumanPolicyFeatureBuilder
+        from brotato_ai.policy.human_action import EventHumanActionPolicy
+        from brotato_ai.policy.hybrid import HumanHybridController
+
+        builder = HumanPolicyFeatureBuilder()
+        policy = EventHumanActionPolicy.load(cfg.human_model_path)
+        hybrid = HumanHybridController(
+            decision_interval_ms=float(getattr(cfg, "human_decision_interval_ms", 438.0)),
+            hold_prior_ms=float(getattr(cfg, "human_hold_prior_ms", 438.0)),
+            min_confidence=float(getattr(cfg, "human_confidence_threshold", 0.0)),
+            full_learned=(mode is PolicyMode.EXPERIMENTAL_FULL_LEARNED),
+        )
+        print(
+            f"[v3-env] human policy mode={mode.value} model={cfg.human_model_path} "
+            f"schema={policy.feature_schema_version} "
+            f"heldout_next_action={policy.metrics.get('teacher_forced', {}).get('next_action_accuracy_on_true_change')}"
+        )
+        return mode, policy, builder, hybrid
+    except Exception as exc:
+        profiler.count("human_policy_load_failure")
+        print(
+            f"[v3-env] WARNING: {mode.value} requested but the human policy failed to "
+            f"load ({exc}); falling back to HANDCRAFTED"
+        )
+        return PolicyMode.HANDCRAFTED, None, None, None
+
+
 class BrotatoApiEnv(gym.Env):
     metadata = {"render_modes": []}
 
@@ -197,6 +239,9 @@ class BrotatoApiEnv(gym.Env):
             ui_model_path=cfg.ui_model_path,
             decision_log_path=cfg.ui_decision_log,
         )
+        self.policy_mode, self.human_policy, self.human_builder, self.hybrid_controller = (
+            _build_human_policy_stack(cfg, self.profiler)
+        )
         self.training_paused = False
         self._last_published_ms: Optional[int] = None
         self._effective_state_hz = 0.0
@@ -251,6 +296,67 @@ class BrotatoApiEnv(gym.Env):
         self.profiler.value("source_effective_hz", instantaneous)
         return self._effective_state_hz
 
+    def _human_proposal(self, state: Mapping[str, Any]) -> Optional[HumanProposal]:
+        """Run the learned human policy silently; never raises."""
+
+        if self.human_policy is None or self.human_builder is None:
+            return None
+        try:
+            held_action = int(self.previous_action)
+            self.human_builder.observe(
+                state,
+                held_action,
+                timestamp_ms=self._last_published_ms,
+            )
+            model_input = self.human_builder.build_input(held_action)
+            return self.human_policy.propose(model_input, held_action)
+        except Exception:
+            self.profiler.count("human_policy_propose_failure")
+            return None
+
+    def _apply_human_policy(
+        self,
+        requested: int,
+        *,
+        escape_active: bool,
+    ) -> tuple[dict[str, Any], int]:
+        """Return (trace fields, effective requested action) for this step.
+
+        HANDCRAFTED is a no-op.  SHADOW_HUMAN only records fields.  HYBRID_HUMAN
+        and EXPERIMENTAL_FULL_LEARNED may replace the requested action before
+        the safety arbiter, which remains the single override authority.
+        """
+
+        if self.policy_mode is PolicyMode.HANDCRAFTED or self.hybrid_controller is None:
+            return {}, requested
+        proposal = self._human_proposal(self.last_state or {})
+        if self.policy_mode is PolicyMode.SHADOW_HUMAN:
+            return {
+                "human_proposed_action": proposal.action if proposal else None,
+                "human_confidence": proposal.probability if proposal else None,
+                "human_change_probability": proposal.change_probability if proposal else None,
+                "human_duration_ms": proposal.duration_ms if proposal else None,
+                "human_source": "shadow",
+                "human_used": False,
+                "human_agrees": (proposal.action == requested) if proposal else None,
+                "human_fallback_reason": "" if proposal else "no_proposal",
+            }, requested
+        resolution = self.hybrid_controller.resolve(
+            requested_action=requested,
+            escape_active=escape_active,
+            proposal=proposal,
+        )
+        return {
+            "human_proposed_action": proposal.action if proposal else None,
+            "human_confidence": proposal.probability if proposal else None,
+            "human_change_probability": proposal.change_probability if proposal else None,
+            "human_duration_ms": proposal.duration_ms if proposal else None,
+            "human_source": resolution.source,
+            "human_used": resolution.used_human,
+            "human_agrees": (proposal.action == requested) if proposal else None,
+            "human_fallback_reason": "" if resolution.used_human else resolution.reason,
+        }, resolution.requested_action
+
     def set_training_paused(self, paused: bool) -> None:
         """Freeze game simulation while PPO updates its network weights."""
 
@@ -286,6 +392,10 @@ class BrotatoApiEnv(gym.Env):
                 print(f"[v3-env] reset request not delivered: {exc}")
         self.ui_controller.reset_episode()
         self.decision_pipeline.reset()
+        if self.human_builder is not None:
+            self.human_builder.reset()
+        if self.hybrid_controller is not None:
+            self.hybrid_controller.reset()
         print("[v3-env] waiting for combat; structured menu automation is active")
         state = self.server.wait_for_state(
             timeout_sec=self.cfg.reset_timeout_sec,
@@ -372,6 +482,12 @@ class BrotatoApiEnv(gym.Env):
         self.profiler.value("control_interval_ms", control_interval_ms)
         if control_interval_ms > 0.0:
             self.profiler.value("control_effective_hz", 1000.0 / control_interval_ms)
+        started = self.profiler.begin("human_policy")
+        human_fields, requested = self._apply_human_policy(
+            requested,
+            escape_active=self.crowd_recovery_guard.active,
+        )
+        self.profiler.end("human_policy", started)
         started = self.profiler.begin("decision_pipeline")
         decision_trace = self.decision_pipeline.apply(
             previous_state,
@@ -381,6 +497,8 @@ class BrotatoApiEnv(gym.Env):
             control_interval_ms=control_interval_ms,
         )
         self.profiler.end("decision_pipeline", started)
+        if human_fields:
+            decision_trace = dataclasses.replace(decision_trace, **human_fields)
         decision = decision_trace.decision
         self.server.mark_action_decision()
         normalized = decision.applied_action
@@ -593,6 +711,13 @@ class BrotatoApiEnv(gym.Env):
             "requested_action": requested,
             "applied_action": normalized,
             "safety_overridden": decision.overridden,
+            "human_proposed_action": decision_trace.human_proposed_action,
+            "human_confidence": decision_trace.human_confidence,
+            "human_change_probability": decision_trace.human_change_probability,
+            "human_source": decision_trace.human_source,
+            "human_used": decision_trace.human_used,
+            "human_agrees": decision_trace.human_agrees,
+            "policy_mode": self.policy_mode.value,
             "hazard_overridden": decision_trace.hazard_overridden,
             "hazard_source": decision_trace.source,
             "hazard_action": decision_trace.hazard_decision.applied_action,

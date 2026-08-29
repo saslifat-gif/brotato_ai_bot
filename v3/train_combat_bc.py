@@ -1,4 +1,12 @@
-"""Behavior-clone the compact rich combat base from safe structured decisions."""
+"""Behavior-clone the compact rich combat base from safe structured decisions.
+
+LEGACY / EXPERIMENT (framewise BC).  Framewise behavior cloning was retired:
+its reported accuracy was dominated by the human persistence prior (it mostly
+copied the previous action; exact transition F1 was 0.00 in the validation
+report).  Keep this script and its checkpoints for reproducibility only.
+Nothing in the production runtime may import it; the active learned-policy
+research path is the event-based model (``v3_event_human_bc.py``).
+"""
 
 from __future__ import annotations
 

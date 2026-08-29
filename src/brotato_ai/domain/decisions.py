@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-DECISION_SCHEMA_VERSION = 1
+DECISION_SCHEMA_VERSION = 2
 DecisionSource = Literal["policy", "hazard", "crowd_recovery"]
 
 
@@ -100,7 +100,19 @@ class DecisionTrace:
     all_risks: dict[int, HazardRisk] = field(default_factory=dict)
     tactical_state: str = "normal"
     escape_remaining: int = 0
+    escape_remaining_ms: float = 0.0
     escape_side: int = 0
+    # Learned human-policy fields (schema 2).  They are None/"" whenever the
+    # policy mode does not run the human model (HANDCRAFTED) or inference
+    # failed; they never change action semantics by themselves.
+    human_proposed_action: int | None = None
+    human_confidence: float | None = None
+    human_change_probability: float | None = None
+    human_duration_ms: float | None = None
+    human_source: str = ""
+    human_used: bool = False
+    human_agrees: bool | None = None
+    human_fallback_reason: str = ""
     schema_version: int = DECISION_SCHEMA_VERSION
 
     @property
@@ -126,9 +138,18 @@ class DecisionTrace:
             "recovery_mode": self.recovery_active,
             "tactical_state": self.tactical_state,
             "escape_remaining": int(self.escape_remaining),
+            "escape_remaining_ms": float(self.escape_remaining_ms),
             "escape_side": int(self.escape_side),
             "requested_risk": self.requested_risk.to_dict(),
             "applied_risk": self.applied_risk.to_dict(),
+            "human_proposed_action": self.human_proposed_action,
+            "human_confidence": self.human_confidence,
+            "human_change_probability": self.human_change_probability,
+            "human_duration_ms": self.human_duration_ms,
+            "human_source": self.human_source,
+            "human_used": self.human_used,
+            "human_agrees": self.human_agrees,
+            "human_fallback_reason": self.human_fallback_reason,
             "state_interval_ms": float(self.state_interval_ms),
             "control_interval_ms": float(self.control_interval_ms),
             "minimum_action_risk": min(

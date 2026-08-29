@@ -106,8 +106,10 @@ def test_protocol_round_trip_and_action_validation():
     assert configure_message(state_hz=8) == {"type": "configure", "state_hz": 8.0}
     assert training_pause_message(True) == {"type": "training_pause", "paused": True}
     assert training_pause_message(False) == {"type": "training_pause", "paused": False}
+    # The bridge accepts controlled-rate experiments up to MAX_STATE_HZ.
+    assert configure_message(state_hz=30) == {"type": "configure", "state_hz": 30.0}
     with pytest.raises(BridgeProtocolError):
-        configure_message(state_hz=30)
+        configure_message(state_hz=61)
 
 
 def test_vectorizer_has_fixed_finite_shape_and_nearest_enemy_first():
@@ -511,7 +513,10 @@ def test_environment_reports_bridge_control_rate_separately_from_training_fps():
     pytest.importorskip("gymnasium")
     from v3.env.brotato_api_env import BrotatoApiEnv
 
+    from brotato_ai.performance import RuntimeProfiler
+
     env = object.__new__(BrotatoApiEnv)
+    env.profiler = RuntimeProfiler(enabled=False)
     env._last_published_ms = None
     env._effective_state_hz = 0.0
     assert env._observe_state_rate({"published_at_ms": 1_000}) == 0.0
@@ -941,7 +946,7 @@ def test_bridge_uses_godot3_safe_boolean_type_and_load_guard():
     assert "get_tree().change_scene(MenuData.shop_scene)" in bridge
     assert '"realtime_control"' in bridge
     assert "const DEFAULT_STATE_HZ := 24.0" in bridge
-    assert "return 1.0 / max(4.0, _requested_state_hz)" in bridge
+    assert "return 1.0 / clamp(_requested_state_hz, 4.0, MAX_STATE_HZ)" in bridge
     assert '"published_at_ms": OS.get_ticks_msec()' in bridge
     assert "const MAX_ENEMIES := 64" in bridge
     assert "const MAX_PROJECTILES := 64" in bridge
@@ -1853,7 +1858,10 @@ def test_installer_builds_runtime_zip_and_editable_copy(tmp_path):
     stale_workshop = workshop_host / f"{MOD_DIR_NAME}-0.1.1.zip"
     stale_workshop.touch()
     package = install_mod(game)
-    assert package == game / "mods" / f"{MOD_DIR_NAME}-0.3.18.zip"
+    manifest_version = json.loads(
+        (ROOT / "v3" / "mod" / MOD_DIR_NAME / "manifest.json").read_text(encoding="utf-8")
+    )["version_number"]
+    assert package == game / "mods" / f"{MOD_DIR_NAME}-{manifest_version}.zip"
     assert (game / "mods-unpacked" / MOD_DIR_NAME / "manifest.json").is_file()
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())

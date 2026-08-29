@@ -1,4 +1,12 @@
-"""Small grouped-holdout behavior-cloning baseline for human demonstrations."""
+"""Small grouped-holdout behavior-cloning baseline for human demonstrations.
+
+LEGACY / EXPERIMENT (framewise BC).  The framewise baseline is retained for
+reproducibility of the 93.1% teacher-forced result in
+docs/human_bc_validation_results.md; that metric hid persistence leakage and
+this model must not be imported by or influence the production runtime.  The
+active learned-policy research path is the event-based model
+(``v3_event_human_bc.py``).
+"""
 
 from __future__ import annotations
 

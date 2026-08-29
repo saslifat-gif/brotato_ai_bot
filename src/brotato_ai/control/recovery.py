@@ -35,10 +35,22 @@ def _xy(value: Any) -> tuple[float, float]:
 
 
 class TacticalMovementController:
-    """Persistent NORMAL/ESCAPE controller with hysteresis and lateral escape."""
+    """Persistent NORMAL/ESCAPE controller with hysteresis and lateral escape.
+
+    Hold timing is expressed in real-time milliseconds
+    (``hold_duration_ms`` / ``side_hold_duration_ms``).  Step counts remain
+    supported as a fallback for callers that cannot supply a measured control
+    interval, and the defaults reproduce the previous 24 Hz behavior exactly
+    (8 steps ~= 333 ms, 6 steps ~= 250 ms at 24 Hz).  At any other control
+    rate the duration semantics keep the wall-clock hold stable instead of
+    silently scaling with the bridge rate.
+    """
 
     NORMAL = "normal"
     ESCAPE = "escape"
+
+    DEFAULT_CONTROL_HZ = 24.0
+    HOLD_TOLERANCE_MS = 1.0
 
     def __init__(
         self,
@@ -48,27 +60,43 @@ class TacticalMovementController:
         enemy_threshold: int = 18,
         boundary_threshold: float = 0.45,
         hold_steps: int = 8,
+        hold_duration_ms: float | None = None,
         shield: UnifiedHazardScorer | None = None,
         escape_enter_risk: float = 0.28,
         escape_exit_risk: float = 0.16,
         release_margin: float = 1.15,
         side_hold_steps: int = 6,
+        side_hold_duration_ms: float | None = None,
+        default_control_hz: float = DEFAULT_CONTROL_HZ,
     ):
         self.enabled = bool(enabled)
         self.wave_threshold = int(wave_threshold)
         self.enemy_threshold = int(enemy_threshold)
         self.boundary_threshold = float(boundary_threshold)
         self.hold_steps = max(1, int(hold_steps))
+        self.hold_duration_ms = (
+            float(hold_duration_ms)
+            if hold_duration_ms is not None
+            else self.hold_steps * 1000.0 / max(1.0, float(default_control_hz))
+        )
         self.escape_enter_risk = max(0.0, float(escape_enter_risk))
         self.escape_exit_risk = max(0.0, float(escape_exit_risk))
         self.release_margin = max(1.0, float(release_margin))
         self.side_hold_steps = max(1, int(side_hold_steps))
+        self.side_hold_duration_ms = (
+            float(side_hold_duration_ms)
+            if side_hold_duration_ms is not None
+            else self.side_hold_steps * 1000.0 / max(1.0, float(default_control_hz))
+        )
         self.shield = shield if shield is not None else UnifiedHazardScorer(enabled=True)
         self.state = self.NORMAL
         self.remaining = 0
         self.escape_side = 0
         self._age = 0
         self._side_age = 0
+        self._age_ms = 0.0
+        self._side_age_ms = 0.0
+        self._saw_control_interval = False
         self._last_escape_action: int | None = None
 
     @property
@@ -85,7 +113,18 @@ class TacticalMovementController:
         self.escape_side = 0
         self._age = 0
         self._side_age = 0
+        self._age_ms = 0.0
+        self._side_age_ms = 0.0
+        self._saw_control_interval = False
         self._last_escape_action = None
+
+    @property
+    def remaining_ms(self) -> float:
+        """Wall-clock hold time left in the current escape, in milliseconds."""
+
+        if self.state != self.ESCAPE:
+            return 0.0
+        return max(0.0, self.hold_duration_ms - self._age_ms)
 
     @staticmethod
     def _payload(state: Mapping[str, Any] | StateSnapshot) -> Mapping[str, Any]:
@@ -218,8 +257,20 @@ class TacticalMovementController:
             ),
         )
 
+    def _hold_elapsed(self) -> bool:
+        """Minimum escape hold, in real time when intervals are measurable."""
+
+        if self._saw_control_interval:
+            return self._age_ms >= self.hold_duration_ms - self.HOLD_TOLERANCE_MS
+        return self._age >= self.hold_steps
+
+    def _side_hold_elapsed(self) -> bool:
+        if self._saw_control_interval:
+            return self._side_age_ms >= self.side_hold_duration_ms - self.HOLD_TOLERANCE_MS
+        return self._side_age >= self.side_hold_steps
+
     def _clear_to_normal(self, payload: Mapping[str, Any], requested_action: int, requested_risk: HazardRisk) -> bool:
-        if self._age < self.hold_steps or requested_risk.total > self.escape_exit_risk:
+        if not self._hold_elapsed() or requested_risk.total > self.escape_exit_risk:
             return False
         geometry = enemy_separation_diagnostics(payload, requested_action)
         if not geometry["active"]:
@@ -237,6 +288,7 @@ class TacticalMovementController:
         *,
         risks: Mapping[int, HazardRisk] | None = None,
         previous_action: int | None = None,
+        control_interval_ms: float = 0.0,
     ) -> SafetyDecision:
         requested = int(MoveAction(int(requested_action)))
         payload = self._payload(state)
@@ -245,20 +297,24 @@ class TacticalMovementController:
         requested_risk = risks[requested]
         if not self.enabled:
             return SafetyDecision(requested, requested, requested_risk.total, requested_risk.total)
+        if control_interval_ms > 0.0:
+            self._saw_control_interval = True
         if self.state == self.NORMAL and self._should_enter(
             payload, requested_risk, requested, risks
         ):
             self.state = self.ESCAPE
             self.remaining = self.hold_steps
             self._age = 0
+            self._age_ms = 0.0
             self.escape_side = self._choose_side(payload, risks, previous_action)
             self._side_age = 0
+            self._side_age_ms = 0.0
         elif self.state == self.ESCAPE and self._clear_to_normal(payload, requested, requested_risk):
             self.reset()
             return SafetyDecision(requested, requested, requested_risk.total, requested_risk.total)
         if self.state != self.ESCAPE:
             return SafetyDecision(requested, requested, requested_risk.total, requested_risk.total)
-        if self._side_age >= self.side_hold_steps:
+        if self._side_hold_elapsed():
             preferred_side = self._choose_side(payload, risks, previous_action)
             if preferred_side != self.escape_side:
                 current_action = self._escape_action(payload, risks, previous_action)
@@ -277,6 +333,10 @@ class TacticalMovementController:
         self._last_escape_action = escape_action
         self._age += 1
         self._side_age += 1
+        # Accumulate real time with the same placement as the step counter:
+        # the entry step consumes one interval, mirroring `_age += 1`.
+        self._age_ms += max(0.0, float(control_interval_ms))
+        self._side_age_ms += max(0.0, float(control_interval_ms))
         self.remaining = max(0, self.hold_steps - self._age)
         return SafetyDecision(requested, escape_action, requested_risk.total, risks[escape_action].total)
 

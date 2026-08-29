@@ -19,7 +19,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from brotato_ai.data.human_demo import _from_blob
+from brotato_ai.data.human_demo import DATASET_SCHEMA_VERSION, _from_blob
+from brotato_ai.policy.human_action import (
+    EVENT_MAX_HOLD_MS,
+    EventHumanModel,
+    save_event_checkpoint,
+)
 
 
 ACTION_COUNT = 9
@@ -228,23 +233,10 @@ def train_model(examples: list[EventExample], normalized: np.ndarray, selected_i
     import torch
     from torch import nn
 
-    class EventModel(nn.Module):
-        def __init__(self, width: int):
-            super().__init__()
-            self.trunk = nn.Sequential(
-                nn.Linear(width, 256), nn.ReLU(), nn.Dropout(0.10),
-                nn.Linear(256, 128), nn.ReLU(),
-            )
-            self.change = nn.Linear(128, 1)
-            self.action = nn.Linear(128, ACTION_COUNT)
-            self.duration = nn.Linear(128, 1)
-
-        def forward(self, values):
-            hidden = self.trunk(values)
-            return self.change(hidden).squeeze(-1), self.action(hidden), self.duration(hidden).squeeze(-1)
-
     torch.manual_seed(seed)
-    model = EventModel(normalized.shape[1])
+    # EventHumanModel (brotato_ai.policy.human_action) is the shared
+    # architecture used by both offline training and the runtime adapter.
+    model = EventHumanModel(int(normalized.shape[1]), ACTION_COUNT)
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)
     index_array = np.asarray(selected_indices, dtype=np.int64)
     x = torch.tensor(normalized[index_array], dtype=torch.float32)
@@ -436,7 +428,8 @@ def autoregressive(frames: list[Frame], examples: list[EventExample], normalized
 
 
 def evaluate_fold(frames: list[Frame], examples: list[EventExample], train_ids: set[str], test_ids: set[str],
-                  seed: int, epochs: int, negative_ratio: int) -> dict[str, Any]:
+                  seed: int, epochs: int, negative_ratio: int,
+                  artifacts: dict[str, Any] | None = None) -> dict[str, Any]:
     train_indices = {index for index, frame in enumerate(frames) if frame.episode_id in train_ids}
     test_indices = [index for index, frame in enumerate(frames) if frame.episode_id in test_ids]
     selected = select_training_examples(examples, train_indices, seed, negative_ratio)
@@ -447,6 +440,8 @@ def evaluate_fold(frames: list[Frame], examples: list[EventExample], train_ids: 
     train_all = sorted(train_indices)
     train_actual = np.asarray([examples[index].change for index in train_all], dtype=bool)
     threshold = choose_threshold(train_actual, probability[np.asarray(train_all)])
+    if artifacts is not None:
+        artifacts.update({"model": model, "mean": mean, "std": std, "threshold": threshold})
     test_array = np.asarray(test_indices, dtype=np.int64)
     test_actual = np.asarray([examples[index].change for index in test_indices], dtype=bool)
     test_predicted = probability[test_array] >= threshold
@@ -511,6 +506,11 @@ def main() -> int:
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--negative-ratio", type=int, default=4)
     parser.add_argument("--leave-one-episode-out", action="store_true")
+    parser.add_argument(
+        "--checkpoint", type=Path,
+        help="save the primary-fold model with its full inference contract "
+             "(still an offline diagnostic; production modes load it explicitly)",
+    )
     args = parser.parse_args()
     frames = load_frames(args.dataset)
     if not frames:
@@ -519,7 +519,28 @@ def main() -> int:
         raise SystemExit("inconsistent feature width")
     examples = build_examples(frames)
     train_ids, test_ids, shuffled_ids = episode_split(frames, args.seed)
-    primary = evaluate_fold(frames, examples, train_ids, test_ids, args.seed, args.epochs, args.negative_ratio)
+    primary_artifacts: dict[str, Any] = {}
+    primary = evaluate_fold(
+        frames, examples, train_ids, test_ids, args.seed, args.epochs, args.negative_ratio,
+        artifacts=primary_artifacts,
+    )
+    checkpoint_path = None
+    if args.checkpoint is not None:
+        checkpoint_path = save_event_checkpoint(
+            args.checkpoint,
+            model=primary_artifacts["model"],
+            mean=primary_artifacts["mean"],
+            std=primary_artifacts["std"],
+            change_threshold=primary_artifacts["threshold"],
+            metrics={"teacher_forced": primary["teacher_forced"], "autoregressive": primary["autoregressive"]},
+            dataset=str(args.dataset),
+            seed=args.seed,
+            action_names=ACTION_NAMES,
+            history_offsets_ms=HISTORY_OFFSETS_MS,
+            previous_action_slice=(PREVIOUS_ACTION_SLICE.start, PREVIOUS_ACTION_SLICE.stop),
+            max_hold_ms=MAX_HOLD_MS,
+            feature_schema_version=DATASET_SCHEMA_VERSION,
+        )
     loo = []
     if args.leave_one_episode_out:
         for fold, held_out in enumerate(shuffled_ids):
@@ -549,12 +570,14 @@ def main() -> int:
         "primary": primary,
         "leave_one_episode_out": loo,
         "old_framewise_bc": prior_framewise_summary(args.framewise_report),
+        "checkpoint": str(checkpoint_path) if checkpoint_path is not None else None,
     }
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     summary = primary["teacher_forced"]
     print(json.dumps({
         "report": str(args.report),
+        "checkpoint": str(checkpoint_path) if checkpoint_path is not None else None,
         "held_out_change_f1": summary["change_metrics"]["f1"],
         "held_out_next_action_accuracy": summary["next_action_accuracy_on_true_change"],
         "held_out_transition_timing_mae_ms": summary["transition_timing"]["mean_absolute_error_ms"],

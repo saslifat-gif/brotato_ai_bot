@@ -56,6 +56,7 @@ class FinalActionArbiter:
             hazard_decision.applied_action,
             risks=risks,
             previous_action=previous_action,
+            control_interval_ms=max(0.0, float(control_interval_ms)),
         )
         applied_risk = risks[recovery_decision.applied_action]
         decision = SafetyDecision(
@@ -95,6 +96,7 @@ class FinalActionArbiter:
             tactical_state=self.crowd_recovery_guard.state_name,
             escape_remaining=int(self.crowd_recovery_guard.remaining),
             escape_side=int(self.crowd_recovery_guard.escape_side),
+            escape_remaining_ms=float(getattr(self.crowd_recovery_guard, "remaining_ms", 0.0)),
         )
 
 
