@@ -107,6 +107,7 @@ def _bare_env(policy_mode, human_policy=None, human_builder=None, hybrid=None):
     env.hybrid_controller = hybrid
     env.previous_action = int(MoveAction.LEFT)
     env.last_state = {}
+    env._last_published_ms = 0
     return env
 
 

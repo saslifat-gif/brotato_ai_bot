@@ -306,7 +306,7 @@ class BrotatoApiEnv(gym.Env):
             self.human_builder.observe(
                 state,
                 held_action,
-                timestamp_ms=self._last_published_ms,
+                timestamp_ms=getattr(self, "_last_published_ms", 0),
             )
             model_input = self.human_builder.build_input(held_action)
             return self.human_policy.propose(model_input, held_action)
