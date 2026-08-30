@@ -95,7 +95,7 @@ class _StubPolicy:
 
 def _bare_env(policy_mode, human_policy=None, human_builder=None, hybrid=None):
     pytest.importorskip("gymnasium")
-    from v3.env.brotato_api_env import BrotatoApiEnv
+    from v4.env.brotato_api_env import BrotatoApiEnv
 
     env = object.__new__(BrotatoApiEnv)
     from brotato_ai.performance import RuntimeProfiler

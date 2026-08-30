@@ -6,7 +6,7 @@ from brotato_ai.data.recorder import DecisionTraceLogger
 from brotato_ai.bridge.client import BridgeClient
 from brotato_ai.performance import RuntimeProfiler
 from brotato_ai.control import CombatDecisionPipeline, CombatSafetyShield, CrowdRecoveryGuard
-from v3.diagnose_source import SourceCollector
+from v4.diagnose_source import SourceCollector
 
 
 def _trace():

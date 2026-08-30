@@ -1,4 +1,4 @@
-"""Migrate V3 bullet PPO to a finite-history GRU hierarchical policy."""
+"""Migrate V4 bullet PPO to a finite-history GRU hierarchical policy."""
 
 from __future__ import annotations
 
@@ -19,13 +19,13 @@ from stable_baselines3.common.utils import get_schedule_fn
 from torch import nn
 
 from brotato_ai.training.callbacks import GracefulStopCallback
-from v3.combat_policy import BULLET_HELL_OBSERVATION_SIZE, SEMANTIC_OBSERVATION_SIZE
-from v3.config import load_config
-from v3.env.brotato_api_env import BrotatoApiEnv
-from v3.runtime_callbacks import SaveBestRollingRewardCallback
-from v3.train_bullet_hell_finetune import BulletHellActorExtractor
-from v3.train_combat_finetune import CombatTensorboardCallback, HumanAnchoredPPO, actor_logits
-from v3.train_semantic_combat_bc import load_semantic_records
+from v4.combat_base import BULLET_HELL_OBSERVATION_SIZE, SEMANTIC_OBSERVATION_SIZE
+from v4.config import load_config
+from v4.env.brotato_api_env import BrotatoApiEnv
+from v4.runtime_callbacks import SaveBestRollingRewardCallback
+from v4.train_bullet_hell_finetune import BulletHellActorExtractor
+from v4.train_combat_finetune import CombatTensorboardCallback, HumanAnchoredPPO, actor_logits
+from v4.train_semantic_combat_bc import load_semantic_records
 from v4.combat_policy import (
     HISTORY_FEATURES,
     HISTORY_SIZE,
@@ -196,7 +196,7 @@ def initialize_v4_from_bullet_ppo(
     model: HumanAnchoredPPO,
     source: HumanAnchoredPPO,
 ) -> float:
-    """Copy the complete V3 actor and prove exact initial logit parity."""
+    """Copy the complete V4 actor and prove exact initial logit parity."""
 
     source_extractor = source.policy.pi_features_extractor
     target_extractor = model.policy.pi_features_extractor
@@ -208,7 +208,7 @@ def initialize_v4_from_bullet_ppo(
         or not hasattr(source_extractor, "bullet_residual")
         or not hasattr(source_extractor, "legacy_actor")
     ):
-        raise RuntimeError("source checkpoint is not a V3 bullet-hell PPO policy")
+        raise RuntimeError("source checkpoint is not a V4 bullet-hell PPO policy")
     target_extractor.legacy_actor.extractor.load_state_dict(source_extractor.state_dict())
     target_extractor.legacy_actor.action_net.load_state_dict(
         source.policy.action_net.state_dict()
@@ -232,7 +232,7 @@ def initialize_v4_from_bullet_ppo(
         source_logits = actor_logits(source.policy, old_probe)
         target_logits = actor_logits(model.policy, new_probe)
         difference = float((source_logits - target_logits).abs().max().item())
-    print(f"[v4] exact V3 transfer max_abs_diff={difference:.8g}")
+    print(f"[v4] exact V4 transfer max_abs_diff={difference:.8g}")
     if difference > 1e-5:
         raise RuntimeError(f"V4 actor transfer failed: max_abs_diff={difference}")
     return difference
@@ -549,7 +549,7 @@ def main() -> int:
     )
     if args.bootstrap_only:
         env.close()
-        print("[v4] offline bootstrap verified; live V3 untouched")
+        print("[v4] offline bootstrap verified; live V4 untouched")
         return 0
 
     callbacks = CallbackList([

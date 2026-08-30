@@ -1,4 +1,4 @@
-from v3.combat_policy import center_stagnation_signal
+from v4.combat_base import center_stagnation_signal
 
 
 def _state(x: float, y: float, *, phase: str = "combat") -> dict:

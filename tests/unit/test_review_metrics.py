@@ -40,7 +40,8 @@ def test_history_ablations_only_change_the_declared_slice():
     assert variants["history_shuffled"].shape == observations.shape
 
 def test_human_anchor_coefficient_anneals_linearly():
-    from v3.train_combat_finetune import HumanAnchoredPPO
+    pytest.importorskip("stable_baselines3")
+    from v4.train_combat_finetune import HumanAnchoredPPO
 
     model = object.__new__(HumanAnchoredPPO)
     model.bc_coefficient = 0.20

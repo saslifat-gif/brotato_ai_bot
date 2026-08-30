@@ -13,7 +13,7 @@ terminal screens. The key is observation-only and does not alter movement or
 production control:
 
 ```text
-python v3\record_human_demo.py --output models\version_3\human_demos\marked_runs.sqlite --run-label marked-runs --continue-after-terminal --require-capture
+python v4\record_human_demo.py --output models\version_3\human_demos\marked_runs.sqlite --run-label marked-runs --continue-after-terminal --require-capture
 ```
 
 The recorder stores these as `manual_bookmark` labels in SQLite. Press F9 once
@@ -36,7 +36,7 @@ Example Windows setup:
 set BROTATO_V4_POLICY_MODE=SHADOW_HUMAN
 set BROTATO_V4_HUMAN_MODEL=C:\ml\brotato\models\version_3\human_demos\human_event_bc_manual_set.pt
 set BROTATO_V4_BUILD_POLICY_MODE=HANDCRAFTED
-set BROTATO_V3_AUTOMATE_MENUS=1
+set BROTATO_V4_AUTOMATE_MENUS=1
 python shadow_eval.py --model models\version_3\human_base_ppo_recovery.zip --baseline-kind ppo --dataset models\version_3\human_demos\event_training_manual_set.sqlite --episodes 3 --output reports\shadow_dagger_decisions.jsonl --full-state-log reports\shadow_dagger_states.jsonl --trace-log reports\shadow_dagger_trace.jsonl --results reports\shadow_dagger_results.json --analysis reports\shadow_dagger_analysis.json --capture-full-state
 ```
 
@@ -48,10 +48,10 @@ coverage.
 ## Select and validate
 
 ```text
-python v3\dagger_corrective.py select --shadow-log reports\shadow_dagger_decisions.jsonl --state-log reports\shadow_dagger_states.jsonl --human-dataset models\version_3\human_demos\event_training_manual_set.sqlite --output reports\dagger_queue.jsonl --budget 200 --min-gap-ms 500 --holdout-fraction 0.25 --report reports\dagger_queue.report.json
-python v3\dagger_corrective.py validate --queue reports\dagger_queue.jsonl --report reports\dagger_queue.validation.json
-python v3\dagger_corrective.py label --queue reports\dagger_queue.jsonl --database models\version_3\human_demos\dagger_corrections.sqlite --init-only
-python v3\dagger_corrective.py review --queue reports\dagger_queue.jsonl --output reports\dagger_queue.review.html
+python v4\dagger_corrective.py select --shadow-log reports\shadow_dagger_decisions.jsonl --state-log reports\shadow_dagger_states.jsonl --human-dataset models\version_3\human_demos\event_training_manual_set.sqlite --output reports\dagger_queue.jsonl --budget 200 --min-gap-ms 500 --holdout-fraction 0.25 --report reports\dagger_queue.report.json
+python v4\dagger_corrective.py validate --queue reports\dagger_queue.jsonl --report reports\dagger_queue.validation.json
+python v4\dagger_corrective.py label --queue reports\dagger_queue.jsonl --database models\version_3\human_demos\dagger_corrections.sqlite --init-only
+python v4\dagger_corrective.py review --queue reports\dagger_queue.jsonl --output reports\dagger_queue.review.html
 ```
 
 Selection is deterministic and prioritizes disagreement, high confidence,
@@ -83,10 +83,10 @@ After manual labeling, merge only the corrective training split. The holdout
 is excluded by default:
 
 ```text
-python v3\dagger_corrective.py merge --base-dataset models\version_3\human_demos\event_training_manual_set.sqlite --corrections models\version_3\human_demos\dagger_corrections.sqlite --output models\version_3\human_demos\event_training_manual_set_dagger.sqlite
+python v4\dagger_corrective.py merge --base-dataset models\version_3\human_demos\event_training_manual_set.sqlite --corrections models\version_3\human_demos\dagger_corrections.sqlite --output models\version_3\human_demos\event_training_manual_set_dagger.sqlite
 set PYTHONPATH=src
-python v3_event_human_bc.py --dataset models\version_3\human_demos\event_training_manual_set_dagger.sqlite --report reports\human_manual_set_dagger_event_bc.json --framewise-report models\version_3\human_demos\session_001_bc_diagnostics.json --seed 7 --epochs 20 --negative-ratio 4 --checkpoint models\version_3\human_demos\human_event_bc_manual_set_dagger.pt
-python v3\dagger_corrective.py evaluate --corrections models\version_3\human_demos\dagger_corrections.sqlite --checkpoint models\version_3\human_demos\human_event_bc_manual_set_dagger.pt --human-dataset models\version_3\human_demos\event_training_manual_set.sqlite --report reports\dagger_corrective_holdout.json
+python v4.train_event_human_bc.py --dataset models\version_3\human_demos\event_training_manual_set_dagger.sqlite --report reports\human_manual_set_dagger_event_bc.json --framewise-report models\version_3\human_demos\session_001_bc_diagnostics.json --seed 7 --epochs 20 --negative-ratio 4 --checkpoint models\version_3\human_demos\human_event_bc_manual_set_dagger.pt
+python v4\dagger_corrective.py evaluate --corrections models\version_3\human_demos\dagger_corrections.sqlite --checkpoint models\version_3\human_demos\human_event_bc_manual_set_dagger.pt --human-dataset models\version_3\human_demos\event_training_manual_set.sqlite --report reports\dagger_corrective_holdout.json
 ```
 
 The corrective holdout reports action accuracy, change F1, calibration, model

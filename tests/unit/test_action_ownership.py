@@ -264,10 +264,10 @@ def test_bridge_rejects_direct_movement_send_without_connecting():
 
 def test_runtime_environment_has_one_static_action_write_site():
     root = Path(__file__).resolve().parents[2]
-    source = (root / "v3" / "env" / "brotato_api_env.py").read_text(encoding="utf-8")
+    source = (root / "v4" / "env" / "brotato_api_env.py").read_text(encoding="utf-8")
     assert source.count("action_writer.write(") == 1
     assert "action_message(" not in source
-    callback = (root / "v3" / "train_combat_finetune.py").read_text(encoding="utf-8")
+    callback = (root / "v4" / "train_combat_finetune.py").read_text(encoding="utf-8")
     for tag in (
         "combat/hazard_applied_enemy_risk",
         "combat/hazard_applied_projectile_risk",

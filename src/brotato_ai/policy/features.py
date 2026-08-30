@@ -1,7 +1,7 @@
 """Live-side builder for the event-based human-policy model input.
 
 The event imitation model is trained on demonstration frames whose semantic
-feature vector is produced by ``v3.combat_policy.SemanticCombatVectorizer``
+feature vector is produced by ``v4.combat_base.SemanticCombatVectorizer``
 and stored in the demo dataset.  This builder reproduces the exact training
 input for live states:
 
@@ -14,7 +14,7 @@ input for live states:
 
 where ``state_features`` is the semantic vector with the old previous-action
 one-hot slice zeroed out.  The training-side construction lives in
-``v3_event_human_bc.build_examples``; the parity test
+``v4.train_event_human_bc.build_examples``; the parity test
 ``tests/unit/test_human_feature_parity.py`` guarantees that both paths agree.
 
 Timing is expressed in nanoseconds on a monotonic clock, matching the
@@ -40,7 +40,7 @@ _FEATURE_DECIMALS = 6
 
 
 class SemanticVectorizer(Protocol):
-    """Minimal contract satisfied by ``v3.combat_policy.SemanticCombatVectorizer``."""
+    """Minimal contract satisfied by ``v4.combat_base.SemanticCombatVectorizer``."""
 
     def build(self, state: Mapping[str, Any], previous_action: int = 0) -> np.ndarray: ...
 
@@ -57,8 +57,8 @@ class HumanPolicyFeatureBuilder:
     """Incrementally build event-model inputs from a live state stream.
 
     The vectorizer dependency is injected or resolved lazily; this module is
-    the only production seam allowed to reach into the ``v3`` runtime for the
-    training-representation builder, and it never imports ``v3`` at module
+    the only production seam allowed to reach into the V4 runtime for the
+    training-representation builder, and it never imports V4 at module
     import time so core tests stay lightweight.
     """
 
@@ -79,7 +79,7 @@ class HumanPolicyFeatureBuilder:
 
     def _resolve_vectorizer(self) -> SemanticVectorizer:
         if self._vectorizer is None:
-            from v3.combat_policy import SemanticCombatVectorizer
+            from v4.combat_base import SemanticCombatVectorizer
 
             self._vectorizer = SemanticCombatVectorizer()
         return self._vectorizer

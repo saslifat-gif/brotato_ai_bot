@@ -7,7 +7,7 @@ from typing import Any, Deque, Mapping
 
 import numpy as np
 
-from v3.combat_policy import (
+from v4.combat_base import (
     ACTION_VECTORS,
     BULLET_HELL_OBSERVATION_SIZE,
     BulletHellCombatVectorizer,
@@ -15,7 +15,7 @@ from v3.combat_policy import (
     _enemy_runtime_index,
     _owner_threat_code,
 )
-from v3.protocol import MoveAction
+from v4.protocol import MoveAction
 
 
 HISTORY_STEPS = 8
@@ -352,9 +352,9 @@ def _boss_escape_risk(
 
 
 class HierarchicalCombatVectorizer:
-    """V4 observation: V3 prefix, eight transitions, and a macro objective.
+    """V4 observation: V4 prefix, eight transitions, and a macro objective.
 
-    The V3 prefix is byte-for-byte compatible with the trained bullet policy.
+    The V4 prefix is byte-for-byte compatible with the trained bullet policy.
     A GRU can therefore learn temporal corrections without discarding the old
     actor. Macro objectives deliberately remain transparent and inspectable.
     """

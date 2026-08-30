@@ -2,21 +2,12 @@
 numpy>=1.26
 opencv-python>=4.10
 torch>=2.2
-torchvision>=0.17
 gymnasium>=0.29
 stable-baselines3>=2.3,<3
 sb3-contrib>=2.3,<3
-tensorboard>=2.14  # required by SB3 when tensorboard_log is set (see v1/train.py)
-pyyaml>=6.0
+tensorboard>=2.14  # required by SB3 when tensorboard_log is set (see v4/train.py)
 
-# Capture / input / detection
-mss>=9.0
-pydirectinput>=1.0
-ultralytics>=8.4.63
-inference-sdk>=0.34
-windows-capture>=1.3
-
-# WinRT OCR (Windows only)
+# Kept only for the explicitly protected v1/shop/ocr_winmedia.py module.
 winrt-runtime>=3.2
 winrt-Windows.Media.Ocr>=3.2
 winrt-Windows.Graphics.Imaging>=3.2

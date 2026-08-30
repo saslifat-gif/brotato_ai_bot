@@ -4,7 +4,7 @@ Date: 2026-08-28
 Host: `lifat@192.168.1.3` (`C:\ml\brotato`)  
 Bridge handshake: `mod=0.3.20`  
 Frozen checkpoint: `models/version_3/ranged_smg_v2/v4_temporal_best/best_training_agent.zip` (160k)  
-Launcher: `v4/run_frozen.py` with `BROTATO_V4_FULL_RESTART=1`  
+Launcher: `v4/run_rate.py` with `BROTATO_V4_FULL_RESTART=1`
 Controller: unchanged V4 pipeline; one final action writer; hazard arbiter on
 
 Each rate used three full EndRun restarts (Cancel RetryWave, then RestartButton).

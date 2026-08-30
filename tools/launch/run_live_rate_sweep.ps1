@@ -4,10 +4,10 @@ New-Item -ItemType Directory -Force -Path C:\ml\brotato\reports | Out-Null
 
 $python = "C:\Users\lifat\miniconda3\envs\bota_ai\python.exe"
 $env:PYTHONPATH = "C:\ml\brotato\src;C:\ml\brotato"
-$env:BROTATO_V3_OUTPUT_DIR = "C:\ml\brotato\models\version_3\ranged_smg_v2"
-$env:BROTATO_V3_UI_BUILD_PROFILE = "ranged_smg"
-$env:BROTATO_V3_UI_DATASET = "C:\ml\brotato\models\version_3\ui_decisions_ranged_smg_v2.jsonl"
-$env:BROTATO_V3_SAFETY_SHIELD = "1"
+$env:BROTATO_V4_OUTPUT_DIR = "C:\ml\brotato\models\version_3\ranged_smg_v2"
+$env:BROTATO_V4_UI_BUILD_PROFILE = "ranged_smg"
+$env:BROTATO_V4_UI_DATASET = "C:\ml\brotato\models\version_3\ui_decisions_ranged_smg_v2.jsonl"
+$env:BROTATO_V4_SAFETY_SHIELD = "1"
 $env:BROTATO_V4_FULL_RESTART = "1"
 $env:BROTATO_TORCH_THREADS = "8"
 

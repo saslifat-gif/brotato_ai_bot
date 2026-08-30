@@ -32,7 +32,7 @@ def test_cache_reports_when_protected_file_alone_exceeds_limit(tmp_path):
 def test_config_is_validated_and_has_stable_startup_summary(tmp_path):
     cfg = load_config(
         {
-            "BROTATO_V3_OUTPUT_DIR": str(tmp_path),
+            "BROTATO_V4_OUTPUT_DIR": str(tmp_path),
             "BROTATO_V4_CONTROL_HZ": "24",
             "BROTATO_V4_RECORDER_HZ": "60",
             "BROTATO_V4_CACHE_MAX_GIB": "10",
@@ -42,7 +42,7 @@ def test_config_is_validated_and_has_stable_startup_summary(tmp_path):
     assert "control_hz=24" in cfg.startup_summary()
     high_rate = load_config(
         {
-            "BROTATO_V3_OUTPUT_DIR": str(tmp_path),
+            "BROTATO_V4_OUTPUT_DIR": str(tmp_path),
             "BROTATO_V4_CONTROL_HZ": "30",
         }
     )
@@ -50,7 +50,7 @@ def test_config_is_validated_and_has_stable_startup_summary(tmp_path):
     with pytest.raises(ValueError, match="control_hz"):
         load_config(
             {
-                "BROTATO_V3_OUTPUT_DIR": str(tmp_path),
+                "BROTATO_V4_OUTPUT_DIR": str(tmp_path),
                 "BROTATO_V4_CONTROL_HZ": "61",
             }
         )

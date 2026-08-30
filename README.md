@@ -1,138 +1,86 @@
-# Brotato AI Bot
+# Brotato AI
 
-Windows-only reinforcement learning project for **Brotato**.
+This repository contains one active V4 system for Brotato: a structured game
+bridge, a single control pipeline, human-demonstration recording, training,
+replay, and evaluation. The old screen-capture detector generations are no
+longer part of the runtime.
 
-A reinforcement learning bot for Brotato running on **Windows**. Uses PPO to train a policy network, with modules for the game environment, reward system, shop strategy, and runtime control.
+## Setup
 
-The recommended API-first v3 is available in [`v3/`](v3/README.md). It uses a
-local Brotato mod to exchange structured state and actions without screen
-capture, OCR or mouse coordinates. The detector-driven [`v2/`](v2/README.md)
-and original v1 remain available for compatibility.
+Windows 10/11 and Python 3.11 are supported. Install the requirements in the
+`bota_ai` environment, then install the bridge and restart Brotato with
+`--enable-mods`:
 
-## Features
-
-- PPO training pipeline: `v1/train.py`
-- Custom game environment: `v1/env/brotato_env.py`
-- Reward engine: `v1/reward/reward_engine.py`
-- Shop strategy & OCR: `v1/shop/`
-- Utility scripts: HP annotation, YOLO classification data prep, etc.
-
-## Requirements
-
-- OS: Windows 10/11
-- Python: 3.11 recommended
-- Game window: Brotato (window title/process name configurable via environment variables)
-
-## Quick Start
-
-For the recommended v3 API path, first create and activate a virtual environment:
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
+```powershell
+conda activate bota_ai
+Set-Location C:\ml\brotato
+$env:PYTHONPATH = "src"
+python -m v4.install_mod --game-dir "C:\Program Files (x86)\Steam\steamapps\common\Brotato"
 ```
 
-Install dependencies:
+The default policy is `HANDCRAFTED`. It is the existing production control
+path. `SHADOW_HUMAN` only logs learned proposals; `HYBRID_HUMAN` remains off
+unless it is explicitly approved after evaluation.
 
-```bash
-pip install -r requirements.txt
+## Manual demonstrations
+
+The recorder is observation-only: it never sends movement or menu actions.
+Play manually and press F9 to bookmark a meaningful state. All inputs, state,
+features, action transitions, builds, rewards, timestamps, and outcomes are
+recorded automatically.
+
+```powershell
+$env:BROTATO_V4_POLICY_MODE = "HANDCRAFTED"
+$env:BROTATO_V4_AUTOMATE_MENUS = "0"
+python -m v4.record_human_demo `
+  --output models\version_3\human_demos\manual_run01.sqlite `
+  --run-label manual_run01 `
+  --require-capture
 ```
 
-Then run `install_v3_mod.bat`, set Brotato's Steam Launch Options to
-`--enable-mods`, and restart the game. The installer activates
-**BrotatoRLBridge** when a ModLoader profile already exists. Run
-`diagnose_v3.bat` once; if the state stream is healthy, train with
-`train_v3.bat`. See [`v3/README.md`](v3/README.md) for the current manual
-shop/reset limitation and troubleshooting.
+Use `--continue-after-terminal` when recording repeated runs in one file.
+Do not intentionally create deaths; mark naturally difficult states before
+making the recovery action.
 
-For the legacy v1 path:
+## Autonomous evaluation
 
-1. Configure environment variables (optional)
-   - Copy `.env.example` and edit as needed.
-   - If using the Roboflow detector, provide a `ROBOFLOW_API_KEY`.
+Run the frozen baseline with the model and keep the learned human policy in
+shadow mode when comparing it:
 
-2. Start training
-```bash
-python v1/train.py
-```
-Or use the batch script:
-```bat
-train_mask.bat
+```powershell
+$env:BROTATO_V4_POLICY_MODE = "SHADOW_HUMAN"
+$env:BROTATO_V4_HUMAN_MODEL = "models\version_3\human_demos\human_event_bc.pt"
+$env:BROTATO_V4_AUTOMATE_MENUS = "1"
+python -m v4.run_frozen `
+  --model models\version_3\human_base_ppo_recovery.zip `
+  --policy model --episodes 3 `
+  --results reports\shadow.json
 ```
 
-Before training on a multi-monitor machine, run the preflight check:
-```bat
-diagnose_runtime.bat
-```
-It verifies the Brotato window, its absolute desktop region, capture frames,
-and the selected input backend. Add `--focus --move-test` to the Python
-command only when you want to test a real foreground W-key hold.
+## Common commands
 
-## Testing
-
-Default unit test directory is `test/v1/unit`:
-```bash
+```powershell
+python -m v4.validate_human_demo <dataset.sqlite> --require-capture
+python -m v4.report_human_demo_quality <run1.sqlite> <run2.sqlite> <run3.sqlite>
+python -m v4.train_event_human_bc --dataset <dataset.sqlite> --report <report.json> --checkpoint <model.pt>
+python -m v4.dagger_corrective --help
 pytest
 ```
 
-## Environment Variables
+## Layout
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ROBOFLOW_API_KEY` | Optional | Enables the Roboflow detection path |
-| `BROTATO_OUTPUT_DIR` | Optional | Output directory for models and checkpoints |
-| `BROTATO_WINDOW_TITLE` | Optional | Game window title |
-| `BROTATO_EXE_NAME` | Optional | Game executable name (e.g. `Brotato.exe`) |
-| `BROTATO_CAPTURE_BACKEND` | Optional | V1 uses `mss`; V2 supports `obs-camera`, `windows-capture`, or `mss` |
-| `BROTATO_OBS_CAMERA_INDEX` | Optional | OBS Virtual Camera device index for V2 (default `0`) |
-| `BROTATO_INPUT_MODE` | Optional | `physical_foreground` (default) or `background` Win32 messages |
-| `BROTATO_CONTROL_PANEL` | Optional | Show the OpenCV control panel; default `false` so it cannot steal game focus |
-| `BROTATO_ACTION_DIAGONAL` | Optional | `true` enables 8-direction movement (`Discrete(9)`: cardinals + diagonals) for circular kiting. Default `false` (5 actions). Changing this invalidates existing checkpoints. |
-
-Full configuration options: `v1/config/runtime_config.py`
-
-## Training Hotkeys
-
-| Key | Action |
-|-----|--------|
-| `F7` | Start/pause automation |
-| `F8` | Request training stop and save |
-| `F6` | Show/hide debug window |
-
-## Metrics
-
-Per-episode game-outcome KPIs are logged to TensorBoard (independent of the
-engineered reward, so reward-shaping changes can be judged against ground truth):
-
-- `kpi/waves_completed`, `kpi/survival_time_sec`, `kpi/survival_steps`
-- `kpi/kills`, `kpi/loot_events`, `kpi/episode_reward`
-- `kpi_mean/*` — rolling 20-episode means for smoother curves
-
-A one-line `[kpi] ...` summary is also printed to the console at each episode end.
-
-```bash
-tensorboard --logdir models/version_1/ppo_brotato_logs
+```text
+src/brotato_ai/     shared domain, bridge, control, data, policy, and evaluation code
+v4/                 active runtime, trainer, recorder, evaluator, DAgger tools, and mod
+tests/              unit, replay, and integration tests
+docs/               architecture, operations, and dataset/evaluation notes
+models/             local checkpoints and recordings (ignored by Git)
+reports/            local evaluation output (ignored by Git)
 ```
 
-## Project Structure
-
-```
-.
-├─v1/                 # Core training and environment code
-│  ├─config/          # Runtime configuration
-│  ├─env/             # Game environment and detection adapters
-│  ├─reward/          # Reward calculation
-│  ├─runtime/         # Input, capture, phase state, stop control, debug window
-│  └─shop/            # Shop strategy and OCR
-├─v2/                 # Experimental detector-driven vision agent
-├─v3/                 # Local mod API, structured environment and trainer
-├─test/               # Tests
-├─raw_models/         # Raw models, assets, experimental scripts
-├─train_mask.bat      # Windows launch script
-├─diagnose_runtime.bat # Window/capture/input preflight
-└─requirements.txt    # Dependencies
-```
+The existing `models/version_3` folder name is retained only to avoid moving
+user checkpoints; it is not a second code generation.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT — see [`LICENSE`](LICENSE).

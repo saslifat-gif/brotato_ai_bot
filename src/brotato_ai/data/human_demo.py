@@ -480,7 +480,7 @@ class HumanDemoWriter:
                 }
             )
             try:
-                from v3.combat_policy import SemanticCombatVectorizer
+                from v4.combat_base import SemanticCombatVectorizer
                 features = [round(float(item), 6) for item in SemanticCombatVectorizer().build(state, self._last_action)]
             except Exception:
                 features = None
@@ -568,7 +568,7 @@ class HumanDemoWriter:
         """
 
         if self._reward_engine is None:
-            from v3.reward import ApiRewardEngine
+            from v4.reward import ApiRewardEngine
 
             self._reward_engine = ApiRewardEngine()
             self._reward_engine.reset(state)

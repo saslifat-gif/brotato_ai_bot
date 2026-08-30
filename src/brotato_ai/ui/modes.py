@@ -3,7 +3,7 @@
 Build decisions run on a different timescale from movement and are selected
 through an explicit mode (spec section 11):
 
-- HANDCRAFTED (default): the rule teachers in ``v3.ui_build_policy`` decide,
+- HANDCRAFTED (default): the rule teachers in ``v4.ui_build_policy`` decide,
   exactly as in production today.
 - HUMAN_RECORDED: human choices are captured through the decision logger for
   later study; selection stays handcrafted until a validated model exists.

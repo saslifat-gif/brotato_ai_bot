@@ -4,12 +4,12 @@ import pytest
 
 pytest.importorskip("numpy")
 
-from v3.dagger_corrective import (
+from v4.dagger_corrective import (
     _resolve_captured_state,
     _stable_holdout,
     priority_score,
 )
-from v3.dagger_review import render_review_html
+from v4.dagger_review import render_review_html
 
 
 def _record():

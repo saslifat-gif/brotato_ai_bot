@@ -1,165 +1,179 @@
-"""Run the unchanged V4 controller at one explicitly selected bridge rate."""
+"""Run a frozen deterministic combat policy while automating and logging UI."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import torch
-from stable_baselines3.common.monitor import Monitor
 
-from brotato_ai.training.configs import load_config
-from v3.env.brotato_api_env import BrotatoApiEnv
-from v4.combat_policy import HierarchicalCombatVectorizer
-from v4.train_temporal_hierarchical import HumanAnchoredPPO
+try:
+    from sb3_contrib import RecurrentPPO
+except Exception:
+    RecurrentPPO = None
+
+from v4.combat_base import (
+    CombatHeuristicTeacher,
+    CombatPolicyBase,
+    RichCombatVectorizer,
+    SemanticCombatVectorizer,
+    load_semantic_combat_base,
+    load_combat_base,
+)
+from v4.config import load_config
+
+
+def load_combat_bc(path: Path) -> tuple[CombatPolicyBase, dict]:
+    """Backward-compatible alias used by existing evaluation commands."""
+
+    return load_combat_base(path)
 
 
 def main() -> int:
+    from v4.env.brotato_api_env import BrotatoApiEnv
+
     parser = argparse.ArgumentParser(
-        description="Frozen V4 controller rate-sensitivity run"
+        description="Frozen Brotato policy runner for evaluation and safe data collection"
     )
-    parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--state-hz", type=float, required=True)
-    parser.add_argument("--timesteps", type=int, default=100_000)
-    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--model", type=Path)
     parser.add_argument(
-        "--device",
-        default="cpu",
-        help="PPO device. cpu uses the machine cores; cuda is slower for this MLP.",
+        "--policy",
+        choices=("model", "bc", "semantic", "teacher"),
+        default="model",
     )
-    parser.add_argument(
-        "--torch-threads",
-        type=int,
-        default=int(os.environ.get("BROTATO_TORCH_THREADS", "8")),
-        help="CPU threads for PPO/NumPy. Default 8 physical cores.",
-    )
-    parser.add_argument("--results", type=Path, required=True)
+    parser.add_argument("--timesteps", type=int, default=1_000_000)
+    parser.add_argument("--episodes", type=int, default=0)
+    parser.add_argument("--results", type=Path)
     parser.add_argument("--combat-dataset", type=Path)
     parser.add_argument("--no-safety", action="store_true")
     args = parser.parse_args()
-    if not 8.0 <= args.state_hz <= 60.0:
-        parser.error("--state-hz must be between 8 and 60")
-    if args.episodes < 0 or args.timesteps < 1:
-        parser.error("episodes must be non-negative and timesteps must be positive")
-    if args.torch_threads < 1:
-        parser.error("--torch-threads must be at least 1")
-
-    os.environ["OMP_NUM_THREADS"] = str(args.torch_threads)
-    os.environ["MKL_NUM_THREADS"] = str(args.torch_threads)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(args.torch_threads)
-    torch.set_num_threads(int(args.torch_threads))
-    try:
-        torch.set_num_interop_threads(1)
-    except RuntimeError:
-        pass
+    if args.policy in {"model", "bc", "semantic"} and args.model is None:
+        parser.error(f"--model is required with --policy {args.policy}")
+    if args.policy == "model" and RecurrentPPO is None:
+        raise RuntimeError("sb3-contrib is required: pip install sb3-contrib")
 
     cfg = load_config()
     cfg = replace(
         cfg,
         safety_shield=not args.no_safety,
-        combat_decision_log=(
-            args.combat_dataset.resolve() if args.combat_dataset else None
-        ),
+        combat_decision_log=args.combat_dataset.resolve() if args.combat_dataset else None,
     )
-    raw_env = BrotatoApiEnv(
-        cfg,
-        vectorizer=HierarchicalCombatVectorizer(),
-        state_hz=float(args.state_hz),
-    )
-    env = Monitor(raw_env)
-    model = HumanAnchoredPPO.load(
-        str(args.model.resolve()), env=env, device=args.device
-    )
+    env = BrotatoApiEnv(cfg)
+    model = None
+    bc_model = None
+    bc_vectorizer = None
+    semantic_model = None
+    semantic_vectorizer = None
+    teacher = None
+    source = args.policy
+    if args.policy == "model":
+        model = RecurrentPPO.load(str(args.model.resolve()), device="auto")
+        print(f"[v4-frozen] model={args.model.resolve()} deterministic=True")
+    elif args.policy == "bc":
+        bc_model, metadata = load_combat_bc(args.model)
+        bc_vectorizer = RichCombatVectorizer()
+        print(
+            f"[v4-frozen] combat_bc={args.model.resolve()} deterministic=True "
+            f"validation_accuracy={metadata.get('validation_accuracy')} "
+            f"best_epoch={metadata.get('best_epoch')}"
+        )
+    elif args.policy == "semantic":
+        semantic_model, metadata = load_semantic_combat_base(args.model)
+        semantic_vectorizer = SemanticCombatVectorizer()
+        print(
+            f"[v4-frozen] semantic_base={args.model.resolve()} deterministic=True "
+            f"validation_accuracy={metadata.get('validation_accuracy')} "
+            f"best_epoch={metadata.get('best_epoch')}"
+        )
+    else:
+        teacher = CombatHeuristicTeacher()
+        print("[v4-frozen] policy=structured_teacher")
     print(
-        f"[v4-frozen-rate] model={args.model.resolve()} state_hz={args.state_hz:g} "
-        f"safety={cfg.safety_shield} device={args.device} "
-        f"torch_threads={args.torch_threads} "
-        f"logical_cpus={os.cpu_count()}",
-        flush=True,
+        f"[v4-frozen] safety={cfg.safety_shield} ui_dataset={cfg.ui_decision_log} "
+        f"combat_dataset={cfg.combat_decision_log}"
     )
 
     observation, info = env.reset()
+    recurrent_state = None
+    episode_start = np.ones((1,), dtype=bool)
     episode_reward = 0.0
     episode_steps = 0
-    episode_id = 0
-    action_changes = 0
-    previous_action: int | None = None
-    health_loss = 0.0
-    projectile_hits = 0
-    hazard_damage_events = 0
-    safety_overrides = 0
-    results: list[dict] = []
+    episode_shield_overrides = 0
+    episode_action_counts = [0] * 9
+    completed = 0
+    results = []
     try:
-        for _ in range(int(args.timesteps)):
-            action, _ = model.predict(observation, deterministic=True)
-            selected = int(np.asarray(action).reshape(-1)[0])
-            if previous_action is not None:
-                action_changes += int(selected != previous_action)
-            previous_action = selected
+        for _step in range(max(1, int(args.timesteps))):
+            if model is not None:
+                action, recurrent_state = model.predict(
+                    observation,
+                    state=recurrent_state,
+                    episode_start=episode_start,
+                    deterministic=True,
+                )
+                selected = int(np.asarray(action).reshape(-1)[0])
+            elif bc_model is not None:
+                rich = bc_vectorizer.build(env.last_state or {}, env.previous_action)
+                with torch.no_grad():
+                    selected = int(
+                        bc_model(torch.from_numpy(rich).unsqueeze(0)).argmax(dim=1).item()
+                    )
+            elif semantic_model is not None:
+                semantic = semantic_vectorizer.build(env.last_state or {}, env.previous_action)
+                with torch.no_grad():
+                    selected = int(
+                        semantic_model(torch.from_numpy(semantic).unsqueeze(0))
+                        .argmax(dim=1)
+                        .item()
+                    )
+            else:
+                selected = int(teacher.select(env.last_state or {}))
             observation, reward, terminated, truncated, info = env.step(selected)
             episode_reward += float(reward)
             episode_steps += 1
-            taken = float(info.get("damage_taken", 0.0) or 0.0)
-            health_loss += max(0.0, taken)
-            projectile_hits += int(float(info.get("damage_after_projectile_visible", 0.0) or 0.0) > 0.0)
-            hazard_damage_events += int(float(info.get("damage_after_projectile_hazard", 0.0) or 0.0) > 0.0)
-            safety_overrides += int(bool(info.get("safety_overridden", False)))
-            if not (terminated or truncated):
+            episode_action_counts[selected] += 1
+            episode_shield_overrides += int(bool(info.get("safety_overridden")))
+            done = bool(terminated or truncated)
+            episode_start = np.asarray([done], dtype=bool)
+            if not done:
                 continue
-            episode_id += 1
-            results.append(
-                {
-                    "episode": episode_id,
-                    "rate_hz": float(args.state_hz),
-                    "model": str(args.model.resolve()),
-                    "reward": episode_reward,
-                    "steps": episode_steps,
-                    "wave": int(info.get("wave", 0)),
-                    "dead": bool(terminated)
-                    and str(info.get("phase", "")).lower() != "victory",
-                    "victory": str(info.get("phase", "")).lower() == "victory",
-                    "health_fraction": float(info.get("health_fraction", 0.0) or 0.0),
-                    "health_loss": health_loss,
-                    "projectile_hits": projectile_hits,
-                    "hazard_damage_events": hazard_damage_events,
-                    "effective_state_hz": float(info.get("effective_state_hz", 0.0)),
-                    "control_overruns": int(info.get("control_overruns", 0)),
-                    "control_missed_ticks": int(info.get("control_missed_ticks", 0)),
-                    "action_changes": action_changes,
-                    "safety_overrides": safety_overrides,
-                    "final_phase": info.get("phase"),
-                }
-            )
-            args.results.parent.mkdir(parents=True, exist_ok=True)
-            args.results.write_text(json.dumps(results, indent=2), encoding="utf-8")
+            summary = {
+                "episode": completed + 1,
+                "reward": episode_reward,
+                "steps": episode_steps,
+                "wave": int(info.get("wave", 0)),
+                "policy": source,
+                "safety": cfg.safety_shield,
+                "shield_overrides": episode_shield_overrides,
+                "shield_rate": episode_shield_overrides / max(1, episode_steps),
+                "requested_action_counts": episode_action_counts,
+            }
+            results.append(summary)
+            completed += 1
             print(
-                f"[v4-frozen-rate] episode={episode_id} wave={results[-1]['wave']} "
-                f"steps={episode_steps} dead={int(results[-1]['dead'])} "
-                f"hp_loss={results[-1]['health_loss']:.1f} "
-                f"proj_hits={results[-1]['projectile_hits']} "
-                f"effective_hz={results[-1]['effective_state_hz']:.2f}",
-                flush=True,
+                f"[v4-frozen] episode={completed} reward={episode_reward:.3f} "
+                f"steps={episode_steps} wave={summary['wave']}"
             )
-            if args.episodes > 0 and episode_id >= args.episodes:
+            if args.results:
+                args.results.parent.mkdir(parents=True, exist_ok=True)
+                args.results.write_text(json.dumps(results, indent=2), encoding="utf-8")
+            if args.episodes > 0 and completed >= args.episodes:
                 break
             observation, info = env.reset()
+            recurrent_state = None
+            episode_start[:] = True
             episode_reward = 0.0
             episode_steps = 0
-            action_changes = 0
-            previous_action = None
-            health_loss = 0.0
-            projectile_hits = 0
-            hazard_damage_events = 0
-            safety_overrides = 0
+            episode_shield_overrides = 0
+            episode_action_counts = [0] * 9
     except KeyboardInterrupt:
-        print("[v4-frozen-rate] stopped", flush=True)
+        print("[v4-frozen] stopped")
         return 130
     finally:
-        raw_env.close()
+        env.close()
     return 0
 
 

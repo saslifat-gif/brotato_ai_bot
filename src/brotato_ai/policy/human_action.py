@@ -3,7 +3,7 @@
 Contract (see docs/ARCHITECTURE.md, "Learned-model contract"):
 
 - input: one ``HumanPolicyFeatureBuilder`` input vector (state trends plus the
-  held-action one-hot), matching ``v3_event_human_bc.build_examples``.
+  held-action one-hot), matching ``v4.train_event_human_bc.build_examples``.
 - output: ``HumanProposal`` with the selected next action (argmax excluding
   the held action, mirroring the offline ``selected_action``), the full action
   probability distribution, the change-gate probability, and a diagnostic

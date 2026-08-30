@@ -23,7 +23,7 @@ count, fresh-state rates were 59.508 Hz for 0–10 projectiles, 59.889 Hz for
 
 The earlier `10.07 Hz` dense-projectile figure was an analysis artifact: the
 benchmark selected noncontiguous high-projectile rows and incorrectly treated
-the gaps between selected rows as source intervals. `v3/profile_runtime.py`
+the gaps between selected rows as source intervals. `v4/profile_runtime.py`
 now labels those intervals as noncontiguous subset gaps and no longer reports
 them as a source rate.
 
@@ -32,14 +32,14 @@ them as a source rate.
 Analyze an existing recording:
 
 ```text
-PYTHONPATH=src;. python v3/diagnose_source.py models\version_3\raw_records\rate_experiment.jsonl --output reports\source_boundary_existing_recording.json
+PYTHONPATH=src;. python v4/diagnose_source.py models\version_3\raw_records\rate_experiment.jsonl --output reports\source_boundary_existing_recording.json
 ```
 
 Run the minimal reader against the independent raw stream. It performs no
 controller, feature, reward, action, or disk-recording work:
 
 ```text
-PYTHONPATH=src;. python v3/diagnose_source.py --seconds 60 --output reports\source_boundary_minimal_live.json
+PYTHONPATH=src;. python v4/diagnose_source.py --seconds 60 --output reports\source_boundary_minimal_live.json
 ```
 
 The normal trainer can additionally write bounded per-state 4242 boundary
@@ -64,7 +64,7 @@ existing source-boundary evidence.
 The controller cadence is a deliberate publisher schedule, not a hidden
 socket or Python polling limit:
 
-1. `v3/mod/Lifat-BrotatoRLBridge/bridge.gd::_process` accumulates
+1. `v4/mod/Lifat-BrotatoRLBridge/bridge.gd::_process` accumulates
    `_state_elapsed` and calls `_publish_state` when it reaches
    `_state_interval_sec()`.
 2. `_state_interval_sec()` returns `1.0 / clamp(_requested_state_hz, 4, 60)`.

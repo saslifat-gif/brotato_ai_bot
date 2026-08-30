@@ -30,7 +30,6 @@ Thumbs.db
 models/
 datasets/
 point/
-raw_models/runs/
 *.zip
 *.onnx
 *.pth

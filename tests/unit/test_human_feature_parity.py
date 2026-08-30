@@ -2,7 +2,7 @@
 
 The strongest available parity check: build a real demonstration dataset in a
 temporary SQLite file through ``HumanDemoWriter`` (the production recorder
-path), then compare ``v3_event_human_bc.build_examples`` inputs (training) with
+path), then compare ``v4.train_event_human_bc.build_examples`` inputs (training) with
 ``HumanPolicyFeatureBuilder`` inputs (live inference) for the same state
 sequence.
 """
@@ -80,7 +80,7 @@ def test_live_builder_matches_training_example_inputs(tmp_path):
     root = Path(__file__).resolve().parents[2]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    import v3_event_human_bc as event_bc
+    import v4.train_event_human_bc as event_bc
 
     dataset = tmp_path / "parity.sqlite"
     _write_dataset(dataset)

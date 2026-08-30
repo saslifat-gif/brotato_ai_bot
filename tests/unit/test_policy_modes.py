@@ -30,9 +30,9 @@ def test_parse_policy_mode_fails_loudly_on_unknown():
 
 def _env(**overrides):
     env = {
-        "BROTATO_V3_HOST": "127.0.0.1",
-        "BROTATO_V3_PORT": "4242",
-        "BROTATO_V3_OUTPUT_DIR": "models/version_3",
+        "BROTATO_V4_HOST": "127.0.0.1",
+        "BROTATO_V4_PORT": "4242",
+        "BROTATO_V4_OUTPUT_DIR": "models/version_3",
     }
     env.update(overrides)
     return env

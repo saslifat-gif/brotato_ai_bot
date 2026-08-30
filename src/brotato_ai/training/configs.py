@@ -96,7 +96,7 @@ class RuntimeConfig:
             if self.ui_model_path is None or not self.ui_model_explicit:
                 raise ValueError(
                     "LEARNED build policy requires an explicitly configured model "
-                    "(BROTATO_V3_UI_MODEL); auto-discovered candidate checkpoints are "
+                    "(BROTATO_V4_UI_MODEL); auto-discovered candidate checkpoints are "
                     "refused so an undertrained model cannot be deployed silently"
                 )
         return self
@@ -118,17 +118,14 @@ class RuntimeConfig:
         )
 
 
-V3Config = RuntimeConfig
-
-
 def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
     env = os.environ if environ is None else environ
     root = Path(__file__).resolve().parents[3]
-    output = Path(env.get("BROTATO_V3_OUTPUT_DIR", str(root / "models" / "version_3")))
+    output = Path(env.get("BROTATO_V4_OUTPUT_DIR", str(root / "models" / "version_3")))
     if not output.is_absolute():
         output = (root / output).resolve()
-    ui_build_profile = env.get("BROTATO_V3_UI_BUILD_PROFILE", "ranged_smg").strip().lower()
-    ui_model_value = env.get("BROTATO_V3_UI_MODEL", "").strip()
+    ui_build_profile = env.get("BROTATO_V4_UI_BUILD_PROFILE", "ranged_smg").strip().lower()
+    ui_model_value = env.get("BROTATO_V4_UI_MODEL", "").strip()
     ui_model_explicit = bool(ui_model_value)
     if ui_model_value:
         ui_model_path = Path(ui_model_value).resolve()
@@ -139,14 +136,14 @@ def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
         candidate = next((output / name for name in candidate_names if (output / name).exists()), None)
         ui_model_path = candidate.resolve() if candidate is not None else None
     ui_log_value = env.get(
-        "BROTATO_V3_UI_DATASET", str(output / f"ui_decisions_{ui_build_profile}_v1.jsonl")
+        "BROTATO_V4_UI_DATASET", str(output / f"ui_decisions_{ui_build_profile}_v1.jsonl")
     ).strip()
     ui_decision_log = (
         None
         if ui_log_value.lower() in {"", "0", "off", "none"}
         else Path(ui_log_value).resolve()
     )
-    combat_log_value = env.get("BROTATO_V3_COMBAT_DATASET", "").strip()
+    combat_log_value = env.get("BROTATO_V4_COMBAT_DATASET", "").strip()
     combat_decision_log = (
         None
         if combat_log_value.lower() in {"", "0", "off", "none"}
@@ -159,15 +156,15 @@ def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
         else Path(runtime_profile_value).resolve()
     )
     return RuntimeConfig(
-        host=env.get("BROTATO_V3_HOST", DEFAULT_HOST),
-        port=int(env.get("BROTATO_V3_PORT", str(DEFAULT_PORT))),
-        state_timeout_sec=max(1.0, float(env.get("BROTATO_V3_STATE_TIMEOUT", "30"))),
-        reset_timeout_sec=max(10.0, float(env.get("BROTATO_V3_RESET_TIMEOUT", "600"))),
+        host=env.get("BROTATO_V4_HOST", DEFAULT_HOST),
+        port=int(env.get("BROTATO_V4_PORT", str(DEFAULT_PORT))),
+        state_timeout_sec=max(1.0, float(env.get("BROTATO_V4_STATE_TIMEOUT", "30"))),
+        reset_timeout_sec=max(10.0, float(env.get("BROTATO_V4_RESET_TIMEOUT", "600"))),
         output_dir=output,
-        total_timesteps=max(1, int(env.get("BROTATO_V3_TIMESTEPS", "1000000"))),
-        automate_menus=_enabled(env.get("BROTATO_V3_AUTOMATE_MENUS", "1"), default=True),
-        max_shop_buys=max(0, int(env.get("BROTATO_V3_MAX_SHOP_BUYS", "4"))),
-        max_shop_rerolls=max(0, int(env.get("BROTATO_V3_MAX_SHOP_REROLLS", "1"))),
+        total_timesteps=max(1, int(env.get("BROTATO_V4_TIMESTEPS", "1000000"))),
+        automate_menus=_enabled(env.get("BROTATO_V4_AUTOMATE_MENUS", "1"), default=True),
+        max_shop_buys=max(0, int(env.get("BROTATO_V4_MAX_SHOP_BUYS", "4"))),
+        max_shop_rerolls=max(0, int(env.get("BROTATO_V4_MAX_SHOP_REROLLS", "1"))),
         ui_build_profile=ui_build_profile,
         ui_model_path=ui_model_path,
         ui_model_explicit=ui_model_explicit,
@@ -175,9 +172,9 @@ def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
             env.get("BROTATO_V4_BUILD_POLICY_MODE", "")
         ),
         ui_decision_log=ui_decision_log,
-        safety_shield=_enabled(env.get("BROTATO_V3_SAFETY_SHIELD", "0"), default=False),
+        safety_shield=_enabled(env.get("BROTATO_V4_SAFETY_SHIELD", "0"), default=False),
         combat_decision_log=combat_decision_log,
-        late_wave_focus=_enabled(env.get("BROTATO_V3_LATE_WAVE_FOCUS", "0"), default=False),
+        late_wave_focus=_enabled(env.get("BROTATO_V4_LATE_WAVE_FOCUS", "0"), default=False),
         control_hz=float(env.get("BROTATO_V4_CONTROL_HZ", "24")),
         recorder_hz=float(env.get("BROTATO_V4_RECORDER_HZ", "60")),
         cache_max_gib=float(env.get("BROTATO_V4_CACHE_MAX_GIB", "10")),

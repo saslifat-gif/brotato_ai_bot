@@ -17,8 +17,8 @@ keep menus manual for this collection:
 conda activate bota_ai
 $env:PYTHONPATH = "src"
 $env:BROTATO_V4_POLICY_MODE = "HANDCRAFTED"
-$env:BROTATO_V3_AUTOMATE_MENUS = "0"
-python -m v3.record_human_demo `
+$env:BROTATO_V4_AUTOMATE_MENUS = "0"
+python -m v4.record_human_demo `
   --output models/version_3/human_demos/manual_run01.sqlite `
   --run-label manual_run01 `
   --notes "non-SMG build; prioritize waves 8-12, recoveries, dense threats, and low HP" `
@@ -64,17 +64,17 @@ signal remains intact. The validator reports that limitation explicitly.
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m v3.validate_human_demo models/version_3/human_demos/session_001.sqlite `
+python -m v4.validate_human_demo models/version_3/human_demos/session_001.sqlite `
   --report models/version_3/human_demos/session_001.validation.json `
   --require-capture
-python -m v3.replay_human_demo models/version_3/human_demos/session_001.sqlite --frame-id 1000
-python -m v3.compare_human_controller models/version_3/human_demos/session_001.sqlite
+python -m v4.replay_human_demo models/version_3/human_demos/session_001.sqlite --frame-id 1000
+python -m v4.compare_human_controller models/version_3/human_demos/session_001.sqlite
 ```
 
 After all three runs, produce the set-level report:
 
 ```powershell
-python -m v3.report_human_demo_quality `
+python -m v4.report_human_demo_quality `
   models/version_3/human_demos/manual_run01.sqlite `
   models/version_3/human_demos/manual_run02.sqlite `
   models/version_3/human_demos/manual_run03.sqlite `
@@ -92,22 +92,23 @@ The `safest_action` comparison is the unchanged shared hazard/recovery
 architecture evaluated offline. It is not mislabeled as a reconstruction of a
 trained policy that was not present in the recording.
 
-## BC baseline
+## Event-policy training
 
-The baseline uses grouped episode holdout, so frames from one episode cannot
-leak into both train and validation sets:
+Use the event-based trainer for the active learned-policy research path. It
+preserves genuine action changes, uses grouped episode holdouts, and writes a
+checkpoint with the live feature contract:
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m v3.train_human_demo_bc `
-  models/version_3/human_demos/session_001.sqlite `
-  --output models/version_3/human_demos/human_bc.pt
+python -m v4.train_event_human_bc `
+  --dataset models/version_3/human_demos/session_001.sqlite `
+  --report models/version_3/human_demos/human_event_bc.json `
+  --checkpoint models/version_3/human_demos/human_event_bc.pt
 ```
 
-The semantic feature vector is only a baseline input. Future analog BC should
-train against `input_blob.processed_stick` and, when available,
-`input_blob.raw_stick`, while retaining the discrete action as an auxiliary
-target.
+The older framewise `v4.train_human_demo_bc` script is retained only for
+historical comparison; it is not part of production control or the normal
+retraining workflow.
 
 ## Dataset limitations
 
