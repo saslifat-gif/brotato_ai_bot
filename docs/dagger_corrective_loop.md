@@ -5,6 +5,22 @@ The live collector must run with `SHADOW_HUMAN`; the applied action remains the
 handcrafted/PPO baseline action. `HYBRID_HUMAN` is not enabled by any command
 below.
 
+For repeated in-game death/recovery bookmarks, use the human recorder in
+`HANDCRAFTED` mode and press `F9` whenever the state should be revisited. Each
+press creates a separate marker with its own timestamp and full state snapshot;
+`--continue-after-terminal` keeps the recorder alive across repeated runs and
+terminal screens. The key is observation-only and does not alter movement or
+production control:
+
+```text
+python v3\record_human_demo.py --output models\version_3\human_demos\marked_runs.sqlite --run-label marked-runs --continue-after-terminal --require-capture
+```
+
+The recorder stores these as `manual_bookmark` labels in SQLite. Press F9 once
+per event you want to review; pressing it repeatedly is allowed and does not
+collapse distinct marks. The bridge prints the marker id, phase, and wave so
+the operator can confirm that the key was seen.
+
 ## Capture
 
 The existing Windows `shadow_eval.py` accepts `--capture-full-state` and

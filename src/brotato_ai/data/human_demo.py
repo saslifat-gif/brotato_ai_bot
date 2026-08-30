@@ -25,6 +25,7 @@ from brotato_ai.domain.state import StateSnapshot
 
 DATASET_NAME = "brotato_human_demonstrations"
 DATASET_SCHEMA_VERSION = 1
+CAPTURE_SCHEMA_VERSION = 3
 ACTION_COUNT = len(MoveAction)
 TTI_BUCKETS_MS = (50, 100, 150, 250, 400)
 
@@ -227,13 +228,21 @@ class HumanDemoWriter:
         self._last_action = int(MoveAction.IDLE)
         self._last_timestamp_ms: float | None = None
         self._segment_id: str | None = None
+        self._segment_started_timestamp_ms: float | None = None
         self._frame_number = 0
         self._last_build_snapshot: Any = None
         self._last_ui_actions: list[Any] = []
         self._arbiter: FinalActionArbiter | None = None
+        self._reward_engine: Any = None
+        self._bridge_session_id: str | None = None
+        self._last_finished_episode_id: str | None = None
+        self._last_finished_bridge_session_id: str | None = None
+        self._raw_episode_bootstrap = True
+        self._manual_mark_ids: set[str] = set()
         self._create_schema()
         self._meta("dataset", DATASET_NAME)
         self._meta("schema_version", DATASET_SCHEMA_VERSION)
+        self._meta("capture_schema_version", CAPTURE_SCHEMA_VERSION)
         self._meta("session_id", self.session_id)
         self._meta("created_wall_time_ns", time.time_ns())
 
@@ -244,7 +253,10 @@ class HumanDemoWriter:
                 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS episodes (
                     episode_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, started_ns INTEGER NOT NULL,
-                    ended_ns INTEGER, outcome TEXT, start_phase TEXT, end_phase TEXT
+                    ended_ns INTEGER, outcome TEXT, start_phase TEXT, end_phase TEXT,
+                    first_frame_id INTEGER, last_frame_id INTEGER,
+                    first_timestamp_ns INTEGER, last_timestamp_ns INTEGER,
+                    first_bridge_timestamp_ms REAL, last_bridge_timestamp_ms REAL
                 );
                 CREATE TABLE IF NOT EXISTS frames (
                     frame_id INTEGER PRIMARY KEY AUTOINCREMENT, episode_id TEXT NOT NULL,
@@ -254,10 +266,11 @@ class HumanDemoWriter:
                     previous_action INTEGER NOT NULL, action_segment_id TEXT,
                     state_blob BLOB NOT NULL, input_blob BLOB NOT NULL,
                     controller_blob BLOB NOT NULL, derived_blob BLOB NOT NULL,
-                    feature_blob BLOB, outcome_blob BLOB
+                    feature_blob BLOB, outcome_blob BLOB, reward_blob BLOB
                 );
                 CREATE TABLE IF NOT EXISTS raw_samples (
                     sample_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+                    episode_id TEXT, bridge_session_id TEXT,
                     timestamp_ns INTEGER NOT NULL, bridge_timestamp_ms REAL, tick INTEGER,
                     state_blob BLOB NOT NULL, input_blob BLOB NOT NULL
                 );
@@ -283,6 +296,39 @@ class HumanDemoWriter:
                 CREATE INDEX IF NOT EXISTS raw_session_time ON raw_samples(session_id, timestamp_ns);
                 """
             )
+            # Keep the recorder backward compatible with existing v1 datasets.
+            # New captures use these columns; old source databases are never
+            # rewritten by this migration unless opened for append explicitly.
+            migrations = {
+                "episodes": {
+                    "first_frame_id": "INTEGER",
+                    "last_frame_id": "INTEGER",
+                    "first_timestamp_ns": "INTEGER",
+                    "last_timestamp_ns": "INTEGER",
+                    "first_bridge_timestamp_ms": "REAL",
+                    "last_bridge_timestamp_ms": "REAL",
+                },
+                "frames": {"reward_blob": "BLOB"},
+                "raw_samples": {
+                    "episode_id": "TEXT",
+                    "bridge_session_id": "TEXT",
+                },
+            }
+            for table, columns in migrations.items():
+                existing = {
+                    str(row[1]) for row in self.connection.execute(f"PRAGMA table_info({table})")
+                }
+                for name, declaration in columns.items():
+                    if name not in existing:
+                        self.connection.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"
+                        )
+
+    def set_metadata(self, key: str, value: Any) -> None:
+        """Store capture provenance without changing any game/controller state."""
+
+        with self.lock:
+            self._meta(key, value)
 
     def _meta(self, key: str, value: Any) -> None:
         with self.connection:
@@ -291,16 +337,29 @@ class HumanDemoWriter:
                 (str(key), json.dumps(value, separators=(",", ":"))),
             )
 
-    def start_episode(self, *, phase: str = "unknown", episode_id: str | None = None) -> str:
+    def start_episode(
+        self,
+        *,
+        phase: str = "unknown",
+        episode_id: str | None = None,
+        source_session_id: str | None = None,
+    ) -> str:
         with self.lock:
             self.episode_id = episode_id or f"{self.session_id}:{uuid.uuid4().hex[:12]}"
             self._last_action = int(MoveAction.IDLE)
             self._last_timestamp_ms = None
             self._segment_id = None
+            self._segment_started_timestamp_ms = None
             self._frame_number = 0
             self._last_build_snapshot = None
             self._last_ui_actions = []
             self._arbiter = None
+            self._reward_engine = None
+            self._bridge_session_id = (
+                str(source_session_id) if source_session_id not in (None, "") else None
+            )
+            self._last_finished_episode_id = None
+            self._last_finished_bridge_session_id = None
             self.connection.execute(
                 "INSERT OR REPLACE INTO episodes(episode_id,session_id,started_ns,start_phase) VALUES(?,?,?,?)",
                 (self.episode_id, self.session_id, time.monotonic_ns(), str(phase)),
@@ -314,10 +373,42 @@ class HumanDemoWriter:
         payload = dict(state)
         action = int(payload.get("human_action", payload.get("action", 0)))
         input_value = normalize_human_input(_mapping(payload.get("human_input")), action)
+        bridge_session_id = str(payload.get("session", "")) or None
+        bridge_timestamp = payload.get("published_at_ms")
+        try:
+            bridge_timestamp = float(bridge_timestamp) if bridge_timestamp is not None else None
+        except (TypeError, ValueError):
+            bridge_timestamp = None
         with self.lock:
+            phase = str(payload.get("phase", "unknown"))
+            episode_id: str | None = None
+            if self.episode_id is not None and self._bridge_session_id in {None, bridge_session_id}:
+                episode_id = self.episode_id
+            elif (
+                self._last_finished_episode_id is not None
+                and bridge_session_id == self._last_finished_bridge_session_id
+            ):
+                # The terminal screen can continue producing raw ticks after
+                # the rich loop closes the episode. Raw payloads expose the
+                # Godot scene name (for example Main or EndRun), not the rich
+                # semantic game_over/victory phase, so use the bridge-session
+                # boundary rather than a phase-name allowlist.
+                episode_id = self._last_finished_episode_id
+            if (
+                episode_id is None
+                and self.episode_id is None
+                and self._raw_episode_bootstrap
+                and bridge_session_id
+                and phase not in {"game_over", "victory"}
+            ):
+                # The raw stream can beat the first rich frame by a few
+                # milliseconds. Starting the episode here preserves its exact
+                # lower boundary instead of leaving those samples orphaned.
+                self.start_episode(phase=phase, source_session_id=bridge_session_id)
+                episode_id = self.episode_id
             self.connection.execute(
-                "INSERT INTO raw_samples(session_id,timestamp_ns,bridge_timestamp_ms,tick,state_blob,input_blob) VALUES(?,?,?,?,?,?)",
-                (self.session_id, time.monotonic_ns(), _number(payload.get("published_at_ms"), None),
+                "INSERT INTO raw_samples(session_id,episode_id,bridge_session_id,timestamp_ns,bridge_timestamp_ms,tick,state_blob,input_blob) VALUES(?,?,?,?,?,?,?,?)",
+                (self.session_id, episode_id, bridge_session_id, time.monotonic_ns(), bridge_timestamp,
                  int(_number(payload.get("tick"), -1)), _json_bytes(payload), _json_bytes(input_value)),
             )
             self.connection.commit()
@@ -325,25 +416,45 @@ class HumanDemoWriter:
     def record_frame(self, state: Mapping[str, Any], *, received_ns: int | None = None) -> int:
         with self.lock:
             if self.episode_id is None:
-                self.start_episode(phase=str(state.get("phase", "unknown")))
+                self.start_episode(
+                    phase=str(state.get("phase", "unknown")),
+                    source_session_id=str(state.get("session", "")) or None,
+                )
             assert self.episode_id is not None
+            source_session_id = str(state.get("session", "")) or None
+            if (
+                self._bridge_session_id is not None
+                and source_session_id is not None
+                and source_session_id != self._bridge_session_id
+            ):
+                self.finish_episode(outcome="session_boundary", end_phase="session_boundary")
+                self.start_episode(
+                    phase=str(state.get("phase", "unknown")),
+                    source_session_id=source_session_id,
+                )
+            if self._bridge_session_id is None and source_session_id:
+                self._bridge_session_id = source_session_id
             action = int(state.get("human_action", state.get("action", 0)))
             if not 0 <= action < ACTION_COUNT:
                 action = int(MoveAction.IDLE)
             timestamp_ms = _number(state.get("published_at_ms"), time.monotonic_ns() / 1e6)
+            if timestamp_ms < 0.0:
+                timestamp_ms = time.monotonic_ns() / 1e6
             input_value = normalize_human_input(_mapping(state.get("human_input")), action)
+            now_ns = int(received_ns or time.monotonic_ns())
             if self._segment_id is None or action != self._last_action:
                 if self._segment_id is not None:
                     self.connection.execute(
                         "UPDATE action_segments SET ended_ns=?,duration_ms=? WHERE segment_id=?",
-                        (received_ns or time.monotonic_ns(),
-                         max(0.0, timestamp_ms - (_number(self._last_timestamp_ms))), self._segment_id),
+                        (now_ns,
+                         max(0.0, timestamp_ms - (_number(self._segment_started_timestamp_ms))), self._segment_id),
                     )
                 self._segment_id = uuid.uuid4().hex
                 self.connection.execute(
                     "INSERT INTO action_segments(segment_id,episode_id,action,started_ns) VALUES(?,?,?,?)",
-                    (self._segment_id, self.episode_id, action, received_ns or time.monotonic_ns()),
+                    (self._segment_id, self.episode_id, action, now_ns),
                 )
+                self._segment_started_timestamp_ms = timestamp_ms
             if self._arbiter is None:
                 shield = UnifiedHazardScorer(enabled=True)
                 self._arbiter = FinalActionArbiter(
@@ -354,27 +465,119 @@ class HumanDemoWriter:
                 state, action, previous_action=self._last_action,
                 previous_timestamp_ms=self._last_timestamp_ms, arbiter=self._arbiter,
             )
+            reward_total, reward_components = self._record_reward(state)
+            derived.update(
+                {
+                    "action_transition": bool(self._frame_number > 0 and action != self._last_action),
+                    "action_hold_ms": max(
+                        0.0,
+                        timestamp_ms - _number(self._segment_started_timestamp_ms),
+                    ),
+                    "reward_total": float(reward_total),
+                    "reward_components": reward_components,
+                    "reward_source": "ApiRewardEngine",
+                    "reward_exact_environment_step": False,
+                }
+            )
             try:
                 from v3.combat_policy import SemanticCombatVectorizer
                 features = [round(float(item), 6) for item in SemanticCombatVectorizer().build(state, self._last_action)]
             except Exception:
                 features = None
-            now_ns = int(received_ns or time.monotonic_ns())
             cursor = self.connection.execute(
-                "INSERT INTO frames(episode_id,frame_number,timestamp_ns,wall_time_ns,bridge_timestamp_ms,tick,phase,wave,action,previous_action,action_segment_id,state_blob,input_blob,controller_blob,derived_blob,feature_blob) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO frames(episode_id,frame_number,timestamp_ns,wall_time_ns,bridge_timestamp_ms,tick,phase,wave,action,previous_action,action_segment_id,state_blob,input_blob,controller_blob,derived_blob,feature_blob,reward_blob) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self.episode_id, self._frame_number, now_ns, time.time_ns(), timestamp_ms,
                  int(_number(state.get("tick"), -1)), str(state.get("phase", "unknown")),
                  int(_number(_mapping(state.get("wave")).get("number"))), action, self._last_action,
                  self._segment_id, _json_bytes(dict(state)), _json_bytes(input_value),
-                 _json_bytes(controller), _json_bytes(derived), _json_bytes(features) if features else None),
+                 _json_bytes(controller), _json_bytes(derived), _json_bytes(features) if features else None,
+                 _json_bytes({"total": reward_total, "components": reward_components, "source": "ApiRewardEngine"})),
             )
             frame_id = int(cursor.lastrowid)
+            self._record_manual_marks(frame_id, state)
+            if self._frame_number == 0:
+                self.connection.execute(
+                    "UPDATE episodes SET first_frame_id=?,first_timestamp_ns=?,first_bridge_timestamp_ms=? WHERE episode_id=?",
+                    (frame_id, now_ns, timestamp_ms, self.episode_id),
+                )
+            self.connection.execute(
+                "UPDATE episodes SET last_frame_id=?,last_timestamp_ns=?,last_bridge_timestamp_ms=? WHERE episode_id=?",
+                (frame_id, now_ns, timestamp_ms, self.episode_id),
+            )
             self._record_build_decision(frame_id, state, now_ns)
             self._frame_number += 1
             self._last_action = action
             self._last_timestamp_ms = timestamp_ms
             self.connection.commit()
             return frame_id
+
+    def _record_manual_marks(self, frame_id: int, state: Mapping[str, Any]) -> int:
+        """Attach every new in-game F9 bookmark to the observed frame."""
+
+        marks = state.get("manual_marks", [])
+        if not isinstance(marks, list):
+            return 0
+        recorded = 0
+        for mark in marks:
+            if not isinstance(mark, Mapping):
+                continue
+            marker_id = str(mark.get("marker_id", ""))
+            if not marker_id or marker_id in self._manual_mark_ids:
+                continue
+            value = dict(mark)
+            value["recorded_frame_id"] = int(frame_id)
+            self.connection.execute(
+                "INSERT INTO labels(frame_id,label,value,annotator,created_ns) VALUES(?,?,?,?,?)",
+                (
+                    int(frame_id),
+                    "manual_bookmark",
+                    json.dumps(value, separators=(",", ":")),
+                    "in_game_f9",
+                    time.time_ns(),
+                ),
+            )
+            self._manual_mark_ids.add(marker_id)
+            recorded += 1
+        return recorded
+
+    def record_manual_marks_for_last_frame(self, state: Mapping[str, Any]) -> int:
+        """Save marks made on a terminal screen after its episode was closed."""
+
+        with self.lock:
+            episode_id = self._last_finished_episode_id
+            if not episode_id:
+                return 0
+            row = self.connection.execute(
+                "SELECT frame_id FROM frames WHERE episode_id=? ORDER BY frame_number DESC, frame_id DESC LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+            if row is None:
+                return 0
+            recorded = self._record_manual_marks(int(row[0]), state)
+            if recorded:
+                self.connection.commit()
+            return recorded
+
+    def _record_reward(self, state: Mapping[str, Any]) -> tuple[float, dict[str, float]]:
+        """Capture the action-independent API reward components offline.
+
+        The observation-only recorder does not execute ``BrotatoApiEnv.step``.
+        This therefore records the shared ``ApiRewardEngine`` signal, while
+        explicitly marking it as non-identical to a live environment step that
+        also adds controller-dependent movement shaping.
+        """
+
+        if self._reward_engine is None:
+            from v3.reward import ApiRewardEngine
+
+            self._reward_engine = ApiRewardEngine()
+            self._reward_engine.reset(state)
+            return 0.0, {}
+        total = float(self._reward_engine.step(state))
+        return total, {
+            str(key): float(value)
+            for key, value in self._reward_engine.last_components.items()
+        }
 
     def _record_build_decision(self, frame_id: int, state: Mapping[str, Any], timestamp_ns: int) -> None:
         phase = str(state.get("phase", "unknown"))
@@ -404,18 +607,32 @@ class HumanDemoWriter:
         with self.lock:
             if self.episode_id is None:
                 return
+            finished_episode_id = self.episode_id
+            finished_bridge_session_id = self._bridge_session_id
             if self._segment_id is not None:
                 self.connection.execute(
                     "UPDATE action_segments SET ended_ns=?,duration_ms=? WHERE segment_id=? AND ended_ns IS NULL",
-                    (time.monotonic_ns(), None, self._segment_id),
+                    (time.monotonic_ns(),
+                     max(0.0, _number(self._last_timestamp_ms) - _number(self._segment_started_timestamp_ms))
+                     if self._last_timestamp_ms is not None else None,
+                     self._segment_id),
                 )
             self.connection.execute(
                 "UPDATE episodes SET ended_ns=?,outcome=?,end_phase=? WHERE episode_id=?",
                 (time.monotonic_ns(), str(outcome), str(end_phase), self.episode_id),
             )
             self.connection.commit()
+            self._last_finished_episode_id = finished_episode_id
+            self._last_finished_bridge_session_id = finished_bridge_session_id
             self.episode_id = None
             self._segment_id = None
+            self._segment_started_timestamp_ms = None
+            self._bridge_session_id = None
+            self._reward_engine = None
+            # If capture continues after a terminal screen, the next
+            # non-terminal raw tick may bootstrap a new episode. Terminal raw
+            # ticks are handled above and remain attached to the finished one.
+            self._raw_episode_bootstrap = True
 
     def add_label(
         self, frame_id: int, label: str, value: Any = True, *, annotator: str = "manual"
@@ -442,7 +659,7 @@ class HumanDemoWriter:
         episodes = self.connection.execute("SELECT DISTINCT episode_id FROM frames").fetchall()
         for (episode_id,) in episodes:
             rows = self.connection.execute(
-                "SELECT frame_id,timestamp_ns,state_blob,derived_blob FROM frames WHERE episode_id=? ORDER BY timestamp_ns",
+                "SELECT frame_id,timestamp_ns,state_blob,derived_blob FROM frames WHERE episode_id=? ORDER BY timestamp_ns,frame_id",
                 (episode_id,),
             ).fetchall()
             times = [int(row[1]) for row in rows]
@@ -488,47 +705,347 @@ def _metadata(connection: sqlite3.Connection) -> dict[str, Any]:
     return {key: _from_blob(value.encode("utf-8"), value) for key, value in connection.execute("SELECT key,value FROM metadata")}
 
 
-def validate_dataset(path: Path) -> dict[str, Any]:
-    """Validate synchronization, input coverage, action alignment, and continuity."""
+def _percentile(values: Iterable[float], percentile: float) -> float | None:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return None
+    index = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * percentile))))
+    return ordered[index]
 
-    connection = sqlite3.connect(str(path))
-    frames = connection.execute(
-        "SELECT episode_id,timestamp_ns,bridge_timestamp_ms,action,previous_action,action_segment_id,input_blob,derived_blob,outcome_blob FROM frames ORDER BY episode_id,timestamp_ns"
-    ).fetchall()
+
+def _decode_checked(value: bytes | None, default: Any, label: str) -> tuple[Any, str | None]:
+    if not value:
+        return default, f"missing {label}"
+    try:
+        decoded = json.loads(zlib.decompress(value).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, zlib.error) as exc:
+        return default, f"corrupt {label}: {exc.__class__.__name__}"
+    return decoded, None
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def validate_dataset(path: Path, *, require_capture: bool = False) -> dict[str, Any]:
+    """Validate synchronization, stream integrity, input coverage, and continuity.
+
+    ``require_capture`` is opt-in so historical v1 datasets remain readable. A
+    new manual recording should use it (or the recorder's matching flag): it
+    additionally requires raw samples, reward telemetry, semantic features,
+    fixed-horizon outcomes, and closed episode boundaries.
+    """
+
     result: dict[str, Any] = {
         "dataset": DATASET_NAME,
         "schema_version": DATASET_SCHEMA_VERSION,
-        "frames": len(frames),
-        "raw_samples": int(connection.execute("SELECT COUNT(*) FROM raw_samples").fetchone()[0]),
-        "episodes": int(connection.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]),
-        "errors": [], "warnings": [],
+        "capture_schema_version": CAPTURE_SCHEMA_VERSION,
+        "errors": [],
+        "warnings": [],
+        "capture_errors": [],
     }
-    last_by_episode: dict[str, tuple[int, float]] = {}
-    raw_available = 0
-    gaps = []
-    for row in frames:
-        episode, timestamp_ns, bridge_ms, action, previous, segment, input_blob, _derived, _outcome = row
-        if not 0 <= int(action) < ACTION_COUNT:
-            result["errors"].append(f"frame action out of range: {action}")
-        if episode in last_by_episode and int(timestamp_ns) <= last_by_episode[episode][0]:
-            result["errors"].append(f"non-monotonic timestamp in episode {episode}")
-        if episode in last_by_episode:
-            delta = int(timestamp_ns) - last_by_episode[episode][0]
-            gaps.append(delta / 1e6)
-            if delta > 250_000_000:
-                result["warnings"].append(f"frame gap {delta / 1e6:.1f} ms in episode {episode}")
-        last_by_episode[episode] = (int(timestamp_ns), _number(bridge_ms, 0.0))
-        input_value = _from_blob(input_blob, {})
-        raw_available += int(bool(input_value.get("raw_available")))
-        if int(action) != int(previous) and not segment:
-            result["errors"].append("action change without persistence segment")
-    result["raw_input_coverage"] = raw_available / len(frames) if frames else 0.0
-    result["mean_frame_interval_ms"] = sum(gaps) / len(gaps) if gaps else 0.0
-    result["p90_frame_interval_ms"] = sorted(gaps)[min(len(gaps) - 1, int(len(gaps) * 0.9))] if gaps else 0.0
-    result["metrics"] = summarize_dataset(path, connection=connection)
-    result["ok"] = not result["errors"]
-    connection.close()
-    return result
+    if not Path(path).is_file():
+        result["errors"].append(f"dataset not found: {path}")
+        result["ok"] = False
+        result["capture_ready"] = False
+        return result
+
+    connection = sqlite3.connect(str(path))
+    try:
+        integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+        result["sqlite_integrity"] = integrity
+        if integrity.lower() != "ok":
+            result["errors"].append(f"sqlite integrity check failed: {integrity}")
+
+        required_tables = {
+            "metadata", "episodes", "frames", "raw_samples", "action_segments",
+            "build_decisions", "transitions", "labels",
+        }
+        present_tables = {
+            str(row[0]) for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        missing_tables = sorted(required_tables - present_tables)
+        if missing_tables:
+            result["errors"].append(f"missing tables: {', '.join(missing_tables)}")
+            result["ok"] = False
+            result["capture_ready"] = False
+            return result
+
+        frame_columns = _table_columns(connection, "frames")
+        raw_columns = _table_columns(connection, "raw_samples")
+        episode_columns = _table_columns(connection, "episodes")
+        has_reward_blob = "reward_blob" in frame_columns
+        has_raw_episode = "episode_id" in raw_columns
+        has_raw_bridge_session = "bridge_session_id" in raw_columns
+        has_episode_boundaries = {
+            "first_frame_id", "last_frame_id", "first_timestamp_ns", "last_timestamp_ns",
+        }.issubset(episode_columns)
+        if not has_reward_blob:
+            result["warnings"].append("dataset predates explicit reward telemetry")
+            result["capture_errors"].append("reward_blob column is missing")
+        if not has_raw_episode:
+            result["warnings"].append("dataset predates raw-sample episode association")
+        if not has_episode_boundaries:
+            result["warnings"].append("dataset predates explicit episode frame boundaries")
+
+        reward_select = "reward_blob" if has_reward_blob else "NULL AS reward_blob"
+        frames = connection.execute(
+            f"""
+            SELECT frame_id,episode_id,frame_number,timestamp_ns,bridge_timestamp_ms,tick,
+                   phase,wave,action,previous_action,action_segment_id,state_blob,input_blob,
+                   controller_blob,derived_blob,feature_blob,outcome_blob,{reward_select}
+            FROM frames ORDER BY episode_id,timestamp_ns,frame_id
+            """
+        ).fetchall()
+        episode_rows = connection.execute(
+            "SELECT episode_id,session_id,started_ns,ended_ns,outcome,start_phase,end_phase"
+            + (",first_frame_id,last_frame_id,first_timestamp_ns,last_timestamp_ns,first_bridge_timestamp_ms,last_bridge_timestamp_ms" if has_episode_boundaries else "")
+            + " FROM episodes ORDER BY started_ns,episode_id"
+        ).fetchall()
+        raw_rows = connection.execute(
+            "SELECT sample_id," + ("episode_id," if has_raw_episode else "NULL,")
+            + ("bridge_session_id," if has_raw_bridge_session else "NULL,")
+            + "timestamp_ns,bridge_timestamp_ms,tick,state_blob,input_blob "
+            "FROM raw_samples ORDER BY bridge_session_id,timestamp_ns,sample_id"
+            if has_raw_bridge_session
+            else "SELECT sample_id," + ("episode_id," if has_raw_episode else "NULL,")
+            + "NULL,timestamp_ns,bridge_timestamp_ms,tick,state_blob,input_blob "
+            "FROM raw_samples ORDER BY timestamp_ns,sample_id"
+        ).fetchall()
+
+        result.update({
+            "frames": len(frames),
+            "raw_samples": len(raw_rows),
+            "episodes": len(episode_rows),
+            "build_decisions": int(connection.execute("SELECT COUNT(*) FROM build_decisions").fetchone()[0]),
+            "manual_marks": int(connection.execute("SELECT COUNT(*) FROM labels WHERE label='manual_bookmark'").fetchone()[0]),
+        })
+        last_by_episode: dict[str, tuple[int, float | None, int]] = {}
+        frame_gaps: list[float] = []
+        timestamp_drifts: list[float] = []
+        source_missing = 0
+        raw_available = 0
+        processed_input = 0
+        feature_rows = 0
+        reward_rows = 0
+        outcome_rows = 0
+        bridge_timestamp_rows = 0
+        corrupted_blobs: list[str] = []
+        frame_counts: dict[str, int] = {}
+        for row in frames:
+            (
+                frame_id, episode, frame_number, timestamp_ns, bridge_ms, _tick, phase, _wave,
+                action, previous, segment, state_blob, input_blob, controller_blob,
+                derived_blob, feature_blob, outcome_blob, reward_blob,
+            ) = row
+            episode = str(episode)
+            frame_counts[episode] = frame_counts.get(episode, 0) + 1
+            timestamp_ns = int(timestamp_ns)
+            bridge_value: float | None
+            try:
+                bridge_value = float(bridge_ms) if bridge_ms is not None else None
+            except (TypeError, ValueError):
+                bridge_value = None
+            if bridge_value is not None and bridge_value >= 0.0:
+                bridge_timestamp_rows += 1
+            previous_row = last_by_episode.get(episode)
+            if previous_row is not None:
+                if int(frame_number) != previous_row[2] + 1:
+                    result["errors"].append(f"frame-number gap in episode {episode}")
+                # Equal values are valid when the platform clock exposes a
+                # coarser resolution than the event stream. frame_id is the
+                # stable tie-breaker in the query order above.
+                if timestamp_ns < previous_row[0]:
+                    result["errors"].append(f"non-monotonic timestamp in episode {episode}")
+                local_delta = (timestamp_ns - previous_row[0]) / 1e6
+                frame_gaps.append(local_delta)
+                if local_delta > 250.0:
+                    result["warnings"].append(f"frame gap {local_delta:.1f} ms in episode {episode}")
+                if bridge_value is not None and previous_row[1] is not None:
+                    source_delta = bridge_value - previous_row[1]
+                    if source_delta < 0.0:
+                        result["errors"].append(f"non-monotonic bridge timestamp in episode {episode}")
+                    timestamp_drifts.append(local_delta - max(0.0, source_delta))
+            last_by_episode[episode] = (timestamp_ns, bridge_value, int(frame_number))
+            if not 0 <= int(action) < ACTION_COUNT:
+                result["errors"].append(f"frame action out of range: {action}")
+            if not 0 <= int(previous) < ACTION_COUNT:
+                result["errors"].append(f"previous action out of range: {previous}")
+            if int(action) != int(previous) and not segment:
+                result["errors"].append(f"action change without persistence segment at frame {frame_id}")
+
+            state, error = _decode_checked(state_blob, {}, f"state frame {frame_id}")
+            if error:
+                corrupted_blobs.append(error)
+            input_value, error = _decode_checked(input_blob, {}, f"input frame {frame_id}")
+            if error:
+                corrupted_blobs.append(error)
+            controller, error = _decode_checked(controller_blob, {}, f"controller frame {frame_id}")
+            if error:
+                corrupted_blobs.append(error)
+            derived, error = _decode_checked(derived_blob, {}, f"derived frame {frame_id}")
+            if error:
+                corrupted_blobs.append(error)
+            if not isinstance(state, Mapping) or not isinstance(input_value, Mapping):
+                result["errors"].append(f"invalid state/input shape at frame {frame_id}")
+            else:
+                if isinstance(input_value.get("processed_stick"), Mapping):
+                    processed_input += 1
+                else:
+                    result["capture_errors"].append(f"processed input missing at frame {frame_id}")
+                raw_available += int(bool(input_value.get("raw_available")))
+            if not isinstance(controller, Mapping) or not isinstance(derived, Mapping):
+                result["errors"].append(f"invalid diagnostics shape at frame {frame_id}")
+            features, error = _decode_checked(feature_blob, [], f"features frame {frame_id}")
+            if error:
+                result["capture_errors"].append(error)
+            elif isinstance(features, list) and len(features) == 832:
+                feature_rows += 1
+            else:
+                result["capture_errors"].append(f"semantic feature width is not 832 at frame {frame_id}")
+            outcomes, error = _decode_checked(outcome_blob, {}, f"outcomes frame {frame_id}")
+            if error:
+                result["capture_errors"].append(error)
+            elif isinstance(outcomes, Mapping) and all(str(horizon) in outcomes for horizon in (50, 100, 250, 500, 1000)):
+                outcome_rows += 1
+            reward, error = _decode_checked(reward_blob, {}, f"reward frame {frame_id}")
+            if error:
+                result["capture_errors"].append(error)
+            elif isinstance(reward, Mapping) and isinstance(reward.get("components"), Mapping):
+                reward_rows += 1
+            if isinstance(derived, Mapping) and "reward_components" not in derived:
+                result["capture_errors"].append(f"derived reward components missing at frame {frame_id}")
+
+        if corrupted_blobs:
+            result["errors"].extend(corrupted_blobs)
+
+        raw_gaps: list[float] = []
+        raw_drifts: list[float] = []
+        raw_last: dict[str, tuple[int, float | None]] = {}
+        raw_decoded = 0
+        raw_unassigned = 0
+        raw_bridge_timestamp_rows = 0
+        for row in raw_rows:
+            sample_id, raw_episode, raw_bridge_session, timestamp_ns, bridge_ms, _tick, state_blob, input_blob = row
+            state, error = _decode_checked(state_blob, {}, f"raw state sample {sample_id}")
+            if error:
+                result["errors"].append(error)
+            input_value, error = _decode_checked(input_blob, {}, f"raw input sample {sample_id}")
+            if error:
+                result["errors"].append(error)
+            if isinstance(state, Mapping) and isinstance(input_value, Mapping):
+                raw_decoded += 1
+            if raw_episode is None:
+                raw_unassigned += 1
+            source_key = str(raw_bridge_session or _mapping(state).get("session") or "unknown")
+            try:
+                bridge_value = float(bridge_ms) if bridge_ms is not None else None
+            except (TypeError, ValueError):
+                bridge_value = None
+            if bridge_value is not None and bridge_value >= 0.0:
+                raw_bridge_timestamp_rows += 1
+            if raw_episode is not None and str(raw_episode) not in frame_counts:
+                result["capture_errors"].append(
+                    f"raw sample {sample_id} references unknown episode {raw_episode}"
+                )
+            previous_raw = raw_last.get(source_key)
+            if previous_raw is not None:
+                local_delta = (int(timestamp_ns) - previous_raw[0]) / 1e6
+                if local_delta < 0.0:
+                    result["errors"].append(f"non-monotonic raw timestamp in stream {source_key}")
+                else:
+                    raw_gaps.append(local_delta)
+                if bridge_value is not None and previous_raw[1] is not None:
+                    source_delta = bridge_value - previous_raw[1]
+                    if source_delta < 0.0:
+                        result["errors"].append(f"non-monotonic raw bridge timestamp in stream {source_key}")
+                    raw_drifts.append(local_delta - max(0.0, source_delta))
+            raw_last[source_key] = (int(timestamp_ns), bridge_value)
+
+        closed_episodes = 0
+        boundary_errors = []
+        episode_ids = set(frame_counts)
+        for row in episode_rows:
+            episode_id, _session_id, started_ns, ended_ns, outcome, _start_phase, _end_phase, *boundaries = row
+            episode_id = str(episode_id)
+            if frame_counts.get(episode_id, 0) == 0:
+                boundary_errors.append(f"episode has no frames: {episode_id}")
+            if ended_ns is not None:
+                closed_episodes += 1
+            else:
+                boundary_errors.append(f"episode is not closed: {episode_id}")
+            if episode_id not in episode_ids:
+                boundary_errors.append(f"episode frame index missing: {episode_id}")
+            if has_episode_boundaries:
+                first_frame_id, last_frame_id, first_timestamp_ns, last_timestamp_ns, *_ = boundaries
+                if frame_counts.get(episode_id, 0) and (
+                    first_frame_id is None or last_frame_id is None
+                    or first_timestamp_ns is None or last_timestamp_ns is None
+                ):
+                    boundary_errors.append(f"explicit frame boundary missing: {episode_id}")
+            if require_capture and str(outcome or "unknown") not in {"death", "victory"}:
+                result["capture_errors"].append(
+                    f"episode outcome is not death/victory: {episode_id}={outcome!r}"
+                )
+        result["errors"].extend(boundary_errors)
+
+        result["raw_input_coverage"] = raw_available / len(frames) if frames else 0.0
+        result["processed_input_coverage"] = processed_input / len(frames) if frames else 0.0
+        result["feature_coverage"] = feature_rows / len(frames) if frames else 0.0
+        result["reward_coverage"] = reward_rows / len(frames) if frames else 0.0
+        result["outcome_coverage"] = outcome_rows / len(frames) if frames else 0.0
+        result["bridge_timestamp_coverage"] = bridge_timestamp_rows / len(frames) if frames else 0.0
+        result["raw_bridge_timestamp_coverage"] = raw_bridge_timestamp_rows / len(raw_rows) if raw_rows else 0.0
+        result["raw_decoded_coverage"] = raw_decoded / len(raw_rows) if raw_rows else 0.0
+        result["raw_unassigned_samples"] = raw_unassigned
+        result["mean_frame_interval_ms"] = sum(frame_gaps) / len(frame_gaps) if frame_gaps else 0.0
+        result["p90_frame_interval_ms"] = _percentile(frame_gaps, 0.90) or 0.0
+        result["timestamp_drift_ms"] = {
+            "interval_count": len(timestamp_drifts),
+            "mean_signed": sum(timestamp_drifts) / len(timestamp_drifts) if timestamp_drifts else None,
+            "p90_abs": _percentile((abs(value) for value in timestamp_drifts), 0.90),
+            "max_abs": max((abs(value) for value in timestamp_drifts), default=None),
+            "definition": "local monotonic frame interval minus bridge published_at_ms interval",
+        }
+        result["raw_timestamp_drift_ms"] = {
+            "interval_count": len(raw_drifts),
+            "mean_signed": sum(raw_drifts) / len(raw_drifts) if raw_drifts else None,
+            "p90_abs": _percentile((abs(value) for value in raw_drifts), 0.90),
+            "max_abs": max((abs(value) for value in raw_drifts), default=None),
+        }
+        result["stream_status"] = {
+            "rich_frames": len(frames) > 0,
+            "raw_samples": len(raw_rows) > 0,
+            "raw_samples_decodable": raw_decoded == len(raw_rows) if raw_rows else False,
+            "processed_input_present": processed_input == len(frames) if frames else False,
+            "semantic_features_present": feature_rows == len(frames) if frames else False,
+            "reward_components_present": reward_rows == len(frames) if frames else False,
+            "fixed_horizon_outcomes_present": outcome_rows == len(frames) if frames else False,
+            "episode_boundaries_closed": closed_episodes == len(episode_rows) if episode_rows else False,
+        }
+        if not frames:
+            result["capture_errors"].append("no rich frames recorded")
+        if not raw_rows:
+            result["capture_errors"].append("no raw samples recorded")
+        if bridge_timestamp_rows != len(frames):
+            result["capture_errors"].append("one or more rich frames lack a valid bridge timestamp")
+        if raw_rows and raw_bridge_timestamp_rows != len(raw_rows):
+            result["capture_errors"].append("one or more raw samples lack a valid bridge timestamp")
+        if raw_unassigned:
+            result["warnings"].append(f"{raw_unassigned} raw samples fall outside a rich episode boundary")
+        if result["timestamp_drift_ms"]["p90_abs"] is not None and result["timestamp_drift_ms"]["p90_abs"] > 250.0:
+            result["warnings"].append("rich/source timestamp interval drift p90 exceeds 250 ms")
+        result["metrics"] = summarize_dataset(path, connection=connection)
+        if require_capture:
+            result["errors"].extend(result["capture_errors"])
+        result["ok"] = not result["errors"]
+        result["capture_ready"] = not result["errors"] and not result["capture_errors"]
+        result["require_capture"] = bool(require_capture)
+        return result
+    finally:
+        connection.close()
 
 
 def summarize_dataset(
@@ -539,7 +1056,7 @@ def summarize_dataset(
     owns_connection = connection is None
     connection = connection or sqlite3.connect(str(path))
     rows = connection.execute(
-        "SELECT action,controller_blob,derived_blob,outcome_blob FROM frames ORDER BY episode_id,timestamp_ns"
+        "SELECT action,controller_blob,derived_blob,outcome_blob FROM frames ORDER BY episode_id,timestamp_ns,frame_id"
     ).fetchall()
     total = max(1, len(rows))
     health_loss = deaths = hazard_failures = projectile_hits = 0
@@ -608,8 +1125,9 @@ def summarize_dataset(
 
 def replay_frame(path: Path, frame_id: int) -> dict[str, Any]:
     connection = sqlite3.connect(str(path))
+    reward_column = "reward_blob" if "reward_blob" in _table_columns(connection, "frames") else "NULL"
     row = connection.execute(
-        "SELECT frame_id,episode_id,frame_number,timestamp_ns,phase,wave,action,previous_action,state_blob,input_blob,controller_blob,derived_blob,outcome_blob FROM frames WHERE frame_id=?",
+        "SELECT frame_id,episode_id,frame_number,timestamp_ns,phase,wave,action,previous_action,state_blob,input_blob,controller_blob,derived_blob,outcome_blob," + reward_column + " FROM frames WHERE frame_id=?",
         (int(frame_id),),
     ).fetchone()
     connection.close()
@@ -621,14 +1139,14 @@ def replay_frame(path: Path, frame_id: int) -> dict[str, Any]:
         "action": row[6], "previous_action": row[7],
         "state": _from_blob(row[8], {}), "input": _from_blob(row[9], {}),
         "controller": _from_blob(row[10], {}), "derived": _from_blob(row[11], {}),
-        "outcomes": _from_blob(row[12], {}),
+        "outcomes": _from_blob(row[12], {}), "reward": _from_blob(row[13], {}),
     }
 
 
 def load_training_rows(path: Path) -> list[dict[str, Any]]:
     connection = sqlite3.connect(str(path))
     rows = connection.execute(
-        "SELECT episode_id,feature_blob,action,input_blob FROM frames WHERE feature_blob IS NOT NULL ORDER BY episode_id,timestamp_ns"
+        "SELECT episode_id,feature_blob,action,input_blob FROM frames WHERE feature_blob IS NOT NULL ORDER BY episode_id,timestamp_ns,frame_id"
     ).fetchall()
     connection.close()
     return [

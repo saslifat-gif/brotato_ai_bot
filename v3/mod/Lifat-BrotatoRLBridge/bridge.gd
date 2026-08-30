@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.20"
+const MOD_VERSION := "0.3.22"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RAW_RECORD_PORT := 4243
@@ -121,10 +121,19 @@ var _wave_restart_state = null
 var _wave_restart_number := -1
 
 const BRIDGE_RESTART_WAVE_ACTION := "bridge://restart_wave"
+const MANUAL_MARK_KEY := KEY_F9
+const MANUAL_MARK_KEY_NAME := "F9"
+const MAX_MANUAL_MARKS := 256
+
+var _manual_mark_sequence := 0
+var _manual_marks := []
+var _last_rich_manual_mark_sequence := 0
+var _last_raw_manual_mark_sequence := 0
 
 
 func _ready() -> void:
 	set_pause_mode(PAUSE_MODE_PROCESS)
+	set_process_input(true)
 	_next_connect_ms = 0
 	var raw_error := _raw_server.listen(RAW_RECORD_PORT, HOST)
 	if raw_error == OK:
@@ -132,6 +141,17 @@ func _ready() -> void:
 	else:
 		print("[BrotatoRLBridge] raw recorder disabled; listen error=%d" % raw_error)
 	print("[BrotatoRLBridge] ready; waiting for trainer at %s:%d" % [HOST, PORT])
+
+
+func _input(event) -> void:
+	# F9 is an observation-only bookmark. It never changes the requested
+	# movement, pauses the game, or consumes the event, so the production
+	# controller and the human's actual input path remain unchanged.
+	if not (event is InputEventKey):
+		return
+	if not event.pressed or event.echo or event.scancode != MANUAL_MARK_KEY:
+		return
+	_record_manual_mark()
 
 
 func _process(delta: float) -> void:
@@ -473,7 +493,8 @@ func _build_raw_state() -> Dictionary:
 		"wave": wave_number,
 		"player": player_state,
 		"enemies": enemies,
-		"projectiles": projectiles
+		"projectiles": projectiles,
+		"manual_marks": _manual_mark_payload("raw")
 	}
 
 
@@ -485,7 +506,7 @@ func _exit_tree() -> void:
 	_resume_game()
 
 
-func _build_state() -> Dictionary:
+func _build_state(include_manual_marks: bool = true) -> Dictionary:
 	var root := get_tree().get_root()
 	var main = root.get_node_or_null("Main")
 	var scene_name := ""
@@ -614,6 +635,7 @@ func _build_state() -> Dictionary:
 	var projectile_path_payload := {}
 	if _tick == _last_projectile_path_tick:
 		projectile_path_payload = projectile_path_state
+	var manual_marks := _manual_mark_payload("rich") if include_manual_marks else []
 	return {
 		"type": "state",
 		"session": _session_id,
@@ -650,8 +672,66 @@ func _build_state() -> Dictionary:
 		"build": build_state,
 		"ui": {"actions": ui_actions},
 		"dead": dead,
-		"victory": run_won
+		"victory": run_won,
+		"manual_marks": manual_marks
 }
+
+
+func _record_manual_mark() -> void:
+	# Capture the state at the key event, rather than waiting for the next rich
+	# state tick. The snapshot is bounded by explicit user marks and is kept in
+	# both recorder streams so a mark is not lost to stream scheduling.
+	var marked_at_ms := OS.get_ticks_msec()
+	var snapshot := _build_state(false)
+	_manual_mark_sequence += 1
+	var wave_value = snapshot.get("wave", {})
+	var wave_number := int(wave_value.get("number", 0)) if typeof(wave_value) == TYPE_DICTIONARY else 0
+	var phase := str(snapshot.get("phase", ""))
+	var is_death := bool(snapshot.get("dead", false)) or phase == "game_over"
+	var marker := {
+		"marker_id": "%s:manual:%d" % [_session_id, _manual_mark_sequence],
+		"sequence": _manual_mark_sequence,
+		"marked_at_ms": marked_at_ms,
+		"key": MANUAL_MARK_KEY_NAME,
+		"reason": "manual_death_bookmark" if is_death else "manual_bookmark",
+		"phase": phase,
+		"wave": wave_number,
+		"tick": int(snapshot.get("tick", _tick)),
+		"state": snapshot
+	}
+	_manual_marks.append(marker)
+	while _manual_marks.size() > MAX_MANUAL_MARKS:
+		_manual_marks.pop_front()
+	print(
+		"[BrotatoRLBridge] manual mark id=%s reason=%s wave=%d phase=%s" % [
+			marker["marker_id"], marker["reason"], wave_number, phase
+		]
+	)
+
+
+func _manual_mark_payload(stream: String) -> Array:
+	var last_sequence := _last_rich_manual_mark_sequence
+	if stream == "raw":
+		last_sequence = _last_raw_manual_mark_sequence
+	var output := []
+	for marker in _manual_marks:
+		if int(marker.get("sequence", 0)) > last_sequence:
+			output.append(marker.duplicate(true))
+	if output.empty():
+		return output
+	var latest_sequence := int(output[output.size() - 1].get("sequence", last_sequence))
+	if stream == "raw":
+		_last_raw_manual_mark_sequence = latest_sequence
+	else:
+		_last_rich_manual_mark_sequence = latest_sequence
+	_prune_manual_marks()
+	return output
+
+
+func _prune_manual_marks() -> void:
+	var acknowledged_through := min(_last_rich_manual_mark_sequence, _last_raw_manual_mark_sequence)
+	while not _manual_marks.empty() and int(_manual_marks[0].get("sequence", 0)) <= acknowledged_through:
+		_manual_marks.pop_front()
 
 
 func _capture_human_input(human_movement: Vector2) -> Dictionary:
@@ -668,6 +748,14 @@ func _capture_human_input(human_movement: Vector2) -> Dictionary:
 		raw = Vector2(Input.get_joy_axis(device_id, 0), Input.get_joy_axis(device_id, 1))
 		raw_available = true
 	var buttons := {}
+	# Preserve the raw keyboard signal as well as the game's processed vector.
+	# This is observation-only telemetry; it does not synthesize or send input.
+	# It makes keyboard playthroughs auditable instead of labeling their source
+	# as an opaque processed-only signal.
+	buttons["key_w"] = Input.is_key_pressed(KEY_W)
+	buttons["key_a"] = Input.is_key_pressed(KEY_A)
+	buttons["key_s"] = Input.is_key_pressed(KEY_S)
+	buttons["key_d"] = Input.is_key_pressed(KEY_D)
 	if device_id >= 0:
 		for button_id in range(16):
 			buttons["joy_%d" % button_id] = bool(Input.is_joy_button_pressed(device_id, button_id))
@@ -2508,8 +2596,10 @@ func _send_hello() -> void:
 			"projectile_path_grid_v1",
 			"training_pause_v1",
 			"configurable_state_rate",
-			"human_input_observation"
-		]
+			"human_input_observation",
+			"manual_bookmarks_v1"
+		],
+		"manual_mark_key": MANUAL_MARK_KEY_NAME
 	})
 
 
