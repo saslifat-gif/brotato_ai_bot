@@ -35,14 +35,60 @@ def remove_stale_packages(directory: Path, keep_name: str) -> list[Path]:
     return removed
 
 
+GAME_EXECUTABLE_CANDIDATES = (
+    "Brotato.exe",
+    "Brotato.x86_64",
+    "Brotato.arm64",
+    "Brotato.bin",
+    "Brotato",
+    "Brotato.pck",
+    "Brotato.app",
+)
+
+
+def find_default_game_directory() -> Path | None:
+    """Check common Steam installation paths across Windows, Linux, and macOS."""
+    home = Path.home()
+    candidates = [
+        # Windows
+        Path("C:/Program Files (x86)/Steam/steamapps/common/Brotato"),
+        Path("C:/Program Files/Steam/steamapps/common/Brotato"),
+        # Linux / SteamOS / Steam Deck
+        home / ".local/share/Steam/steamapps/common/Brotato",
+        home / ".steam/steam/steamapps/common/Brotato",
+        home / ".steam/root/steamapps/common/Brotato",
+        # macOS
+        home / "Library/Application Support/Steam/steamapps/common/Brotato",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir() and is_game_directory(candidate):
+            return candidate.resolve()
+    return None
+
+
+def is_game_directory(path: Path) -> bool:
+    """Check if the directory looks like a Brotato install."""
+    if not path.is_dir():
+        return False
+    for exe in GAME_EXECUTABLE_CANDIDATES:
+        if (path / exe).exists():
+            return True
+    if (path / "mods").is_dir() or (path / "mods-unpacked").is_dir():
+        return True
+    return False
+
+
 def choose_game_directory() -> Path | None:
+    detected = find_default_game_directory()
+    if detected is not None:
+        return detected
     try:
         from tkinter import Tk, filedialog
 
         root = Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        selected = filedialog.askdirectory(title="Select the folder containing Brotato.exe")
+        selected = filedialog.askdirectory(title="Select the folder containing Brotato")
         root.destroy()
         return Path(selected).resolve() if selected else None
     except Exception as exc:
@@ -54,8 +100,11 @@ def resolve_game_directory(selected: Path) -> Path:
     path = selected.resolve()
     if path.name.lower() in {"mods", "mods-unpacked"}:
         path = path.parent
-    if not (path / "Brotato.exe").is_file():
-        raise RuntimeError(f"Brotato.exe was not found in {path}")
+    if path.name == "MacOS" and path.parent.name == "Contents" and path.parent.parent.name.endswith(".app"):
+        path = path.parent.parent.parent
+    if not is_game_directory(path):
+        candidates_str = ", ".join(GAME_EXECUTABLE_CANDIDATES)
+        raise RuntimeError(f"Brotato game executable/package ({candidates_str}) was not found in {path}")
     return path
 
 
@@ -94,10 +143,23 @@ def steam_workshop_target(game_directory: Path, package_name: str) -> Path | Non
 
 
 def default_profile_path() -> Path | None:
+    home = Path.home()
+    candidates = []
     appdata = os.environ.get("APPDATA")
-    if not appdata:
-        return None
-    return Path(appdata) / "Brotato" / "mod_user_profiles.json"
+    if appdata:
+        candidates.append(Path(appdata) / "Brotato" / "mod_user_profiles.json")
+    candidates.extend([
+        home / ".local/share/godot/app_userdata/Brotato/mod_user_profiles.json",
+        home / ".local/share/Brotato/mod_user_profiles.json",
+        home / ".local/share/Steam/steamapps/compatdata/1942280/pfx/drive_c/users/steamuser/AppData/Roaming/Brotato/mod_user_profiles.json",
+        home / ".steam/steam/steamapps/compatdata/1942280/pfx/drive_c/users/steamuser/AppData/Roaming/Brotato/mod_user_profiles.json",
+        home / "Library/Application Support/Godot/app_userdata/Brotato/mod_user_profiles.json",
+        home / "Library/Application Support/Brotato/mod_user_profiles.json",
+    ])
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def rotate_stale_godot_log() -> Path | None:
@@ -109,26 +171,36 @@ def rotate_stale_godot_log() -> Path | None:
     old error on the next launch.
     """
 
+    home = Path.home()
+    candidates = []
     appdata = os.environ.get("APPDATA")
-    if not appdata:
-        return None
-    log_path = Path(appdata) / "Brotato" / "logs" / "godot.log"
-    if not log_path.is_file():
-        return None
-    try:
-        contents = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    if "mods-unpacked" not in contents or "SCRIPT ERROR" not in contents:
-        return None
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = log_path.with_name(f"godot.before-mod-retry-{stamp}.log")
-    try:
-        log_path.replace(backup)
-    except OSError as exc:
-        print(f"[v4-install] could not rotate stale Godot log: {exc}")
-        return None
-    return backup
+    if appdata:
+        candidates.append(Path(appdata) / "Brotato" / "logs" / "godot.log")
+    candidates.extend([
+        home / ".local/share/godot/app_userdata/Brotato/logs/godot.log",
+        home / ".local/share/Brotato/logs/godot.log",
+        home / ".local/share/Steam/steamapps/compatdata/1942280/pfx/drive_c/users/steamuser/AppData/Roaming/Brotato/logs/godot.log",
+        home / "Library/Application Support/Godot/app_userdata/Brotato/logs/godot.log",
+        home / "Library/Application Support/Brotato/logs/godot.log",
+    ])
+    for log_path in candidates:
+        if not log_path.is_file():
+            continue
+        try:
+            contents = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "mods-unpacked" not in contents or "SCRIPT ERROR" not in contents:
+            continue
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = log_path.with_name(f"godot.before-mod-retry-{stamp}.log")
+        try:
+            log_path.replace(backup)
+        except OSError as exc:
+            print(f"[v4-install] could not rotate stale Godot log: {exc}")
+            return None
+        return backup
+    return None
 
 
 def activate_mod_profile(profile_path: Path, package: Path) -> bool:

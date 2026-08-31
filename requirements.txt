@@ -8,13 +8,13 @@ sb3-contrib>=2.3,<3
 tensorboard>=2.14  # required by SB3 when tensorboard_log is set (see v4/train.py)
 
 # Kept only for the explicitly protected v1/shop/ocr_winmedia.py module.
-winrt-runtime>=3.2
-winrt-Windows.Media.Ocr>=3.2
-winrt-Windows.Graphics.Imaging>=3.2
-winrt-Windows.Storage.Streams>=3.2
-winrt-Windows.Globalization>=3.2
-winrt-Windows.Foundation>=3.2
-winrt-Windows.Foundation.Collections>=3.2
+winrt-runtime>=3.2; sys_platform == 'win32'
+winrt-Windows.Media.Ocr>=3.2; sys_platform == 'win32'
+winrt-Windows.Graphics.Imaging>=3.2; sys_platform == 'win32'
+winrt-Windows.Storage.Streams>=3.2; sys_platform == 'win32'
+winrt-Windows.Globalization>=3.2; sys_platform == 'win32'
+winrt-Windows.Foundation>=3.2; sys_platform == 'win32'
+winrt-Windows.Foundation.Collections>=3.2; sys_platform == 'win32'
 
 # Dev / test
 pytest>=8.0
