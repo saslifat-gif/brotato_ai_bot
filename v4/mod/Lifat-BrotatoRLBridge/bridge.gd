@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.24"
+const MOD_VERSION := "0.3.26"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RAW_RECORD_PORT := 4243
@@ -442,11 +442,12 @@ func _publish_state() -> void:
 	if elapsed_ms >= 30 and _tick - _last_state_profile_tick >= 24:
 		_last_state_profile_tick = _tick
 		print(
-			"[BrotatoRLBridge] slow_state_ms=%d enemies=%d projectiles=%d indicators=%d" % [
+			"[BrotatoRLBridge] slow_state_ms=%d enemies=%d projectiles=%d indicators=%d stages=%s" % [
 				elapsed_ms,
 				state.get("enemies", []).size(),
 				state.get("projectiles", []).size(),
-				state.get("attack_indicators", []).size()
+				state.get("attack_indicators", []).size(),
+				str(state.get("bridge_profile_ms", {}))
 			]
 		)
 
@@ -517,6 +518,8 @@ func _exit_tree() -> void:
 
 
 func _build_state(include_manual_marks: bool = true) -> Dictionary:
+	var profile_ms := {}
+	var stage_started := OS.get_ticks_msec()
 	var root := get_tree().get_root()
 	var main = root.get_node_or_null("Main")
 	var scene_name := ""
@@ -541,6 +544,8 @@ func _build_state(include_manual_marks: bool = true) -> Dictionary:
 	if typeof(arena_size) != TYPE_VECTOR2:
 		arena_size = Vector2(1920, 1080)
 
+	profile_ms["player_lookup"] = OS.get_ticks_msec() - stage_started
+	stage_started = OS.get_ticks_msec()
 	if main != null:
 		var spawner = main.get_node_or_null("EntitySpawner")
 		spawned_enemies = _property(spawner, "enemies", [])
@@ -551,10 +556,16 @@ func _build_state(include_manual_marks: bool = true) -> Dictionary:
 				if is_instance_valid(enemy):
 					_observe_enemy_death(enemy)
 					enemies.append(_entity_state(enemy))
+		profile_ms["enemy_export"] = OS.get_ticks_msec() - stage_started
+		stage_started = OS.get_ticks_msec()
 		_collect_projectiles(main, projectiles, MAX_PROJECTILES, projectile_nodes)
+		profile_ms["projectile_export"] = OS.get_ticks_msec() - stage_started
+		stage_started = OS.get_ticks_msec()
 		_append_pickups(main.get_node_or_null("Items"), pickups, "item", MAX_PICKUPS)
 		_append_pickups(main.get_node_or_null("Consumables"), pickups, "consumable", MAX_PICKUPS)
 
+	profile_ms["pickup_export"] = OS.get_ticks_msec() - stage_started
+	stage_started = OS.get_ticks_msec()
 	var timer = _property(main, "_wave_timer", null)
 	var run_data = root.get_node_or_null("RunData")
 	var run_player_data = _run_player_data(run_data, player)
@@ -582,6 +593,8 @@ func _build_state(include_manual_marks: bool = true) -> Dictionary:
 		run_won,
 		visible_ui_phase
 	)
+	profile_ms["phase_detection"] = OS.get_ticks_msec() - stage_started
+	stage_started = OS.get_ticks_msec()
 	if phase == "shop":
 		_capture_wave_restart_state(wave_number)
 	if phase != "combat" and phase != "wave_end":
@@ -621,6 +634,8 @@ func _build_state(include_manual_marks: bool = true) -> Dictionary:
 		_last_arena_enemy_grid = []
 		_last_arena_grid_tick = -999999
 		_last_arena_grid_refresh_ms = -999999
+	profile_ms["combat_and_ui"] = OS.get_ticks_msec() - stage_started
+	stage_started = OS.get_ticks_msec()
 	if wave_number != _last_wave_number:
 		_last_wave_number = wave_number
 		_kills_this_wave = 0
@@ -635,6 +650,8 @@ func _build_state(include_manual_marks: bool = true) -> Dictionary:
 	var arena_grid_payload := {}
 	if _tick == _last_arena_grid_tick:
 		arena_grid_payload = {"enemy": arena_enemy_grid}
+	profile_ms["arena_grid"] = OS.get_ticks_msec() - stage_started
+	stage_started = OS.get_ticks_msec()
 	var projectile_path_state := _cached_projectile_path_state(
 		projectile_nodes,
 		spawned_enemies,
@@ -645,9 +662,11 @@ func _build_state(include_manual_marks: bool = true) -> Dictionary:
 	var projectile_path_payload := {}
 	if _tick == _last_projectile_path_tick:
 		projectile_path_payload = projectile_path_state
+	profile_ms["path_risks"] = OS.get_ticks_msec() - stage_started
 	var manual_marks := _manual_mark_payload("rich") if include_manual_marks else []
 	return {
 		"type": "state",
+		"bridge_profile_ms": profile_ms,
 		"session": _session_id,
 		"tick": _tick,
 		"published_at_ms": OS.get_ticks_msec(),
@@ -2543,6 +2562,14 @@ func _property(object, property_name: String, fallback):
 		return fallback if dictionary_value == null else dictionary_value
 	if typeof(object) != TYPE_OBJECT or not is_instance_valid(object):
 		return fallback
+	var property_names: Dictionary = _property_names(object)
+	if property_names.has(property_name):
+		var value = object.get(property_name)
+		return fallback if value == null else value
+	return fallback
+
+
+func _property_names(object) -> Dictionary:
 	var schema_key := str(object.get_class())
 	var script = object.get_script()
 	if script != null and not str(script.resource_path).empty():
@@ -2553,18 +2580,29 @@ func _property(object, property_name: String, fallback):
 			if descriptor.has("name"):
 				names[str(descriptor["name"])] = true
 		_property_name_cache[schema_key] = names
-	var property_names: Dictionary = _property_name_cache[schema_key]
-	if property_names.has(property_name):
-		var value = object.get(property_name)
-		return fallback if value == null else value
-	return fallback
+	return _property_name_cache[schema_key]
 
 
 func _first_property(object, names: Array, fallback):
+	# Resolve the schema once per candidate list, rather than once per name.
+	# Preserve ordered lookup and null-skipping semantics for every caller.
+	if object == null:
+		return fallback
+	if typeof(object) == TYPE_DICTIONARY:
+		for property_name in names:
+			var value = object.get(str(property_name), null)
+			if value != null:
+				return value
+		return fallback
+	if typeof(object) != TYPE_OBJECT or not is_instance_valid(object):
+		return fallback
+	var property_names: Dictionary = _property_names(object)
 	for property_name in names:
-		var value = _property(object, str(property_name), null)
-		if value != null:
-			return value
+		var key := str(property_name)
+		if property_names.has(key):
+			var value = object.get(key)
+			if value != null:
+				return value
 	return fallback
 
 

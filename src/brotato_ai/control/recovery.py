@@ -73,6 +73,8 @@ class TacticalMovementController:
         self.idle_escape_ms = 0.0
         self.anti_stall_active = False
         self._material_progress = {}
+        self._step_geometry = None
+        self._step_frame = None
         self.enabled = bool(enabled)
         self.wave_threshold = int(wave_threshold)
         self.enemy_threshold = int(enemy_threshold)
@@ -134,7 +136,7 @@ class TacticalMovementController:
 
     @staticmethod
     def _payload(state: Mapping[str, Any] | StateSnapshot) -> Mapping[str, Any]:
-        return state.to_dict() if isinstance(state, StateSnapshot) else state
+        return state.payload if isinstance(state, StateSnapshot) else state
 
     @staticmethod
     def _enemy_frame(payload: Mapping[str, Any]) -> tuple[tuple[float, float], tuple[float, float], float]:
@@ -177,7 +179,7 @@ class TacticalMovementController:
     ) -> bool:
         if self._legacy_trigger(payload):
             return True
-        geometry = enemy_separation_diagnostics(payload, requested_action)
+        geometry = self._geometry(payload, requested_action)
         closing = bool(
             geometry["active"]
             and float(geometry["predicted_distance"]) <= float(geometry["target_distance"]) * 1.08
@@ -197,6 +199,20 @@ class TacticalMovementController:
         # A safer policy lane exists; let choose() take it instead of ESCAPE.
         return best_risk >= self.escape_enter_risk
 
+    def _geometry(self, payload, action):
+        if self._step_geometry is None:
+            return enemy_separation_diagnostics(payload, action)
+        if action not in self._step_geometry:
+            self._step_geometry[action] = enemy_separation_diagnostics(payload, action)
+        return self._step_geometry[action]
+
+    def _frame_for_step(self, payload):
+        if self._step_geometry is None:
+            return self._enemy_frame(payload)
+        if self._step_frame is None:
+            self._step_frame = self._enemy_frame(payload)
+        return self._step_frame
+
     def _score_action(
         self,
         payload: Mapping[str, Any],
@@ -208,12 +224,12 @@ class TacticalMovementController:
     ) -> float:
         movement = ACTION_VECTORS[MoveAction(int(action))]
         score = float(risks[int(action)].total)
-        geometry = enemy_separation_diagnostics(payload, action)
+        geometry = self._geometry(payload, action)
         if geometry["active"]:
             approach = max(0.0, -float(geometry["radial_dot"]))
             closing = max(0.0, float(geometry["closing_rate"]))
             score += (0.85 + 1.35 * closing) * approach
-            away, tangent, _ = self._enemy_frame(payload)
+            away, tangent, _ = self._frame_for_step(payload)
             lateral = movement[0] * tangent[0] + movement[1] * tangent[1]
             radial = movement[0] * away[0] + movement[1] * away[1]
             score -= 0.20 * max(0.0, radial)
@@ -287,7 +303,7 @@ class TacticalMovementController:
                     or risk.boundary_total > idle.boundary_total + .05
                     or risk.enemy + risk.enemy_path > idle.enemy + idle.enemy_path + .10):
                 continue
-            geometry = enemy_separation_diagnostics(payload, candidate)
+            geometry = self._geometry(payload, candidate)
             if (geometry["active"]
                     and geometry["predicted_distance"] >= geometry["current_distance"] + 8.0
                     and geometry["radial_dot"] > .05):
@@ -314,7 +330,7 @@ class TacticalMovementController:
     def _clear_to_normal(self, payload: Mapping[str, Any], requested_action: int, requested_risk: HazardRisk) -> bool:
         if not self._hold_elapsed() or requested_risk.total > self.escape_exit_risk:
             return False
-        geometry = enemy_separation_diagnostics(payload, requested_action)
+        geometry = self._geometry(payload, requested_action)
         if not geometry["active"]:
             return True
         return bool(
@@ -323,7 +339,23 @@ class TacticalMovementController:
             and float(geometry["radial_dot"]) >= -0.05
         )
 
-    def apply(
+    def apply(self, state, requested_action, *, risks=None, previous_action=None,
+              control_interval_ms=0.0):
+        # Cache only within this decision. Even reused/mutated input objects
+        # and equal ticks must get fresh geometry on the next invocation.
+        self._step_geometry = {}
+        self._step_frame = None
+        try:
+            return self._apply_step(
+                state, requested_action, risks=risks,
+                previous_action=previous_action,
+                control_interval_ms=control_interval_ms,
+            )
+        finally:
+            self._step_geometry = None
+            self._step_frame = None
+
+    def _apply_step(
         self,
         state: Mapping[str, Any] | StateSnapshot,
         requested_action: int,

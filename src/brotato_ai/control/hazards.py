@@ -102,7 +102,7 @@ def enemy_separation_diagnostics(
         "radial_dot": 0.0,
         "enemy_runtime_id": "",
     }
-    payload = state.to_dict() if isinstance(state, StateSnapshot) else state
+    payload = state.payload if isinstance(state, StateSnapshot) else state
     combat = _mapping(payload.get("combat"))
     ranged_count = _number(combat.get("ranged_count"), 0.0)
     melee_count = _number(combat.get("melee_count"), 0.0)
@@ -318,7 +318,7 @@ class UnifiedHazardScorer:
 
     @staticmethod
     def _payload(state: Mapping[str, Any] | StateSnapshot) -> Mapping[str, Any]:
-        return state.to_dict() if isinstance(state, StateSnapshot) else state
+        return state.payload if isinstance(state, StateSnapshot) else state
 
     def risk_breakdown(
         self, state: Mapping[str, Any] | StateSnapshot, action: int
