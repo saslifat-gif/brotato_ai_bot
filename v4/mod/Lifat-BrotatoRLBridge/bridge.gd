@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.23"
+const MOD_VERSION := "0.3.24"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RAW_RECORD_PORT := 4243
@@ -89,6 +89,7 @@ var _measured_move_speed := 0.0
 var _measured_speed_stat := 0.0
 var _latest_action := 0
 var _last_action_ms := 0
+var _last_action_physics_frame := -1
 var _last_sequence := -1
 var _session_id := "%d-%d" % [OS.get_unix_time(), OS.get_ticks_msec()]
 var _kills_this_wave := 0
@@ -171,8 +172,10 @@ func _process(delta: float) -> void:
 		return
 	_state_elapsed += delta
 	var interval := _state_interval_sec()
-	if _state_elapsed >= interval:
-		_state_elapsed = max(0.0, _state_elapsed - interval)
+	if _state_elapsed >= interval and Engine.get_physics_frames() > _last_action_physics_frame:
+		# Keep the cadence independent of policy latency; do not build a burst
+		# of overdue states after a slow frame.
+		_state_elapsed = fmod(_state_elapsed, interval)
 		_publish_state()
 
 func _state_interval_sec() -> float:
@@ -267,7 +270,9 @@ func _handle_message(line: String) -> void:
 		_training_paused = false
 		_last_sequence = int(message.get("sequence", -1))
 		_last_action_ms = OS.get_ticks_msec()
-		_state_elapsed = 0.0
+		# Acknowledge only after physics has applied the new movement.
+		# Resetting the publication timer here adds a full interval to latency.
+		_last_action_physics_frame = Engine.get_physics_frames()
 		_resume_game()
 	elif message_type == "reset":
 		_latest_action = 0
@@ -489,6 +494,8 @@ func _build_raw_state() -> Dictionary:
 		"published_at_ms": OS.get_ticks_msec(),
 		"action": _latest_action,
 		"action_sequence": _last_sequence,
+		"physics_frame": Engine.get_physics_frames(),
+		"action_physics_frame": _last_action_physics_frame,
 		"human_action": _latest_human_action,
 		"human_input": _latest_human_input.duplicate(true),
 		"human_input_age_ms": max(0, OS.get_ticks_msec() - _last_human_input_ms),
