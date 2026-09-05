@@ -60,3 +60,48 @@ def test_escape_prefers_money_only_between_safe_choices():
     assert guard._score_action(payload, risks, 4, side=1, previous_action=None) < guard._score_action(payload, risks, 3, side=1, previous_action=None)
     risks[4] = HazardRisk(projectile=.5)
     assert guard._score_action(payload, risks, 4, side=1, previous_action=None) > guard._score_action(payload, risks, 3, side=1, previous_action=None)
+
+from brotato_ai.control.materials import MaterialTargetTracker
+
+
+def test_persistent_target_does_not_cancel_opposing_coins():
+    tracker = MaterialTargetTracker()
+    payload = state()
+    risks = {a: HazardRisk() for a in range(9)}
+    assert tracker.apply(payload, risks, 0) == 4
+    payload['pickups'].append({'category': 'material', 'position': {'x': 400, 'y': 500}})
+    assert tracker.apply(payload, risks, 0) == 4
+    payload['pickups'].pop(0)
+    assert tracker.apply(payload, risks, 0) == 3
+    tracker.reset()
+    assert tracker.target is None
+
+
+def test_blocked_target_is_abandoned_for_safe_coin():
+    tracker = MaterialTargetTracker()
+    payload = state()
+    risks = {a: HazardRisk() for a in range(9)}
+    assert tracker.apply(payload, risks, 0) == 4
+    payload['pickups'].append({'category': 'material', 'position': {'x': 400, 'y': 500}})
+    for a in (4, 6, 8):
+        risks[a] = HazardRisk(projectile=1.)
+    assert tracker.apply(payload, risks, 0) == 3
+
+
+def test_recovery_collects_without_sacrificing_enemy_separation():
+    tracker = MaterialTargetTracker()
+    payload = state()
+    risks = {a: HazardRisk() for a in range(9)}
+    assert tracker.apply(payload, risks, 3, recovery=True) == 4
+    payload['enemies'] = [{'position': {'x': 550, 'y': 500}, 'radius': 20}]
+    assert tracker.apply(payload, risks, 3, recovery=True) == 3
+
+
+def test_tracker_preserves_low_health_and_hazard_limits():
+    tracker = MaterialTargetTracker()
+    risks = {a: HazardRisk(projectile=1.) for a in range(9)}
+    risks[3] = HazardRisk()
+    assert tracker.apply(state(), risks, 3) == 3
+    payload = state()
+    payload['player']['health'] = 20
+    assert tracker.apply(payload, {a: HazardRisk() for a in range(9)}, 3) == 3

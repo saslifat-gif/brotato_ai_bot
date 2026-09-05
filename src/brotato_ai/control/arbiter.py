@@ -6,7 +6,7 @@ from typing import Any, Mapping, Protocol
 
 from brotato_ai.control.hazards import UnifiedHazardScorer
 from brotato_ai.control.recovery import CrowdRecoveryGuard
-from brotato_ai.control.materials import prefer_materials
+from brotato_ai.control.materials import MaterialTargetTracker
 from brotato_ai.domain.actions import MoveAction
 from brotato_ai.domain.decisions import DecisionTrace, SafetyDecision
 from brotato_ai.domain.state import StateSnapshot
@@ -29,11 +29,13 @@ class FinalActionArbiter:
     ):
         if crowd_recovery_guard.shield is not safety_shield:
             raise ValueError("crowd recovery must reuse the unified hazard scorer")
+        self.material_tracker = MaterialTargetTracker()
         self.safety_shield = safety_shield
         self.crowd_recovery_guard = crowd_recovery_guard
 
     def reset(self) -> None:
         self.crowd_recovery_guard.reset()
+        self.material_tracker.reset()
 
     def apply(
         self,
@@ -60,8 +62,10 @@ class FinalActionArbiter:
             control_interval_ms=max(0.0, float(control_interval_ms)),
         )
         final_action = recovery_decision.applied_action
-        if not self.crowd_recovery_guard.active:
-            final_action = prefer_materials(snapshot.payload, risks, final_action)
+        final_action = self.material_tracker.apply(
+            snapshot.payload, risks, final_action,
+            recovery=self.crowd_recovery_guard.active,
+        )
         material_override = final_action != recovery_decision.applied_action
         applied_risk = risks[final_action]
         decision = SafetyDecision(
@@ -76,7 +80,9 @@ class FinalActionArbiter:
         )
         recovery_active = self.crowd_recovery_guard.active
         source = (
-            "crowd_recovery"
+            "material_pickup"
+            if material_override
+            else "crowd_recovery"
             if recovery_active
             else "material_pickup"
             if material_override
