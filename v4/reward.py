@@ -28,7 +28,7 @@ class ApiRewardEngine:
     SURVIVAL_REWARD = 0.02
     POSITIVE_HEALTH_SCALE = 2.0
     NEGATIVE_HEALTH_SCALE = 8.0
-    MATERIAL_REWARD = 0.015
+    MATERIAL_REWARD = 0.045  # Three times the original 0.015 pickup reward.
     KILL_REWARD = 0.10
     WAVE_ADVANCE_BASE = 25.0
     WAVE_ADVANCE_SCALE = 2.0
