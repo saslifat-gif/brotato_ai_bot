@@ -454,6 +454,35 @@ class UiFeatureRow:
     base_bucket: int
 
 
+class RangedSustainTeacher(RangedSmgTeacher):
+    """User preference: ranged damage, then life steal, then percent damage."""
+
+    priority_bonuses = (
+        ("stat_ranged_damage", ("upgrade_ranged_damage", "upgrade_projectile_damage"), 180.0),
+        ("stat_lifesteal", ("upgrade_lifesteal",), 140.0),
+        ("stat_percent_damage", ("upgrade_percent_damage", "upgrade_damage"), 100.0),
+    )
+
+    def score_choice(self, choice, wave, state=None):
+        score = super().score_choice(choice, wave, state)
+        if str(choice.get("category", "item")).lower() == "weapon":
+            return score
+        totals = effect_totals(choice)
+        base = str(choice.get("base_id", "")).lower()
+        item_id = str(choice.get("id", "")).lower()
+        for stat, upgrades, bonus in self.priority_bonuses:
+            is_upgrade = base in upgrades or any(item_id.startswith(u + "_") for u in upgrades)
+            if totals[stat] > 0 or (is_upgrade and totals[stat] >= 0):
+                score += bonus
+        return score
+
+    def select(self, state, actions):
+        ranked = super().select(state, actions)
+        if ranked is None:
+            return None
+        return RankedUiAction(ranked.action, ranked.score, "ranged_sustain_teacher_v1")
+
+
 class UiChoiceVectorizer:
     """Fixed features shared by teacher imitation and learned UI policies."""
 

@@ -124,7 +124,7 @@ def load_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
     output = Path(env.get("BROTATO_V4_OUTPUT_DIR", str(root / "models" / "version_3")))
     if not output.is_absolute():
         output = (root / output).resolve()
-    ui_build_profile = env.get("BROTATO_V4_UI_BUILD_PROFILE", "ranged_smg").strip().lower()
+    ui_build_profile = env.get("BROTATO_V4_UI_BUILD_PROFILE", "ranged_sustain").strip().lower()
     ui_model_value = env.get("BROTATO_V4_UI_MODEL", "").strip()
     ui_model_explicit = bool(ui_model_value)
     if ui_model_value:

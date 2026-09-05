@@ -14,6 +14,7 @@ from v4.ui_build_policy import (
     LearnedUiBuildPolicy,
     RankedUiAction,
     RangedSmgTeacher,
+    RangedSustainTeacher,
     StickMeleeTeacher,
     UiDecisionLogger,
 )
@@ -100,6 +101,7 @@ class AutoUiController:
         teachers = {
             "stick_melee": StickMeleeTeacher(),
             "ranged_smg": RangedSmgTeacher(),
+            "ranged_sustain": RangedSustainTeacher(),
         }
         self._teacher = teachers.get(str(build_profile).strip().lower())
         self._learned = LearnedUiBuildPolicy(ui_model_path) if ui_model_path else None
