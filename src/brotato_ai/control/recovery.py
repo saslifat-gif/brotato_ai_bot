@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, Iterable, Mapping
 
+from brotato_ai.control.materials import material_progress
 from brotato_ai.control.hazards import UnifiedHazardScorer, enemy_separation_diagnostics
 from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
 from brotato_ai.domain.decisions import HazardRisk, SafetyDecision
@@ -69,6 +70,7 @@ class TacticalMovementController:
         side_hold_duration_ms: float | None = None,
         default_control_hz: float = DEFAULT_CONTROL_HZ,
     ):
+        self._material_progress = {}
         self.enabled = bool(enabled)
         self.wave_threshold = int(wave_threshold)
         self.enemy_threshold = int(enemy_threshold)
@@ -221,6 +223,10 @@ class TacticalMovementController:
             prior = ACTION_VECTORS[MoveAction(self._last_escape_action)]
             if movement[0] * prior[0] + movement[1] * prior[1] < -0.70:
                 score += 0.20
+        # Money only breaks close escape choices; separation and risk retain
+        # their larger penalties. Compute attraction once per control step.
+        if risks[action].total <= min(.20, min(r.total for r in risks.values()) + .03):
+            score -= .12 * max(0., self._material_progress.get(action, 0.))
         return score
 
     def _choose_side(self, payload: Mapping[str, Any], risks: Mapping[int, HazardRisk], previous_action: int | None) -> int:
@@ -292,6 +298,7 @@ class TacticalMovementController:
     ) -> SafetyDecision:
         requested = int(MoveAction(int(requested_action)))
         payload = self._payload(state)
+        self._material_progress = material_progress(payload)
         if risks is None:
             risks = self.shield.all_risks(payload)
         requested_risk = risks[requested]

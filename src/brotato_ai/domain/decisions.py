@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 
 DECISION_SCHEMA_VERSION = 2
-DecisionSource = Literal["policy", "hazard", "crowd_recovery"]
+DecisionSource = Literal["policy", "hazard", "crowd_recovery", "material_pickup"]
 
 
 @dataclass(frozen=True)

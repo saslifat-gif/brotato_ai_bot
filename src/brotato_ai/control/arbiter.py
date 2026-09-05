@@ -6,6 +6,7 @@ from typing import Any, Mapping, Protocol
 
 from brotato_ai.control.hazards import UnifiedHazardScorer
 from brotato_ai.control.recovery import CrowdRecoveryGuard
+from brotato_ai.control.materials import prefer_materials
 from brotato_ai.domain.actions import MoveAction
 from brotato_ai.domain.decisions import DecisionTrace, SafetyDecision
 from brotato_ai.domain.state import StateSnapshot
@@ -58,10 +59,14 @@ class FinalActionArbiter:
             previous_action=previous_action,
             control_interval_ms=max(0.0, float(control_interval_ms)),
         )
-        applied_risk = risks[recovery_decision.applied_action]
+        final_action = recovery_decision.applied_action
+        if not self.crowd_recovery_guard.active:
+            final_action = prefer_materials(snapshot.payload, risks, final_action)
+        material_override = final_action != recovery_decision.applied_action
+        applied_risk = risks[final_action]
         decision = SafetyDecision(
             requested,
-            recovery_decision.applied_action,
+            final_action,
             requested_risk.total,
             applied_risk.total,
         )
@@ -73,6 +78,8 @@ class FinalActionArbiter:
         source = (
             "crowd_recovery"
             if recovery_active
+            else "material_pickup"
+            if material_override
             else "hazard"
             if hazard_decision.overridden
             else "policy"
