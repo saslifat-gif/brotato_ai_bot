@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.26"
+const MOD_VERSION := "0.3.27"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RAW_RECORD_PORT := 4243
@@ -562,6 +562,7 @@ func _build_state(include_manual_marks: bool = true) -> Dictionary:
 		profile_ms["projectile_export"] = OS.get_ticks_msec() - stage_started
 		stage_started = OS.get_ticks_msec()
 		_append_pickups(main.get_node_or_null("Items"), pickups, "item", MAX_PICKUPS)
+		_append_pickups(main.get_node_or_null("Materials"), pickups, "material", MAX_PICKUPS)
 		_append_pickups(main.get_node_or_null("Consumables"), pickups, "consumable", MAX_PICKUPS)
 
 	profile_ms["pickup_export"] = OS.get_ticks_msec() - stage_started
