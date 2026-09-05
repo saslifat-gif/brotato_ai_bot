@@ -6,7 +6,7 @@ import math
 from typing import Any, Iterable, Mapping
 
 from brotato_ai.control.materials import material_progress
-from brotato_ai.control.safe_zone import SafeZonePlanner
+from brotato_ai.control.safe_zone import SafeZonePlanner, edge_clearance
 from brotato_ai.control.hazards import UnifiedHazardScorer, enemy_separation_diagnostics
 from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
 from brotato_ai.domain.decisions import HazardRisk, SafetyDecision
@@ -180,6 +180,12 @@ class TacticalMovementController:
         requested_action: int,
         risks: Mapping[int, HazardRisk] | None = None,
     ) -> bool:
+        if edge_clearance(payload) < 180.:
+            # Turn away before a wall becomes an immediate collision risk.
+            px, py = _xy(_mapping(payload.get("player")).get("position"))
+            ax, ay = ACTION_VECTORS[requested_action]
+            if edge_clearance(payload, (px+ax*80., py+ay*80.)) <= edge_clearance(payload):
+                return True
         if self._legacy_trigger(payload) and (risks is None or risks[0].total > self.escape_exit_risk):
             return True
         geometry = self._geometry(payload, requested_action)
@@ -331,6 +337,8 @@ class TacticalMovementController:
         return self._side_age >= self.side_hold_steps
 
     def _clear_to_normal(self, payload: Mapping[str, Any], requested_action: int, requested_risk: HazardRisk) -> bool:
+        if edge_clearance(payload) < 180.:
+            return False
         if not self._hold_elapsed() or requested_risk.total > self.escape_exit_risk:
             return False
         geometry = self._geometry(payload, requested_action)

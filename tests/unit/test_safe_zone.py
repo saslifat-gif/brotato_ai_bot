@@ -68,3 +68,53 @@ def test_arrival_exits_escape_without_returning_unsafe_request():
     result = controller.apply(payload, 4, risks=risks)
     assert result.applied_action == 0
     assert not controller.active
+
+
+def test_wall_idle_takes_open_inward_lane():
+    from brotato_ai.control.recovery import CrowdRecoveryGuard
+    from brotato_ai.domain.actions import ACTION_VECTORS
+    payload = state()
+    payload['player']['position']['x'] = 880
+    controller = CrowdRecoveryGuard()
+    result = controller.apply(payload, 0, risks={a: HazardRisk() for a in range(9)})
+    assert controller.active
+    assert ACTION_VECTORS[result.applied_action][0] < 0
+    assert controller.safe_zone.target[0] < 820
+
+
+def test_short_lateral_lane_breaks_spacing_deadlock():
+    payload = state()
+    # Long routes fail, but there is a short, screened step upwards.
+    payload['enemies'] = [{'position': {'x': 500, 'y': 250}, 'radius': 20}]
+    risks = {a: HazardRisk(projectile=2) for a in range(9)}
+    risks[0] = HazardRisk()
+    risks[1] = HazardRisk(ranged_spacing=.2)
+    planner = SafeZonePlanner()
+    assert planner.apply(payload, risks, 0, 40) == 1
+    assert planner.target == (500, 400)
+
+
+def test_spacing_exception_does_not_relax_collision_checks():
+    payload = state()
+    for danger in (HazardRisk(enemy=.1), HazardRisk(enemy_path=.1),
+                   HazardRisk(projectile=.1), HazardRisk(indicator=.1),
+                   HazardRisk(boundary=.1)):
+        risks = {a: danger for a in range(9)}
+        risks[0] = HazardRisk()
+        assert SafeZonePlanner().apply(payload, risks, 0, 40) == 0
+
+
+def test_fast_projectile_between_samples_blocks_route():
+    payload = state()
+    payload['projectiles'] = [{'position': {'x': 550, 'y': 0},
+                               'velocity': {'x': 0, 'y': 3000}, 'radius': 1}]
+    assert SafeZonePlanner()._route_score(payload, (800, 500)) is None
+
+
+def test_blocked_inward_lane_does_not_force_wall_escape():
+    from brotato_ai.control.recovery import CrowdRecoveryGuard
+    payload = state()
+    payload['player']['position']['x'] = 880
+    risks = {a: HazardRisk(projectile=2) for a in range(9)}
+    risks[0] = HazardRisk()
+    assert CrowdRecoveryGuard().apply(payload, 0, risks=risks).applied_action == 0
