@@ -102,6 +102,8 @@ class DecisionTrace:
     escape_remaining: int = 0
     escape_remaining_ms: float = 0.0
     escape_side: int = 0
+    anti_stall_active: bool = False
+    idle_escape_ms: float = 0.0
     # Learned human-policy fields (schema 2).  They are None/"" whenever the
     # policy mode does not run the human model (HANDCRAFTED) or inference
     # failed; they never change action semantics by themselves.
@@ -140,6 +142,9 @@ class DecisionTrace:
             "escape_remaining": int(self.escape_remaining),
             "escape_remaining_ms": float(self.escape_remaining_ms),
             "escape_side": int(self.escape_side),
+            "anti_stall_active": self.anti_stall_active,
+            "idle_escape_ms": self.idle_escape_ms,
+            "action_risks": {str(a): risk.to_dict() for a, risk in self.all_risks.items()},
             "requested_risk": self.requested_risk.to_dict(),
             "applied_risk": self.applied_risk.to_dict(),
             "human_proposed_action": self.human_proposed_action,

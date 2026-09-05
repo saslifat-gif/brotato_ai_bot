@@ -70,6 +70,8 @@ class TacticalMovementController:
         side_hold_duration_ms: float | None = None,
         default_control_hz: float = DEFAULT_CONTROL_HZ,
     ):
+        self.idle_escape_ms = 0.0
+        self.anti_stall_active = False
         self._material_progress = {}
         self.enabled = bool(enabled)
         self.wave_threshold = int(wave_threshold)
@@ -110,6 +112,8 @@ class TacticalMovementController:
         return self.state
 
     def reset(self) -> None:
+        self.idle_escape_ms = 0.0
+        self.anti_stall_active = False
         self.state = self.NORMAL
         self.remaining = 0
         self.escape_side = 0
@@ -263,6 +267,38 @@ class TacticalMovementController:
             ),
         )
 
+    def _break_dangerous_idle(self, payload, risks, action, interval_ms):
+        self.anti_stall_active = False
+        if action != int(MoveAction.IDLE):
+            self.idle_escape_ms = 0.0
+            return action
+        self.idle_escape_ms += max(0.0, interval_ms) or (1000.0 / self.DEFAULT_CONTROL_HZ)
+        idle = risks[int(MoveAction.IDLE)]
+        if self.idle_escape_ms < 350.0 or idle.enemy_total < self.escape_exit_risk:
+            return action
+        candidates = []
+        for candidate, risk in risks.items():
+            if candidate == int(MoveAction.IDLE):
+                continue
+            # Only a bounded risk increase is allowed, never a blind forced move.
+            if (risk.total > idle.total + .35
+                    or risk.projectile_total > idle.projectile_total + .02
+                    or risk.indicator > idle.indicator + .02
+                    or risk.boundary_total > idle.boundary_total + .05
+                    or risk.enemy + risk.enemy_path > idle.enemy + idle.enemy_path + .10):
+                continue
+            geometry = enemy_separation_diagnostics(payload, candidate)
+            if (geometry["active"]
+                    and geometry["predicted_distance"] >= geometry["current_distance"] + 8.0
+                    and geometry["radial_dot"] > .05):
+                candidates.append(candidate)
+        if not candidates:
+            return action
+        chosen = min(candidates, key=lambda a: (risks[a].total, a))
+        self.anti_stall_active = True
+        self.idle_escape_ms = 0.0
+        return int(chosen)
+
     def _hold_elapsed(self) -> bool:
         """Minimum escape hold, in real time when intervals are measurable."""
 
@@ -296,6 +332,7 @@ class TacticalMovementController:
         previous_action: int | None = None,
         control_interval_ms: float = 0.0,
     ) -> SafetyDecision:
+        self.anti_stall_active = False
         requested = int(MoveAction(int(requested_action)))
         payload = self._payload(state)
         self._material_progress = material_progress(payload)
@@ -337,6 +374,9 @@ class TacticalMovementController:
         )
         if risks[safest].total + 0.12 < risks[escape_action].total:
             escape_action = int(safest)
+        escape_action = self._break_dangerous_idle(
+            payload, risks, escape_action, control_interval_ms
+        )
         self._last_escape_action = escape_action
         self._age += 1
         self._side_age += 1

@@ -100,6 +100,8 @@ class FinalActionArbiter:
             state_interval_ms=max(0.0, float(state_interval_ms)),
             control_interval_ms=max(0.0, float(control_interval_ms)),
             all_risks=dict(risks),
+            anti_stall_active=self.crowd_recovery_guard.anti_stall_active,
+            idle_escape_ms=self.crowd_recovery_guard.idle_escape_ms,
             tactical_state=self.crowd_recovery_guard.state_name,
             escape_remaining=int(self.crowd_recovery_guard.remaining),
             escape_side=int(self.crowd_recovery_guard.escape_side),
