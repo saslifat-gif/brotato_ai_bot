@@ -1,6 +1,7 @@
 """Unit tests for unified CLI dispatcher, cross-platform install_mod, and shadow report."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,40 @@ from v4.install_mod import (
     rotate_stale_godot_log,
 )
 from v4.report_shadow import format_shadow_report, main as report_shadow_main
+
+
+@pytest.mark.parametrize("previous_mode", [None, "HANDCRAFTED", "HYBRID_HUMAN"])
+def test_run_shadow_enforces_observation_mode(monkeypatch, previous_mode):
+    from brotato_ai.training.configs import load_config
+    from brotato_ai.policy.modes import SHADOW_HUMAN
+
+    if previous_mode is None:
+        monkeypatch.delenv("BROTATO_V4_POLICY_MODE", raising=False)
+    else:
+        monkeypatch.setenv("BROTATO_V4_POLICY_MODE", previous_mode)
+    monkeypatch.setenv("BROTATO_V4_HUMAN_MODEL", "human.pt")
+
+    def run(module, args):
+        assert module == "v4.run_frozen"
+        assert args == ["--episodes", "3"]
+        assert load_config().policy_mode is SHADOW_HUMAN
+        return 0
+
+    monkeypatch.setattr("v4.cli._run_module", run)
+    assert cli_main(["run-shadow", "--episodes", "3"]) == 0
+    assert os.environ.get("BROTATO_V4_POLICY_MODE") == previous_mode
+
+
+def test_run_shadow_restores_mode_after_error(monkeypatch):
+    monkeypatch.setenv("BROTATO_V4_POLICY_MODE", "HANDCRAFTED")
+
+    def run(module, args):
+        raise RuntimeError("model load failed")
+
+    monkeypatch.setattr("v4.cli._run_module", run)
+    with pytest.raises(RuntimeError, match="model load failed"):
+        cli_main(["run-shadow"])
+    assert os.environ["BROTATO_V4_POLICY_MODE"] == "HANDCRAFTED"
 
 
 def test_cli_parser_commands():

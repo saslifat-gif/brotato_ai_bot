@@ -38,6 +38,11 @@ brotato-ai = "v4.cli:main"
 package-dir = {"" = "src", "v4" = "v4"}
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["brotato_ai", "brotato_ai.*", "v4", "v4.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+v4 = ["mod/**/*"]
 
 

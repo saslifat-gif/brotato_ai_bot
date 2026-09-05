@@ -18,11 +18,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install minimal test deps
+      - name: Install package and test dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy opencv-python torch stable-baselines3
+          python -m pip install ".[dev]"
+
+      - name: Check installed CLI and bridge resources
+        shell: pwsh
+        run: |
+          Set-Location $env:RUNNER_TEMP
+          brotato-ai --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "from importlib.resources import files; import v4.env.brotato_api_env; assert (files('v4') / 'mod/Lifat-BrotatoRLBridge/bridge.gd').is_file()"
 
       - name: Run unit tests
         shell: pwsh

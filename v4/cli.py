@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -95,6 +96,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     module_name = COMMAND_MAP[command]
+    if command == "run-shadow":
+        previous_mode = os.environ.get("BROTATO_V4_POLICY_MODE")
+        os.environ["BROTATO_V4_POLICY_MODE"] = "SHADOW_HUMAN"
+        try:
+            return _run_module(module_name, raw_args[1:])
+        finally:
+            if previous_mode is None:
+                os.environ.pop("BROTATO_V4_POLICY_MODE", None)
+            else:
+                os.environ["BROTATO_V4_POLICY_MODE"] = previous_mode
     return _run_module(module_name, raw_args[1:])
 
 
