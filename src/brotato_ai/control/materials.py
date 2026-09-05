@@ -82,8 +82,9 @@ class MaterialTargetTracker:
         geometry_payload, risks = self.forecast.update(payload, risks)
         base = risks[current]
         candidates = [a for a, risk in risks.items()
-                      if risk.total <= min(.20, base.total + .03)
-                      and risk.enemy_total <= base.enemy_total + .02
+                      if risk.total <= min(.55, base.total + .30)
+                      and risk.total - risk.ranged_spacing <= .20
+                      and risk.enemy + risk.enemy_path <= base.enemy + base.enemy_path + .02
                       and risk.projectile_total <= base.projectile_total + .02
                       and risk.indicator <= base.indicator + .02
                       and risk.boundary_total <= base.boundary_total + .02]
@@ -93,8 +94,10 @@ class MaterialTargetTracker:
                 allowed = []
                 for action in candidates:
                     geometry = enemy_separation_diagnostics(geometry_payload, action)
-                    if (geometry["predicted_distance"] >= reference["predicted_distance"]
-                            and geometry["radial_dot"] >= reference["radial_dot"]):
+                    if ((geometry["predicted_distance"] >= reference["predicted_distance"]
+                             and geometry["radial_dot"] >= reference["radial_dot"])
+                            or (geometry["predicted_distance"] >= geometry["target_distance"] * 1.15
+                                and geometry["radial_dot"] >= -.05)):
                         allowed.append(action)
                 candidates = allowed
         position = player.get("position", {})
@@ -107,7 +110,7 @@ class MaterialTargetTracker:
             x, y = float(pos.get("x", 0)), float(pos.get("y", 0))
             dx, dy = x - px, y - py
             distance = math.hypot(dx, dy)
-            if not 12 < distance <= 450:
+            if not 12 < distance <= 650:
                 continue
             # Shorten the lookahead near a coin so we do not steer around it.
             step = min(60., distance)
@@ -126,4 +129,4 @@ class MaterialTargetTracker:
             return current
         _, _, _, x, y, best, progress = max(targets, key=lambda t: t[:3])
         self.target = (x, y)
-        return best if progress[best] > progress[current] + .05 else current
+        return best if progress[best] > progress[current] + .02 else current

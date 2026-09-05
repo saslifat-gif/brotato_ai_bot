@@ -105,3 +105,20 @@ def test_tracker_preserves_low_health_and_hazard_limits():
     payload = state()
     payload['player']['health'] = 20
     assert tracker.apply(payload, {a: HazardRisk() for a in range(9)}, 3) == 3
+
+
+def test_assertive_pickups_allow_spacing_but_not_collision_risk():
+    payload = state()
+    risks = {a: HazardRisk(projectile=1.) for a in range(9)}
+    risks[0] = HazardRisk()
+    risks[4] = HazardRisk(ranged_spacing=.25)
+    assert MaterialTargetTracker().apply(payload, risks, 0) == 4
+    for hazard in ('enemy', 'enemy_path', 'projectile', 'indicator', 'boundary'):
+        risks[4] = HazardRisk(**{hazard: .25})
+        assert MaterialTargetTracker().apply(payload, risks, 0) == 0
+
+
+def test_assertive_tracker_can_seek_more_distant_coins():
+    payload = state()
+    payload['pickups'][0]['position']['x'] = 1100
+    assert MaterialTargetTracker().apply(payload, {a: HazardRisk() for a in range(9)}, 0) == 4
