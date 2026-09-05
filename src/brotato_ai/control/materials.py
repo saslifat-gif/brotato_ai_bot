@@ -62,6 +62,7 @@ class MaterialTargetTracker:
     """Keep one reachable material target; reconsider it if its safe lane closes."""
 
     def __init__(self):
+        self.search_radius = 650.
         from brotato_ai.control.kill_forecast import KillForecast
         self.forecast = KillForecast()
         self.target = None
@@ -110,7 +111,7 @@ class MaterialTargetTracker:
             x, y = float(pos.get("x", 0)), float(pos.get("y", 0))
             dx, dy = x - px, y - py
             distance = math.hypot(dx, dy)
-            if not 12 < distance <= 650:
+            if not 12 < distance <= self.search_radius:
                 continue
             # Shorten the lookahead near a coin so we do not steer around it.
             step = min(60., distance)
