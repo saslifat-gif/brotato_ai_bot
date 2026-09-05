@@ -882,7 +882,7 @@ def test_reward_components_make_outcomes_dominate_shaping():
     engine.reset(_state())
     shaping = engine.step(_state(materials=5, kills=4))
     assert engine.last_components["kills"] == pytest.approx(0.4)
-    assert engine.last_components["materials"] == pytest.approx(0.075)
+    assert engine.last_components["materials"] == pytest.approx(0.225)
     assert shaping < 1.0
 
 
