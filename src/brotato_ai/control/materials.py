@@ -83,7 +83,7 @@ class MaterialTargetTracker:
         geometry_payload, risks = self.forecast.update(payload, risks)
         base = risks[current]
         candidates = [a for a, risk in risks.items()
-                      if risk.total <= min(.55, base.total + .30)
+                      if risk.total <= min(.85, base.total + .55)
                       and risk.total - risk.ranged_spacing <= .20
                       and risk.enemy + risk.enemy_path <= base.enemy + base.enemy_path + .02
                       and risk.projectile_total <= base.projectile_total + .02

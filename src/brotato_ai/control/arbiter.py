@@ -7,7 +7,7 @@ from typing import Any, Mapping, Protocol
 from brotato_ai.control.hazards import UnifiedHazardScorer
 from brotato_ai.control.recovery import CrowdRecoveryGuard
 from brotato_ai.control.materials import MaterialTargetTracker
-from brotato_ai.domain.actions import MoveAction
+from brotato_ai.domain.actions import MoveAction, ACTION_VECTORS
 from brotato_ai.domain.decisions import DecisionTrace, SafetyDecision
 from brotato_ai.domain.state import StateSnapshot
 
@@ -67,7 +67,16 @@ class FinalActionArbiter:
             recovery=self.crowd_recovery_guard.active,
         )
         if self.crowd_recovery_guard.active and self.crowd_recovery_guard.safe_zone.target is not None:
-            final_action = recovery_decision.applied_action
+            target = self.crowd_recovery_guard.safe_zone.target
+            position = snapshot.payload.get("player", {}).get("position", {})
+            dx, dy = target[0] - position.get("x", 0), target[1] - position.get("y", 0)
+            chosen = ACTION_VECTORS[final_action]
+            escape = ACTION_VECTORS[recovery_decision.applied_action]
+            progress = dx * chosen[0] + dy * chosen[1]
+            escape_progress = dx * escape[0] + dy * escape[1]
+            # Collect on the way to safety instead of cancelling every coin choice.
+            if progress <= 0 or progress < .70 * max(0., escape_progress):
+                final_action = recovery_decision.applied_action
         material_override = final_action != recovery_decision.applied_action
         applied_risk = risks[final_action]
         decision = SafetyDecision(
