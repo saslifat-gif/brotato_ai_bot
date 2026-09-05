@@ -272,7 +272,8 @@ class BrotatoApiEnv(gym.Env):
             self._cached_arena_grid = dict(arena_grid)
         elif self._cached_arena_grid:
             merged["arena_grid"] = self._cached_arena_grid
-        return merged
+        from brotato_ai.control.movement_calibration import calibrate_startup_speed
+        return calibrate_startup_speed(merged)
 
     def _observe_state_rate(self, state: Mapping[str, Any]) -> float:
         try:
