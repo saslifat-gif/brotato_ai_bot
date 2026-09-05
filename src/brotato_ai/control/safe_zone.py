@@ -29,6 +29,10 @@ class SafeZonePlanner:
         self.arrived = False
 
     def _route_score(self, payload, target):
+        from brotato_ai.control.native_separation import route_score
+        native = route_score(payload, target)
+        if native is not None:
+            return native[1]
         px, py = xy(payload.get('player', {}))
         tx, ty = target
         arena = payload.get('arena', {})

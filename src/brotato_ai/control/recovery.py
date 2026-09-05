@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable, Mapping
+from typing import Any
+from collections.abc import Iterable, Mapping
 
 from brotato_ai.control.materials import material_progress
 from brotato_ai.control.safe_zone import SafeZonePlanner, edge_clearance

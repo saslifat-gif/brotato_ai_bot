@@ -13,6 +13,8 @@ def material_progress(payload):
         return {}  # Leave low-health healing/escape decisions alone.
     position = player.get('position', {})
     px, py = float(position.get('x', 0)), float(position.get('y', 0))
+    from brotato_ai.control.native_separation import coin_rows
+    native_coins = coin_rows(payload, False)
     targets = []
     for item in payload.get('pickups', []):
         if not isinstance(item, Mapping):
@@ -25,17 +27,18 @@ def material_progress(payload):
         if not 12 < distance <= 450:
             continue
         value = max(1., min(10., float(item.get('material_value', 1))))
-        targets.append((distance, dx, dy, math.sqrt(value)))
-    targets.sort()
+        targets.append((distance, dx, dy, math.sqrt(value), native_coins[(float(pos.get('x',0)),float(pos.get('y',0)))][1:] if native_coins is not None else None))
+    targets.sort(key=lambda t:t[:4])
     targets = targets[:24]
     if not targets:
         return {}
     scores = {}
     for action, (ax, ay) in ACTION_VECTORS.items():
         scores[int(action)] = sum(
-            weight * (distance - math.hypot(dx - 60 * ax, dy - 60 * ay))
-            / (60 * (1 + distance / 150))
-            for distance, dx, dy, weight in targets
+            weight * (progress[int(action)] if progress is not None else
+                      (distance - math.hypot(dx - 60 * ax, dy - 60 * ay)) / 60)
+            / (1 + distance / 150)
+            for distance, dx, dy, weight, progress in targets
         )
     scale = max(1., max(abs(s) for s in scores.values()))
     return {a: s / scale for a, s in scores.items()}
@@ -103,6 +106,8 @@ class MaterialTargetTracker:
                 candidates = allowed
         position = player.get("position", {})
         px, py = float(position.get("x", 0)), float(position.get("y", 0))
+        from brotato_ai.control.native_separation import coin_rows
+        native_coins = coin_rows(payload, True)
         targets = []
         for item in payload.get("pickups", []):
             if not isinstance(item, Mapping) or item.get("category", item.get("kind")) != "material":
@@ -115,8 +120,9 @@ class MaterialTargetTracker:
                 continue
             # Shorten the lookahead near a coin so we do not steer around it.
             step = min(60., distance)
-            progress = {int(a): (distance - math.hypot(dx-step*ax, dy-step*ay))/step
-                        for a, (ax, ay) in ACTION_VECTORS.items()}
+            progress = (dict(enumerate(native_coins[(x,y)][1:])) if native_coins is not None
+                        else {int(a): (distance - math.hypot(dx-step*ax, dy-step*ay))/step
+                              for a, (ax, ay) in ACTION_VECTORS.items()})
             if not candidates:
                 continue
             best = max(candidates, key=lambda a: (progress[a], a == current, -a))

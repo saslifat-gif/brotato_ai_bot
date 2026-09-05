@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable, Mapping
+from typing import Any
+from collections.abc import Iterable, Mapping
 
 import numpy as np
 
@@ -277,6 +278,12 @@ def _crowd_density_risk(
     py: float,
 ) -> float:
     """Risk from a surround that never enters a single-enemy danger radius."""
+
+    from brotato_ai.control.native_separation import crowd_risk
+    native = crowd_risk(enemies, future_x, future_y, movement, px, py)
+    if native is not None:
+        return native
+
 
     nearby_x: list[float] = []
     nearby_y: list[float] = []

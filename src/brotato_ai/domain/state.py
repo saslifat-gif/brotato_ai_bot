@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import Any
+from collections.abc import Iterable, Mapping
 
 
 STATE_SCHEMA_VERSION = 1
@@ -50,6 +51,8 @@ def _risk_vector(value: Any) -> tuple[float, ...]:
 
 
 def _freeze(value: Any) -> Any:
+    if type(value) in (int, float, str, bool, type(None)):
+        return value
     if isinstance(value, Mapping):
         return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
