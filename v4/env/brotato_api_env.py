@@ -712,6 +712,17 @@ class BrotatoApiEnv(gym.Env):
             "tick": int(state.get("tick", -1)),
             "phase": state.get("phase"),
             "wave": state.get("wave", {}).get("number", 0),
+            "dead": bool(state.get("dead")),
+            "victory": bool(state.get("victory")),
+            "wave_clear": bool(
+                reward_components.get("wave_clear", 0.0) > 0.0
+                or reward_components.get("wave_advance", 0.0) > 0.0
+                or (state.get("victory") and previous_state.get("phase") == "combat")
+            ),
+            "terminated": terminated,
+            "truncated": truncated,
+            "control_overruns": self._control_overruns,
+            "control_missed_ticks": self._control_missed_ticks,
             "ui_sent": ui_sent,
             "ui_confirmed": ui_confirmed,
             "requested_action": requested,

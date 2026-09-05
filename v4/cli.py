@@ -53,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("run-frozen", help="Run frozen policy evaluation (model, bc, semantic, teacher)")
     subparsers.add_parser("run-shadow", help="Alias for run-frozen with shadow human logging")
 
+    subparsers.add_parser("evaluate-full-run", help="Evaluate complete runs with validated outcomes and experiment provenance")
+
     # dagger
     subparsers.add_parser("dagger", help="Run offline DAgger review and corrective labeling")
 
@@ -74,6 +76,7 @@ COMMAND_MAP = {
     "train-rl": "v4.train",
     "run-frozen": "v4.run_frozen",
     "run-shadow": "v4.run_frozen",
+    "evaluate-full-run": "v4.evaluate_full_run",
     "dagger": "v4.dagger_corrective",
     "report-shadow": "v4.report_shadow",
     "diagnose": "v4.diagnose_bridge",

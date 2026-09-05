@@ -15,7 +15,7 @@ from stable_baselines3.common.monitor import Monitor
 from brotato_ai.training.configs import load_config
 from v4.env.brotato_api_env import BrotatoApiEnv
 from v4.combat_policy import HierarchicalCombatVectorizer
-from v4.train_temporal_hierarchical import HumanAnchoredPPO
+from brotato_ai.training.checkpoints import load_temporal_checkpoint
 
 
 def main() -> int:
@@ -71,7 +71,7 @@ def main() -> int:
         state_hz=float(args.state_hz),
     )
     env = Monitor(raw_env)
-    model = HumanAnchoredPPO.load(
+    model = load_temporal_checkpoint(
         str(args.model.resolve()), env=env, device=args.device
     )
     print(
@@ -119,9 +119,10 @@ def main() -> int:
                     "reward": episode_reward,
                     "steps": episode_steps,
                     "wave": int(info.get("wave", 0)),
-                    "dead": bool(terminated)
-                    and str(info.get("phase", "")).lower() != "victory",
-                    "victory": str(info.get("phase", "")).lower() == "victory",
+                    "dead": bool(info["dead"]),
+                    "victory": bool(info["victory"]),
+                    "terminated": bool(terminated),
+                    "truncated": bool(truncated),
                     "health_fraction": float(info.get("health_fraction", 0.0) or 0.0),
                     "health_loss": health_loss,
                     "projectile_hits": projectile_hits,

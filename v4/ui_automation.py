@@ -58,6 +58,9 @@ def available_actions(state: Mapping[str, Any], role: str) -> list[dict[str, Any
         for action in actions
         if isinstance(action, Mapping)
         and action.get("role") == role
+        # Brotato 1.1 shop parents make the bridge classify BanButton as buy.
+        # Never treat this irreversible shop choice as a purchase.
+        and not (role == "buy" and str(action.get("name", "")).lower().replace("_", "") == "banbutton")
         and bool(action.get("enabled"))
         and str(action.get("id", "")).startswith("/")
     ]
