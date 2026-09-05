@@ -6,6 +6,7 @@ import math
 from typing import Any, Iterable, Mapping
 
 from brotato_ai.control.materials import material_progress
+from brotato_ai.control.safe_zone import SafeZonePlanner
 from brotato_ai.control.hazards import UnifiedHazardScorer, enemy_separation_diagnostics
 from brotato_ai.domain.actions import ACTION_VECTORS, MoveAction
 from brotato_ai.domain.decisions import HazardRisk, SafetyDecision
@@ -70,6 +71,7 @@ class TacticalMovementController:
         side_hold_duration_ms: float | None = None,
         default_control_hz: float = DEFAULT_CONTROL_HZ,
     ):
+        self.safe_zone = SafeZonePlanner()
         self.idle_escape_ms = 0.0
         self.anti_stall_active = False
         self._material_progress = {}
@@ -114,6 +116,7 @@ class TacticalMovementController:
         return self.state
 
     def reset(self) -> None:
+        self.safe_zone.reset()
         self.idle_escape_ms = 0.0
         self.anti_stall_active = False
         self.state = self.NORMAL
@@ -177,7 +180,7 @@ class TacticalMovementController:
         requested_action: int,
         risks: Mapping[int, HazardRisk] | None = None,
     ) -> bool:
-        if self._legacy_trigger(payload):
+        if self._legacy_trigger(payload) and (risks is None or risks[0].total > self.escape_exit_risk):
             return True
         geometry = self._geometry(payload, requested_action)
         closing = bool(
@@ -409,6 +412,12 @@ class TacticalMovementController:
         escape_action = self._break_dangerous_idle(
             payload, risks, escape_action, control_interval_ms
         )
+        escape_action = self.safe_zone.apply(payload, risks, escape_action, control_interval_ms)
+        if (self.safe_zone.arrived and self._hold_elapsed()
+                and risks[0].total <= self.escape_exit_risk
+                and self._clear_to_normal(payload, 0, risks[0])):
+            self.reset()
+            return SafetyDecision(requested, 0, requested_risk.total, risks[0].total)
         self._last_escape_action = escape_action
         self._age += 1
         self._side_age += 1

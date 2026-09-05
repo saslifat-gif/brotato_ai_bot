@@ -66,6 +66,8 @@ class FinalActionArbiter:
             snapshot.payload, risks, final_action,
             recovery=self.crowd_recovery_guard.active,
         )
+        if self.crowd_recovery_guard.active and self.crowd_recovery_guard.safe_zone.target is not None:
+            final_action = recovery_decision.applied_action
         material_override = final_action != recovery_decision.applied_action
         applied_risk = risks[final_action]
         decision = SafetyDecision(
@@ -97,6 +99,7 @@ class FinalActionArbiter:
             applied_risk=applied_risk,
             source=source,
             recovery_active=recovery_active,
+            safe_zone_target=self.crowd_recovery_guard.safe_zone.target,
             clearable_enemy_count=self.material_tracker.forecast.clearable_count,
             enemy_contact_overridden=enemy_contact_overridden,
             session=snapshot.session,
