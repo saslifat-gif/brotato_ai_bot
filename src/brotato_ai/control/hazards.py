@@ -92,6 +92,13 @@ def enemy_separation_diagnostics(
 ) -> dict[str, float | bool | str]:
     """Shared moving-enemy separation estimate for scoring and tactical control."""
 
+    from brotato_ai.control.native_separation import diagnostic
+    payload = state.payload if isinstance(state, StateSnapshot) else state
+    native = diagnostic(payload, int(MoveAction(int(action))), horizon_seconds)
+    if native is not None:
+        return native
+
+
     empty: dict[str, float | bool | str] = {
         "active": False,
         "ranged_active": False,

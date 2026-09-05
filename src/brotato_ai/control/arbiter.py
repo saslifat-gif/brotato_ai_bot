@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Protocol
 
 from brotato_ai.control.hazards import UnifiedHazardScorer
+from brotato_ai.control.native_separation import native_decision_scope
 from brotato_ai.control.recovery import CrowdRecoveryGuard
 from brotato_ai.control.materials import MaterialTargetTracker
 from brotato_ai.domain.actions import MoveAction, ACTION_VECTORS
@@ -37,6 +38,7 @@ class FinalActionArbiter:
         self.crowd_recovery_guard.reset()
         self.material_tracker.reset()
 
+    @native_decision_scope
     def apply(
         self,
         state: Mapping[str, Any] | StateSnapshot,
