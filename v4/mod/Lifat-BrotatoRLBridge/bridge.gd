@@ -1,7 +1,7 @@
 extends Node
 
 const PROTOCOL_VERSION := 1
-const MOD_VERSION := "0.3.22"
+const MOD_VERSION := "0.3.23"
 const HOST := "127.0.0.1"
 const PORT := 4242
 const RAW_RECORD_PORT := 4243
@@ -84,6 +84,9 @@ var _next_connect_ms := 0
 var _connected := false
 var _state_elapsed := 0.0
 var _tick := 0
+var _speed_player_id := 0
+var _measured_move_speed := 0.0
+var _measured_speed_stat := 0.0
 var _latest_action := 0
 var _last_action_ms := 0
 var _last_sequence := -1
@@ -1117,11 +1120,7 @@ func _combat_summary(player, run_data) -> Dictionary:
 		armor = float(run_data.call("get_stat", "stat_armor"))
 		attack_speed = float(run_data.call("get_stat", "stat_attack_speed"))
 		speed_stat = float(run_data.call("get_stat", "stat_speed"))
-	var move_speed := float(_first_property(
-		player,
-		["current_speed", "movement_speed", "move_speed", "speed"],
-		300.0 * max(0.1, 1.0 + speed_stat / 100.0)
-	))
+	var move_speed := _player_move_speed(player, speed_stat)
 	var character = _property(run_data, "current_character", null)
 	return {
 		"character_id": str(_property(character, "my_id", "")),
@@ -1130,11 +1129,42 @@ func _combat_summary(player, run_data) -> Dictionary:
 		"ranged_count": ranged_count,
 		"weapon_range": weapon_range,
 		"move_speed": move_speed,
+		"move_speed_source": "measured_velocity" if _measured_move_speed > 0.0 else "stat_fallback",
 		"armor": armor,
 		"attack_speed": attack_speed,
 		"dodge": float(_first_property(current_stats, ["dodge"], 0.0)),
 		"weapons": weapon_states
 	}
+
+
+func _player_move_speed(player, speed_stat: float) -> float:
+	# current_speed is not displacement/second in Brotato 1.1.15: it reports
+	# 1500 while linear_velocity and measured displacement are about 472.
+	# Use aligned movement samples, retain them while idle, and reset on a
+	# new player instance so a previous run cannot supply the next run's speed.
+	var player_id: int = player.get_instance_id()
+	if player_id != _speed_player_id:
+		_speed_player_id = player_id
+		_measured_move_speed = 0.0
+		_measured_speed_stat = speed_stat
+	var stat_multiplier: float = max(0.1, 1.0 + speed_stat / 100.0)
+	if _measured_move_speed > 0.0 and speed_stat != _measured_speed_stat:
+		_measured_move_speed *= stat_multiplier / max(0.1, 1.0 + _measured_speed_stat / 100.0)
+	_measured_speed_stat = speed_stat
+	var velocity = _property(player, "linear_velocity", Vector2.ZERO)
+	var direction: Vector2 = BULLET_ACTION_VECTORS[int(clamp(_latest_action, 0, 8))]
+	if should_control() and direction.length_squared() > 0.0 and typeof(velocity) == TYPE_VECTOR2:
+		var observed_speed: float = velocity.length()
+		# Ignore stationary frames and sideways/opposite motion (wall slides,
+		# stale velocity on direction changes, or knockback).
+		if observed_speed > 20.0 and velocity.normalized().dot(direction.normalized()) > 0.98:
+			if _measured_move_speed <= 0.0:
+				_measured_move_speed = observed_speed
+			else:
+				_measured_move_speed = lerp(_measured_move_speed, observed_speed, 0.25)
+	if _measured_move_speed > 0.0:
+		return _measured_move_speed
+	return 300.0 * stat_multiplier
 
 
 func _combat_weapon_state(weapon, weapon_stats) -> Dictionary:
