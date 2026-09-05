@@ -95,7 +95,9 @@ def main() -> int:
     results: list[dict] = []
     try:
         for _ in range(int(args.timesteps)):
+            inference_started = env.unwrapped.profiler.begin("model_predict")
             action, _ = model.predict(observation, deterministic=True)
+            env.unwrapped.profiler.end("model_predict", inference_started)
             selected = int(np.asarray(action).reshape(-1)[0])
             if previous_action is not None:
                 action_changes += int(selected != previous_action)
