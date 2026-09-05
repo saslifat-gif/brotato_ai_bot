@@ -103,6 +103,7 @@ class DecisionTrace:
     escape_remaining_ms: float = 0.0
     escape_side: int = 0
     anti_stall_active: bool = False
+    clearable_enemy_count: int = 0
     idle_escape_ms: float = 0.0
     # Learned human-policy fields (schema 2).  They are None/"" whenever the
     # policy mode does not run the human model (HANDCRAFTED) or inference
@@ -144,6 +145,7 @@ class DecisionTrace:
             "escape_side": int(self.escape_side),
             "anti_stall_active": self.anti_stall_active,
             "idle_escape_ms": self.idle_escape_ms,
+            "clearable_enemy_count": self.clearable_enemy_count,
             "action_risks": {str(a): risk.to_dict() for a, risk in self.all_risks.items()},
             "requested_risk": self.requested_risk.to_dict(),
             "applied_risk": self.applied_risk.to_dict(),

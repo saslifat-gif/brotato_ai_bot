@@ -62,10 +62,13 @@ class MaterialTargetTracker:
     """Keep one reachable material target; reconsider it if its safe lane closes."""
 
     def __init__(self):
+        from brotato_ai.control.kill_forecast import KillForecast
+        self.forecast = KillForecast()
         self.target = None
 
     def reset(self):
         self.target = None
+        self.forecast.reset()
 
     def apply(self, payload, risks, current, *, recovery=False):
         from brotato_ai.control.hazards import enemy_separation_diagnostics
@@ -76,6 +79,7 @@ class MaterialTargetTracker:
                 or float(player.get("health", 0)) / max(1., float(player.get("max_health", 1))) < .35):
             self.reset()
             return current
+        geometry_payload, risks = self.forecast.update(payload, risks)
         base = risks[current]
         candidates = [a for a, risk in risks.items()
                       if risk.total <= min(.20, base.total + .03)
@@ -84,11 +88,11 @@ class MaterialTargetTracker:
                       and risk.indicator <= base.indicator + .02
                       and risk.boundary_total <= base.boundary_total + .02]
         if recovery:
-            reference = enemy_separation_diagnostics(payload, current)
+            reference = enemy_separation_diagnostics(geometry_payload, current)
             if reference["active"]:
                 allowed = []
                 for action in candidates:
-                    geometry = enemy_separation_diagnostics(payload, action)
+                    geometry = enemy_separation_diagnostics(geometry_payload, action)
                     if (geometry["predicted_distance"] >= reference["predicted_distance"]
                             and geometry["radial_dot"] >= reference["radial_dot"]):
                         allowed.append(action)
@@ -118,7 +122,7 @@ class MaterialTargetTracker:
             value = math.sqrt(max(1., min(10., float(item.get("material_value", 1)))))
             targets.append((retained, value/(distance+60), -distance, x, y, best, progress))
         if not targets:
-            self.reset()
+            self.target = None
             return current
         _, _, _, x, y, best, progress = max(targets, key=lambda t: t[:3])
         self.target = (x, y)

@@ -84,8 +84,6 @@ class FinalActionArbiter:
             if material_override
             else "crowd_recovery"
             if recovery_active
-            else "material_pickup"
-            if material_override
             else "hazard"
             if hazard_decision.overridden
             else "policy"
@@ -99,6 +97,7 @@ class FinalActionArbiter:
             applied_risk=applied_risk,
             source=source,
             recovery_active=recovery_active,
+            clearable_enemy_count=self.material_tracker.forecast.clearable_count,
             enemy_contact_overridden=enemy_contact_overridden,
             session=snapshot.session,
             tick=snapshot.tick,
