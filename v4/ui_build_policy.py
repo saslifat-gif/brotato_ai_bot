@@ -455,7 +455,24 @@ class UiFeatureRow:
 
 
 class RangedSustainTeacher(RangedSmgTeacher):
-    """User preference: ranged damage, then life steal, then percent damage."""
+    """Ranged/sustain preferences with the user's recorded winning SMG build.
+
+    Inventory evidence from game 5 on 2026-09-05 supports earlier SMG filling
+    and collection utility. This is a bounded rule update, not imitation
+    training: most upgrade selections were not recorded reliably.
+    """
+
+    @staticmethod
+    def _early_weapon_cap(wave: int) -> int:
+        # Four SMGs after shop 3, six after shop 4 in the winning run.
+        if wave <= 2:
+            return RangedSmgTeacher._early_weapon_cap(wave)
+        return 4 if wave == 3 else 6
+
+    collection_preferences = {
+        "item_alien_tongue": (1, 70.0),
+        "item_baby_gecko": (2, 70.0),
+    }
 
     priority_bonuses = (
         ("stat_ranged_damage", ("upgrade_ranged_damage", "upgrade_projectile_damage"), 180.0),
@@ -470,6 +487,14 @@ class RangedSustainTeacher(RangedSmgTeacher):
         totals = effect_totals(choice)
         base = str(choice.get("base_id", "")).lower()
         item_id = str(choice.get("id", "")).lower()
+        preferred = self.collection_preferences.get(item_id)
+        if preferred is not None:
+            limit, bonus = preferred
+            items = _mapping((state or {}).get("build")).get("items", [])
+            owned = sum(str(item.get("id", "")).lower() == item_id
+                        for item in items if isinstance(item, Mapping))
+            if owned < limit:
+                score += bonus
         for stat, upgrades, bonus in self.priority_bonuses:
             is_upgrade = base in upgrades or any(item_id.startswith(u + "_") for u in upgrades)
             if totals[stat] > 0 or (is_upgrade and totals[stat] >= 0):
@@ -480,7 +505,7 @@ class RangedSustainTeacher(RangedSmgTeacher):
         ranked = super().select(state, actions)
         if ranked is None:
             return None
-        return RankedUiAction(ranked.action, ranked.score, "ranged_sustain_teacher_v1")
+        return RankedUiAction(ranked.action, ranked.score, "ranged_sustain_teacher_v2")
 
 
 class UiChoiceVectorizer:

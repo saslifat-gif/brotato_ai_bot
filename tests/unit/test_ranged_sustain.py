@@ -23,3 +23,27 @@ def test_unaffordable_preferred_item_is_not_purchased():
     teacher=RangedSustainTeacher()
     action={'role':'buy','choice':dict(choice('stat_ranged_damage'),price=100,affordable=False)}
     assert teacher.select({'wave':{'number':3},'counters':{'materials':5}},[action]) is None
+
+
+def test_winning_build_fills_six_smgs_from_wave_four():
+    from v4.ui_build_policy import RangedSmgTeacher
+    gun={'category':'weapon','id':'weapon_smg_1','tier':0,'price':25}
+    state={'wave':{'number':4},'counters':{'materials':100},
+           'build':{'weapons':[gun]*5}}
+    teacher=RangedSustainTeacher()
+    assert teacher.score_choice(gun,4,state) > RangedSmgTeacher().score_choice(gun,4,state)+100
+    assert teacher.select(state,[{'role':'buy','choice':gun}]) is not None
+    state['build']['weapons']=[gun]*6
+    assert teacher.select(state,[{'role':'buy','choice':gun}]) is None
+
+
+def test_collection_preference_stops_at_observed_stack_count():
+    teacher=RangedSustainTeacher()
+    gecko={'category':'item','id':'item_baby_gecko','effects':[]}
+    empty={'build':{'items':[]}}
+    one={'build':{'items':[gecko]}}
+    two={'build':{'items':[gecko,gecko]}}
+    assert teacher.score_choice(gecko,8,empty) == teacher.score_choice(gecko,8,one)
+    assert teacher.score_choice(gecko,8,one) > teacher.score_choice(gecko,8,two)
+    action={'role':'buy','choice':dict(gecko,price=50)}
+    assert teacher.select({'wave':{'number':8},'counters':{'materials':10}},[action]) is None
