@@ -99,7 +99,8 @@ def main() -> int:
                 # Do not buy items or advance a resumed shop before discovering
                 # that the resulting episode cannot count as a full run.
                 preflight = env.server.wait_for_state(timeout_sec=cfg.reset_timeout_sec)
-                validate_start(preflight, character=args.character, weapon=args.weapon)
+                if preflight.get("phase") != "game_over":
+                    validate_start(preflight, character=args.character, weapon=args.weapon)
             observation, info = env.reset()
             start = validate_start(env.last_state, character=args.character, weapon=args.weapon)
             if args.difficulty is not None and start["difficulty"] != args.difficulty:
